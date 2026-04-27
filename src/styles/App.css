@@ -481,3 +481,82 @@ h2 {
     gap: 4px;
   }
 }
+
+/* ===== 現場一括登録 ===== */
+.section-desc {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 18px;
+  line-height: 1.6;
+  background: #f0f6ff;
+  border-left: 3px solid #1a56db;
+  padding: 8px 12px;
+  border-radius: 0 6px 6px 0;
+}
+
+.preview-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #f3f4f6;
+  border: 2px solid #e5e7eb;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.preview-count--ready {
+  background: #f0fdf4;
+  border-color: #22c55e;
+}
+
+.preview-count__num {
+  font-size: 32px;
+  font-weight: 700;
+  color: #16a34a;
+  line-height: 1;
+}
+
+.preview-count__text {
+  font-size: 15px;
+  color: #166534;
+  font-weight: 600;
+}
+
+.preview-count__empty {
+  font-size: 14px;
+  color: #9ca3af;
+}
+
+.preview-count__error {
+  font-size: 14px;
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.tag--exclude {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.tag--exclude .tag__remove {
+  color: #b45309;
+}
+
+.success-msg {
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: #d1fae5;
+  color: #065f46;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn:disabled:active {
+  transform: none;
+}
