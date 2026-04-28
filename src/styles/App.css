@@ -1059,3 +1059,61 @@ h2 {
   color: #6b7280;
   margin-top: 6px;
 }
+
+/* ===== 希望休可視化 ===== */
+.dayoff-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.dayoff-summary-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.dayoff-summary-row:last-child {
+  border-bottom: none;
+}
+
+.dayoff-summary-date {
+  min-width: 110px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  flex-shrink: 0;
+  padding-top: 3px;
+}
+
+.dayoff-summary-names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.assigned-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.assigned-names {
+  line-height: 1.6;
+}
+
+.dayoff-excluded-row {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.assign-violation {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.unassigned-label {
+  color: #9ca3af;
+}

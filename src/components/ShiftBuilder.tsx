@@ -1,6 +1,7 @@
+import { Fragment } from 'react';
 import { Staff, WorkSite, ShiftAssignment } from '../types';
 import { generateShifts } from '../utils/shiftGenerator';
-import { sortedByStaffNo } from '../utils/staffUtils';
+import { sortedByStaffNo, sortStaff } from '../utils/staffUtils';
 
 interface Props {
   staff: Staff[];
@@ -17,13 +18,21 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
     staffIndex[s.id] = s;
   });
 
-  const siteMap: Record<string, WorkSite> = {};
-  workSites.forEach((w) => (siteMap[w.id] = w));
-
   const assignMap: Record<string, ShiftAssignment> = {};
   assignments.forEach((a) => (assignMap[a.siteId] = a));
 
   const sorted = [...workSites].sort((a, b) => a.date.localeCompare(b.date));
+
+  // date → staff who requested that date off (deduplicated dates, sorted by staffNo)
+  const seenDates = new Set<string>();
+  const dateToOffStaff = new Map<string, Staff[]>();
+  for (const site of sorted) {
+    if (!seenDates.has(site.date)) {
+      seenDates.add(site.date);
+      const offs = sortStaff(staff.filter((s) => s.requestedDaysOff.includes(site.date)));
+      if (offs.length > 0) dateToOffStaff.set(site.date, offs);
+    }
+  }
 
   function handleGenerate() {
     if (workSites.length === 0) {
@@ -41,6 +50,7 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
   return (
     <div>
       <h2>シフト作成</h2>
+
       <div className="card">
         <div className="shift-actions">
           <button className="btn btn--primary btn--large" onClick={handleGenerate}>
@@ -51,6 +61,28 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
           </span>
         </div>
       </div>
+
+      {/* 希望休サマリー: 現場登録済みなら常に表示 */}
+      {workSites.length > 0 && dateToOffStaff.size > 0 && (
+        <div className="card">
+          <h3>日付別 希望休スタッフ</h3>
+          <p className="section-desc">シフト対象日に希望休を申請しているスタッフの一覧です</p>
+          <div className="dayoff-summary">
+            {[...dateToOffStaff.entries()].map(([date, offs]) => (
+              <div key={date} className="dayoff-summary-row">
+                <span className="dayoff-summary-date">{date}</span>
+                <div className="dayoff-summary-names">
+                  {offs.map((s) => (
+                    <span key={s.id} className="tag">
+                      {s.staffNo ? `${s.staffNo}: ${s.name}` : s.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {assignments.length > 0 && (
         <div className="card">
@@ -71,8 +103,23 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
                 {sorted.map((site) => {
                   const asgn = assignMap[site.id];
                   if (!asgn) return null;
-                  const names = sortedByStaffNo(asgn.assignedStaffIds, staffIndex).map((id) => staffMap[id] ?? id);
+
+                  const sortedIds = sortedByStaffNo(asgn.assignedStaffIds, staffIndex);
                   const hasShortage = asgn.shortage > 0;
+
+                  // 希望休日に割当されているスタッフ（通常はゼロ、安全チェック用）
+                  const violationIds = new Set(
+                    asgn.assignedStaffIds.filter(
+                      (id) => staffIndex[id]?.requestedDaysOff.includes(site.date)
+                    )
+                  );
+
+                  // 希望休があり割当から外れたスタッフ
+                  const offStaff = dateToOffStaff.get(site.date) ?? [];
+                  const excludedStaff = offStaff.filter(
+                    (s) => !asgn.assignedStaffIds.includes(s.id)
+                  );
+
                   return (
                     <tr key={site.id} className={hasShortage ? 'row--alert' : ''}>
                       <td>{site.date}</td>
@@ -81,7 +128,33 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
                         {site.startTime}〜{site.endTime}
                       </td>
                       <td>{site.requiredPeople}人</td>
-                      <td>{names.length > 0 ? names.join('、') : '未割当'}</td>
+                      <td>
+                        {sortedIds.length > 0 ? (
+                          <div className="assigned-cell">
+                            <div className="assigned-names">
+                              {sortedIds.map((id, i) => (
+                                <Fragment key={id}>
+                                  {i > 0 && '、'}
+                                  {violationIds.has(id) ? (
+                                    <span className="assign-violation" title="希望休日に割当されています">
+                                      ⚠ {staffMap[id] ?? id}
+                                    </span>
+                                  ) : (
+                                    staffMap[id] ?? id
+                                  )}
+                                </Fragment>
+                              ))}
+                            </div>
+                            {excludedStaff.length > 0 && (
+                              <div className="dayoff-excluded-row">
+                                希望休除外: {excludedStaff.map((s) => s.name).join('・')}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="unassigned-label">未割当</span>
+                        )}
+                      </td>
                       <td>
                         {hasShortage ? (
                           <span className="shortage-badge">{asgn.shortage}人不足</span>
