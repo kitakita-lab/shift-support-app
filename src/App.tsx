@@ -6,35 +6,29 @@ import StaffManager from './components/StaffManager';
 import WorkSiteManager from './components/WorkSiteManager';
 import ShiftBuilder from './components/ShiftBuilder';
 import ExportPanel from './components/ExportPanel';
+import CsvImporter from './components/CsvImporter';
 import './styles/App.css';
 
-type Tab = 'dashboard' | 'staff' | 'worksite' | 'shift' | 'export';
+type Tab = 'dashboard' | 'staff' | 'worksite' | 'shift' | 'export' | 'import';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'dashboard', label: 'ダッシュボード' },
-  { id: 'staff', label: 'スタッフ管理' },
-  { id: 'worksite', label: '現場管理' },
-  { id: 'shift', label: 'シフト作成' },
-  { id: 'export', label: '出力' },
+  { id: 'staff',     label: 'スタッフ管理' },
+  { id: 'worksite',  label: '現場管理' },
+  { id: 'shift',     label: 'シフト作成' },
+  { id: 'export',    label: '出力' },
+  { id: 'import',    label: 'CSVインポート' },
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
-  const [staff, setStaff] = useState<Staff[]>(() => storage.loadStaff());
-  const [workSites, setWorkSites] = useState<WorkSite[]>(() => storage.loadWorkSites());
+  const [activeTab,   setActiveTab]   = useState<Tab>('dashboard');
+  const [staff,       setStaff]       = useState<Staff[]>(() => storage.loadStaff());
+  const [workSites,   setWorkSites]   = useState<WorkSite[]>(() => storage.loadWorkSites());
   const [assignments, setAssignments] = useState<ShiftAssignment[]>(() => storage.loadAssignments());
 
-  useEffect(() => {
-    storage.saveStaff(staff);
-  }, [staff]);
-
-  useEffect(() => {
-    storage.saveWorkSites(workSites);
-  }, [workSites]);
-
-  useEffect(() => {
-    storage.saveAssignments(assignments);
-  }, [assignments]);
+  useEffect(() => { storage.saveStaff(staff); },       [staff]);
+  useEffect(() => { storage.saveWorkSites(workSites); }, [workSites]);
+  useEffect(() => { storage.saveAssignments(assignments); }, [assignments]);
 
   function handleClearAll() {
     storage.clearAll();
@@ -88,7 +82,16 @@ export default function App() {
             onClearAll={handleClearAll}
           />
         )}
+        {activeTab === 'import' && (
+          <CsvImporter
+            currentStaffCount={staff.length}
+            currentSiteCount={workSites.length}
+            onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
+            onImportSites={(imported) => setWorkSites((prev) => [...prev, ...imported])}
+          />
+        )}
       </main>
     </div>
   );
 }
+

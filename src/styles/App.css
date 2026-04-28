@@ -481,3 +481,389 @@ h2 {
     gap: 4px;
   }
 }
+
+/* ===== 現場一括登録 ===== */
+.section-desc {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 18px;
+  line-height: 1.6;
+  background: #f0f6ff;
+  border-left: 3px solid #1a56db;
+  padding: 8px 12px;
+  border-radius: 0 6px 6px 0;
+}
+
+.preview-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #f3f4f6;
+  border: 2px solid #e5e7eb;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.preview-count--ready {
+  background: #f0fdf4;
+  border-color: #22c55e;
+}
+
+.preview-count__num {
+  font-size: 32px;
+  font-weight: 700;
+  color: #16a34a;
+  line-height: 1;
+}
+
+.preview-count__text {
+  font-size: 15px;
+  color: #166534;
+  font-weight: 600;
+}
+
+.preview-count__empty {
+  font-size: 14px;
+  color: #9ca3af;
+}
+
+.preview-count__error {
+  font-size: 14px;
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.tag--exclude {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.tag--exclude .tag__remove {
+  color: #b45309;
+}
+
+.success-msg {
+  margin-top: 14px;
+  padding: 10px 14px;
+  background: #d1fae5;
+  color: #065f46;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn:disabled:active {
+  transform: none;
+}
+
+/* ===== グループ表示 ===== */
+.site-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.site-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.site-group--ungrouped {
+  border-color: #d1d5db;
+  border-style: dashed;
+}
+
+.site-group__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #f8f9fa;
+  flex-wrap: wrap;
+}
+
+.site-group__toggle {
+  background: none;
+  border: 1px solid #d1d5db;
+  cursor: pointer;
+  font-size: 11px;
+  color: #555;
+  padding: 3px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: background 0.1s;
+}
+
+.site-group__toggle:hover {
+  background: #e5e7eb;
+}
+
+.site-group__label {
+  flex: 1;
+  font-weight: 600;
+  font-size: 14px;
+  color: #1a1a2e;
+  min-width: 0;
+}
+
+.site-group__count {
+  font-size: 12px;
+  color: #666;
+  background: #e5e7eb;
+  padding: 2px 9px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.site-group__actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* グループ一括編集パネル */
+.site-group__edit-panel {
+  background: #f0f6ff;
+  border-top: 1px solid #c7d7f5;
+  padding: 12px 14px;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.edit-panel__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a56db;
+  flex-shrink: 0;
+  padding-bottom: 2px;
+}
+
+.edit-panel__fields {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.edit-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: #555;
+  font-weight: 500;
+}
+
+.edit-panel__field--memo {
+  min-width: 160px;
+}
+
+/* アコーディオン本体 */
+.site-group__body {
+  border-top: 1px solid #e5e7eb;
+}
+
+.site-group__body .data-table {
+  min-width: 380px;
+}
+
+/* 個別インライン編集行 */
+.site-edit-row td {
+  background: #fffbeb;
+  padding: 10px 14px;
+}
+
+.site-edit-form {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+/* ===== レスポンシブ（グループ） ===== */
+@media (max-width: 600px) {
+  .site-group__header {
+    gap: 8px;
+  }
+
+  .site-group__label {
+    font-size: 13px;
+    width: 100%;
+    order: 2;
+  }
+
+  .site-group__toggle {
+    order: 1;
+  }
+
+  .site-group__count {
+    order: 3;
+  }
+
+  .site-group__actions {
+    order: 4;
+    width: 100%;
+  }
+
+  .site-group__edit-panel {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .edit-panel__fields {
+    width: 100%;
+  }
+
+  .site-edit-form {
+    flex-direction: column;
+  }
+}
+
+/* ===== CSVインポート ===== */
+.file-input-hidden {
+  display: none;
+}
+
+.import-upload {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.import-current {
+  font-size: 13px;
+  color: #888;
+  margin-left: 4px;
+}
+
+/* フォーマット表示 */
+.import-format {
+  background: #1a1a2e;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+
+.import-format__title {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.import-format__code {
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 13px;
+  color: #98fb98;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  line-height: 1.7;
+}
+
+/* プレビュー */
+.import-preview {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 16px;
+  margin-top: 4px;
+}
+
+.import-preview__filename {
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 12px;
+}
+
+/* エラーリスト */
+.import-errors {
+  background: #fff5f5;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.import-errors__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #dc2626;
+  margin-bottom: 8px;
+}
+
+.import-error-row {
+  font-size: 13px;
+  color: #b91c1c;
+  padding: 3px 0;
+  border-bottom: 1px solid #fee2e2;
+}
+
+.import-error-row:last-child {
+  border-bottom: none;
+}
+
+/* 件数表示 */
+.import-count {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #166534;
+  margin-bottom: 12px;
+}
+
+.import-count__num {
+  font-size: 30px;
+  font-weight: 700;
+  color: #16a34a;
+  line-height: 1;
+}
+
+.import-no-valid {
+  color: #aaa;
+  font-size: 14px;
+  padding: 8px 0;
+}
+
+/* アクションボタン行 */
+.import-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+/* ゴーストボタン（テンプレートDL用） */
+.btn--ghost {
+  background: none;
+  border: 1px solid #d1d5db;
+  color: #555;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
+.btn--ghost:hover {
+  background: #f3f4f6;
+}
+
+@media (max-width: 600px) {
+  .import-upload {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .import-format__code {
+    font-size: 11px;
+  }
+}
