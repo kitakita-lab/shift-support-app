@@ -7,6 +7,7 @@ import {
   downloadStaffTemplate,
   downloadSiteTemplate,
   downloadDaysOffTemplate,
+  downloadDaysOffDateTemplate,
   ParseError,
   StaffParseResult,
   SiteParseResult,
@@ -453,10 +454,17 @@ export default function CsvImporter({
         </p>
 
         <div className="import-format">
-          <div className="import-format__title">CSVフォーマット（文字コード：UTF-8）</div>
+          <div className="import-format__title">対応CSVフォーマット（文字コード：UTF-8 / ヘッダーは省略可）</div>
+          <div className="import-format__subtitle">① 1スタッフ1行（一括形式）</div>
           <pre className="import-format__code">{`staffNo,name,requestedDaysOff
 001,セトケンスケ,"2026-05-03,2026-05-10,2026-05-18"
 002,マツハシマミ,"2026-05-01,2026-05-07"`}</pre>
+          <div className="import-format__subtitle">② 1希望休1行（Bubble等の外部フォーム出力）</div>
+          <pre className="import-format__code">{`staffNo,name,date
+001,セトケンスケ,2026-05-03
+001,セトケンスケ,2026-05-10
+002,マツハシマミ,2026-05-01`}</pre>
+          <div className="import-format__note">staffNo列がない場合は name,date の2列でも可。同一スタッフの行は自動集約されます。</div>
         </div>
 
         <div className="days-off-options">
@@ -509,7 +517,10 @@ export default function CsvImporter({
             CSVファイルを選択
           </label>
           <button className="btn btn--ghost" onClick={downloadDaysOffTemplate}>
-            テンプレートをダウンロード
+            テンプレート①（一括）
+          </button>
+          <button className="btn btn--ghost" onClick={downloadDaysOffDateTemplate}>
+            テンプレート②（1行1日付）
           </button>
         </div>
 
@@ -534,15 +545,28 @@ export default function CsvImporter({
 
             {daysOffPreview.matched.length > 0 ? (
               <>
-                <div className="import-count">
-                  <span className="import-count__num">{daysOffPreview.matched.length}</span>
-                  件を反映します
-                  <span className="days-off-mode-badge">
-                    {daysOffMode === 'replace'
-                      ? `${daysOffTargetMonth} を置き換え`
-                      : '既存に追加'}
-                  </span>
-                </div>
+                {(() => {
+                  const totalDates = daysOffPreview.matched.reduce((sum, m) => {
+                    const dates =
+                      daysOffMode === 'replace'
+                        ? m.csvDaysOff.filter((d) => d.startsWith(daysOffTargetMonth))
+                        : m.csvDaysOff;
+                    return sum + dates.length;
+                  }, 0);
+                  return (
+                    <div className="import-count">
+                      <span className="import-count__num">{daysOffPreview.matched.length}</span>
+                      名・
+                      <span className="import-count__num">{totalDates}</span>
+                      件の希望休を反映します
+                      <span className="days-off-mode-badge">
+                        {daysOffMode === 'replace'
+                          ? `${daysOffTargetMonth} を置き換え`
+                          : '既存に追加'}
+                      </span>
+                    </div>
+                  );
+                })()}
                 <div className="table-wrapper">
                   <table className="data-table">
                     <thead>
