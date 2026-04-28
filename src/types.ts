@@ -9,6 +9,7 @@ export interface Staff {
 
 export interface WorkSite {
   id: string;
+  groupId?: string;
   date: string;
   siteName: string;
   startTime: string;

@@ -560,3 +560,169 @@ h2 {
 .btn:disabled:active {
   transform: none;
 }
+
+/* ===== グループ表示 ===== */
+.site-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.site-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.site-group--ungrouped {
+  border-color: #d1d5db;
+  border-style: dashed;
+}
+
+.site-group__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #f8f9fa;
+  flex-wrap: wrap;
+}
+
+.site-group__toggle {
+  background: none;
+  border: 1px solid #d1d5db;
+  cursor: pointer;
+  font-size: 11px;
+  color: #555;
+  padding: 3px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: background 0.1s;
+}
+
+.site-group__toggle:hover {
+  background: #e5e7eb;
+}
+
+.site-group__label {
+  flex: 1;
+  font-weight: 600;
+  font-size: 14px;
+  color: #1a1a2e;
+  min-width: 0;
+}
+
+.site-group__count {
+  font-size: 12px;
+  color: #666;
+  background: #e5e7eb;
+  padding: 2px 9px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.site-group__actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* グループ一括編集パネル */
+.site-group__edit-panel {
+  background: #f0f6ff;
+  border-top: 1px solid #c7d7f5;
+  padding: 12px 14px;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.edit-panel__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a56db;
+  flex-shrink: 0;
+  padding-bottom: 2px;
+}
+
+.edit-panel__fields {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.edit-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: #555;
+  font-weight: 500;
+}
+
+.edit-panel__field--memo {
+  min-width: 160px;
+}
+
+/* アコーディオン本体 */
+.site-group__body {
+  border-top: 1px solid #e5e7eb;
+}
+
+.site-group__body .data-table {
+  min-width: 380px;
+}
+
+/* 個別インライン編集行 */
+.site-edit-row td {
+  background: #fffbeb;
+  padding: 10px 14px;
+}
+
+.site-edit-form {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+/* ===== レスポンシブ（グループ） ===== */
+@media (max-width: 600px) {
+  .site-group__header {
+    gap: 8px;
+  }
+
+  .site-group__label {
+    font-size: 13px;
+    width: 100%;
+    order: 2;
+  }
+
+  .site-group__toggle {
+    order: 1;
+  }
+
+  .site-group__count {
+    order: 3;
+  }
+
+  .site-group__actions {
+    order: 4;
+    width: 100%;
+  }
+
+  .site-group__edit-panel {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .edit-panel__fields {
+    width: 100%;
+  }
+
+  .site-edit-form {
+    flex-direction: column;
+  }
+}
