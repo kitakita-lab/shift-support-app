@@ -1,36 +1,24 @@
 import ExcelJS from 'exceljs';
 import { Staff, WorkSite, ShiftAssignment } from '../types';
 
-const COL_WIDTHS = [14, 22, 10, 10, 10, 44, 10];
+// ── 共通スタイル定数 ───────────────────────────────────────
 
-const HEADER_LABELS = [
-  '日付', '現場名', '開始時間', '終了時間', '必要人数', '割当スタッフ', '不足人数',
-];
-
-// ヘッダーセルのスタイル
 const HEADER_FILL: ExcelJS.Fill = {
-  type: 'pattern',
-  pattern: 'solid',
+  type: 'pattern', pattern: 'solid',
   fgColor: { argb: 'FF1A56DB' },
 };
 const HEADER_FONT: Partial<ExcelJS.Font> = {
   bold: true, color: { argb: 'FFFFFFFF' }, size: 11,
 };
-
-// 不足行の背景
 const SHORTAGE_FILL: ExcelJS.Fill = {
-  type: 'pattern',
-  pattern: 'solid',
+  type: 'pattern', pattern: 'solid',
   fgColor: { argb: 'FFFEE2E2' },
 };
 const SHORTAGE_FONT: Partial<ExcelJS.Font> = {
   bold: true, color: { argb: 'FFDC2626' },
 };
-
-// 通常行（偶数）の背景
 const ALT_FILL: ExcelJS.Fill = {
-  type: 'pattern',
-  pattern: 'solid',
+  type: 'pattern', pattern: 'solid',
   fgColor: { argb: 'FFF8FAFF' },
 };
 
@@ -42,54 +30,98 @@ function thinBorder(color = 'FFE5E7EB'): Partial<ExcelJS.Borders> {
   return { top: side, bottom: side, left: side, right: side };
 }
 
-export async function exportExcel(
-  workSites: WorkSite[],
-  assignments: ShiftAssignment[],
-  staff: Staff[]
-): Promise<void> {
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'シフト作成サポート';
-  wb.created = new Date();
+// ── 共通ヘルパー ───────────────────────────────────────────
 
-  const ws = wb.addWorksheet('シフト表');
-
-  // 列幅
-  ws.columns = COL_WIDTHS.map((width) => ({ width }));
-
-  // ── ヘッダー行 ──────────────────────────────────────────
-  const headerRow = ws.addRow(HEADER_LABELS);
-  headerRow.height = 26;
-  headerRow.eachCell((cell) => {
+function styleHeader(row: ExcelJS.Row): void {
+  row.height = 26;
+  row.eachCell((cell) => {
     cell.font      = HEADER_FONT;
     cell.fill      = HEADER_FILL;
     cell.alignment = CENTER;
     cell.border    = thinBorder('FF1A56DB');
   });
+}
 
-  // ── データ準備 ──────────────────────────────────────────
-  const staffMap: Record<string, string> = {};
-  staff.forEach((s) => (staffMap[s.id] = s.name));
+function styleDataRow(
+  row: ExcelJS.Row,
+  hasShortage: boolean,
+  isAlt: boolean,
+  staffCol: number,   // テキスト左寄せにする列番号
+  shortageCol: number // 不足強調する列番号
+): void {
+  row.height = 20;
+  row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+    cell.border    = thinBorder();
+    cell.alignment = colNum === staffCol ? MIDDLE : CENTER;
+    if (hasShortage)    cell.fill = SHORTAGE_FILL;
+    else if (isAlt)     cell.fill = ALT_FILL;
+  });
+  if (hasShortage) row.getCell(shortageCol).font = SHORTAGE_FONT;
+}
 
-  const assignMap: Record<string, ShiftAssignment> = {};
-  assignments.forEach((a) => (assignMap[a.siteId] = a));
+// ── シート①：現場別シフト表（1現場1行・確認用）────────────
 
-  const sorted = [...workSites].sort((a, b) => a.date.localeCompare(b.date));
+function buildSiteSheet(
+  wb: ExcelJS.Workbook,
+  sorted: WorkSite[],
+  assignMap: Record<string, ShiftAssignment>,
+  staffMap: Record<string, string>
+): void {
+  const ws = wb.addWorksheet('現場別シフト表');
 
-  // ── データ行（スタッフ1人につき1行に展開）────────────────
+  // 列幅：日付, 現場名, 時間, 必要人数, 割当スタッフ, 不足人数
+  ws.columns = [14, 22, 16, 10, 48, 10].map((width) => ({ width }));
+
+  styleHeader(ws.addRow(['日付', '現場名', '時間', '必要人数', '割当スタッフ', '不足人数']));
+
   sorted.forEach((site, idx) => {
-    const asgn     = assignMap[site.id];
-    const shortage = asgn ? asgn.shortage : site.requiredPeople;
+    const asgn      = assignMap[site.id];
+    const shortage  = asgn ? asgn.shortage : site.requiredPeople;
+    const staffNames = asgn && asgn.assignedStaffIds.length > 0
+      ? asgn.assignedStaffIds.map((id) => staffMap[id] ?? id).join('、')
+      : '';
+
+    const row = ws.addRow([
+      site.date,
+      site.siteName,
+      `${site.startTime}〜${site.endTime}`,
+      site.requiredPeople,
+      staffNames,
+      shortage,
+    ]);
+
+    // 5列目=割当スタッフ（左寄せ）、6列目=不足人数
+    styleDataRow(row, shortage > 0, idx % 2 === 1, 5, 6);
+  });
+}
+
+// ── シート②：スタッフ別明細（1スタッフ1行・集計用）─────────
+
+function buildStaffSheet(
+  wb: ExcelJS.Workbook,
+  sorted: WorkSite[],
+  assignMap: Record<string, ShiftAssignment>,
+  staffMap: Record<string, string>
+): void {
+  const ws = wb.addWorksheet('スタッフ別明細');
+
+  // 列幅：日付, 現場名, 開始時間, 終了時間, 必要人数, スタッフ名, 不足人数
+  ws.columns = [14, 22, 10, 10, 10, 30, 10].map((width) => ({ width }));
+
+  styleHeader(ws.addRow(['日付', '現場名', '開始時間', '終了時間', '必要人数', 'スタッフ名', '不足人数']));
+
+  sorted.forEach((site, idx) => {
+    const asgn       = assignMap[site.id];
+    const shortage   = asgn ? asgn.shortage : site.requiredPeople;
     const hasShortage = shortage > 0;
-    // 同一現場の行は同じ idx を使って縞模様を統一する
-    const isAlt = idx % 2 === 1;
+    const isAlt      = idx % 2 === 1;
 
-    // 割当スタッフを1名ずつ展開。未割当なら空行を1行出す
-    const staffNames =
-      asgn && asgn.assignedStaffIds.length > 0
-        ? asgn.assignedStaffIds.map((id) => staffMap[id] ?? id)
-        : [''];
+    // スタッフを1人ずつ展開。未割当なら空行を1行出す
+    const names = asgn && asgn.assignedStaffIds.length > 0
+      ? asgn.assignedStaffIds.map((id) => staffMap[id] ?? id)
+      : [''];
 
-    staffNames.forEach((staffName) => {
+    names.forEach((staffName) => {
       const row = ws.addRow([
         site.date,
         site.siteName,
@@ -99,27 +131,35 @@ export async function exportExcel(
         staffName,
         shortage,
       ]);
-      row.height = 20;
 
-      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
-        cell.border    = thinBorder();
-        cell.alignment = colNum === 6 ? MIDDLE : CENTER;
-
-        if (hasShortage) {
-          cell.fill = SHORTAGE_FILL;
-        } else if (isAlt) {
-          cell.fill = ALT_FILL;
-        }
-      });
-
-      // 不足人数セルを強調
-      if (hasShortage) {
-        row.getCell(7).font = SHORTAGE_FONT;
-      }
+      // 6列目=スタッフ名（左寄せ）、7列目=不足人数
+      styleDataRow(row, hasShortage, isAlt, 6, 7);
     });
   });
+}
 
-  // ── ダウンロード ────────────────────────────────────────
+// ── メイン関数 ────────────────────────────────────────────
+
+export async function exportExcel(
+  workSites: WorkSite[],
+  assignments: ShiftAssignment[],
+  staff: Staff[]
+): Promise<void> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'シフト作成サポート';
+  wb.created = new Date();
+
+  const staffMap: Record<string, string> = {};
+  staff.forEach((s) => (staffMap[s.id] = s.name));
+
+  const assignMap: Record<string, ShiftAssignment> = {};
+  assignments.forEach((a) => (assignMap[a.siteId] = a));
+
+  const sorted = [...workSites].sort((a, b) => a.date.localeCompare(b.date));
+
+  buildSiteSheet(wb, sorted, assignMap, staffMap);
+  buildStaffSheet(wb, sorted, assignMap, staffMap);
+
   const today  = new Date().toISOString().slice(0, 10);
   const buffer = await wb.xlsx.writeBuffer();
   const blob   = new Blob([buffer], {
