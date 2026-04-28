@@ -75,43 +75,48 @@ export async function exportExcel(
 
   const sorted = [...workSites].sort((a, b) => a.date.localeCompare(b.date));
 
-  // ── データ行 ────────────────────────────────────────────
+  // ── データ行（スタッフ1人につき1行に展開）────────────────
   sorted.forEach((site, idx) => {
-    const asgn      = assignMap[site.id];
-    const staffNames = asgn
-      ? asgn.assignedStaffIds.map((id) => staffMap[id] ?? id).join(' / ')
-      : '';
+    const asgn     = assignMap[site.id];
     const shortage = asgn ? asgn.shortage : site.requiredPeople;
-
-    const row = ws.addRow([
-      site.date,
-      site.siteName,
-      site.startTime,
-      site.endTime,
-      site.requiredPeople,
-      staffNames,
-      shortage,
-    ]);
-    row.height = 20;
-
     const hasShortage = shortage > 0;
-    const isAlt       = idx % 2 === 1;
+    // 同一現場の行は同じ idx を使って縞模様を統一する
+    const isAlt = idx % 2 === 1;
 
-    row.eachCell({ includeEmpty: true }, (cell, colNum) => {
-      cell.border    = thinBorder();
-      cell.alignment = colNum === 6 ? MIDDLE : CENTER;
+    // 割当スタッフを1名ずつ展開。未割当なら空行を1行出す
+    const staffNames =
+      asgn && asgn.assignedStaffIds.length > 0
+        ? asgn.assignedStaffIds.map((id) => staffMap[id] ?? id)
+        : [''];
 
+    staffNames.forEach((staffName) => {
+      const row = ws.addRow([
+        site.date,
+        site.siteName,
+        site.startTime,
+        site.endTime,
+        site.requiredPeople,
+        staffName,
+        shortage,
+      ]);
+      row.height = 20;
+
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        cell.border    = thinBorder();
+        cell.alignment = colNum === 6 ? MIDDLE : CENTER;
+
+        if (hasShortage) {
+          cell.fill = SHORTAGE_FILL;
+        } else if (isAlt) {
+          cell.fill = ALT_FILL;
+        }
+      });
+
+      // 不足人数セルを強調
       if (hasShortage) {
-        cell.fill = SHORTAGE_FILL;
-      } else if (isAlt) {
-        cell.fill = ALT_FILL;
+        row.getCell(7).font = SHORTAGE_FONT;
       }
     });
-
-    // 不足人数セルを強調
-    if (hasShortage) {
-      row.getCell(7).font = SHORTAGE_FONT;
-    }
   });
 
   // ── ダウンロード ────────────────────────────────────────
