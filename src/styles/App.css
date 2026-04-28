@@ -890,3 +890,97 @@ h2 {
     font-size: 11px;
   }
 }
+
+/* ===== 希望休カレンダー ===== */
+.form-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+  margin: 16px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.cal {
+  max-width: 340px;
+}
+
+.cal__nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cal__month-input {
+  flex: 1;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 14px;
+  text-align: center;
+}
+
+.cal__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.cal__dow {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  padding: 4px 0;
+}
+
+.cal__dow--sun { color: #dc2626; }
+.cal__dow--sat { color: #1d4ed8; }
+
+.cal__day {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: #f9fafb;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.cal__day:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.cal__day--off {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.cal__day--off:hover {
+  background: #fecaca;
+}
+
+.cal__day--today {
+  border-color: #1a56db;
+  font-weight: 700;
+}
+
+.cal__day--empty {
+  background: transparent;
+  border-color: transparent;
+  pointer-events: none;
+}
+
+.cal__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
+}

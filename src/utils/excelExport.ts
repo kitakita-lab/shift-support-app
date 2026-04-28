@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { Staff, WorkSite, ShiftAssignment } from '../types';
+import { sortedByStaffNo } from './staffUtils';
 
 // ── 共通スタイル定数 ───────────────────────────────────────
 
@@ -65,7 +66,8 @@ function buildSiteSheet(
   wb: ExcelJS.Workbook,
   sorted: WorkSite[],
   assignMap: Record<string, ShiftAssignment>,
-  staffMap: Record<string, string>
+  staffMap: Record<string, string>,
+  staffIndex: Record<string, Staff>
 ): void {
   const ws = wb.addWorksheet('現場別シフト表');
 
@@ -78,7 +80,7 @@ function buildSiteSheet(
     const asgn      = assignMap[site.id];
     const shortage  = asgn ? asgn.shortage : site.requiredPeople;
     const staffNames = asgn && asgn.assignedStaffIds.length > 0
-      ? asgn.assignedStaffIds.map((id) => staffMap[id] ?? id).join('、')
+      ? sortedByStaffNo(asgn.assignedStaffIds, staffIndex).map((id) => staffMap[id] ?? id).join('、')
       : '';
 
     const row = ws.addRow([
@@ -101,7 +103,8 @@ function buildStaffSheet(
   wb: ExcelJS.Workbook,
   sorted: WorkSite[],
   assignMap: Record<string, ShiftAssignment>,
-  staffMap: Record<string, string>
+  staffMap: Record<string, string>,
+  staffIndex: Record<string, Staff>
 ): void {
   const ws = wb.addWorksheet('スタッフ別明細');
 
@@ -118,7 +121,7 @@ function buildStaffSheet(
 
     // スタッフを1人ずつ展開。未割当なら空行を1行出す
     const names = asgn && asgn.assignedStaffIds.length > 0
-      ? asgn.assignedStaffIds.map((id) => staffMap[id] ?? id)
+      ? sortedByStaffNo(asgn.assignedStaffIds, staffIndex).map((id) => staffMap[id] ?? id)
       : [''];
 
     names.forEach((staffName) => {
@@ -150,15 +153,19 @@ export async function exportExcel(
   wb.created = new Date();
 
   const staffMap: Record<string, string> = {};
-  staff.forEach((s) => (staffMap[s.id] = s.name));
+  const staffIndex: Record<string, Staff> = {};
+  staff.forEach((s) => {
+    staffMap[s.id] = s.name;
+    staffIndex[s.id] = s;
+  });
 
   const assignMap: Record<string, ShiftAssignment> = {};
   assignments.forEach((a) => (assignMap[a.siteId] = a));
 
   const sorted = [...workSites].sort((a, b) => a.date.localeCompare(b.date));
 
-  buildSiteSheet(wb, sorted, assignMap, staffMap);
-  buildStaffSheet(wb, sorted, assignMap, staffMap);
+  buildSiteSheet(wb, sorted, assignMap, staffMap, staffIndex);
+  buildStaffSheet(wb, sorted, assignMap, staffMap, staffIndex);
 
   const today  = new Date().toISOString().slice(0, 10);
   const buffer = await wb.xlsx.writeBuffer();

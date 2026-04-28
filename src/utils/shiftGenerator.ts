@@ -1,4 +1,5 @@
 import { Staff, WorkSite, ShiftAssignment } from '../types';
+import { compareStaffNo } from './staffUtils';
 
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -33,7 +34,7 @@ export function generateShifts(
     // 勤務日数が少ない順に並べて均等配分
     candidates.sort((a, b) => workDayCount[a.id] - workDayCount[b.id]);
 
-    const assigned = candidates.slice(0, site.requiredPeople);
+    const assigned = candidates.slice(0, site.requiredPeople).sort(compareStaffNo);
     assigned.forEach((s) => (workDayCount[s.id] += 1));
 
     const shortage = Math.max(0, site.requiredPeople - assigned.length);

@@ -1,5 +1,6 @@
 export interface Staff {
   id: string;
+  staffNo: string;
   name: string;
   availableWeekdays: string[];
   requestedDaysOff: string[];

@@ -84,7 +84,7 @@ export default function App() {
         )}
         {activeTab === 'import' && (
           <CsvImporter
-            currentStaffCount={staff.length}
+            staff={staff}
             currentSiteCount={workSites.length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
             onImportSites={(imported) => setWorkSites((prev) => [...prev, ...imported])}

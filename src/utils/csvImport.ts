@@ -114,6 +114,7 @@ export function parseStaffCSV(rawText: string): StaffParseResult {
 
     valid.push({
       id: crypto.randomUUID(),
+      staffNo: '',
       name,
       availableWeekdays,
       requestedDaysOff,

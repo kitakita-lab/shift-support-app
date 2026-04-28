@@ -9,9 +9,10 @@ import {
   StaffParseResult,
   SiteParseResult,
 } from '../utils/csvImport';
+import { nextStaffNo } from '../utils/staffUtils';
 
 interface Props {
-  currentStaffCount: number;
+  staff: Staff[];
   currentSiteCount: number;
   onImportStaff: (imported: Staff[]) => void;
   onImportSites: (imported: WorkSite[]) => void;
@@ -47,7 +48,7 @@ function ImportCount({ count }: { count: number }) {
 // ── メインコンポーネント ────────────────────────────────────
 
 export default function CsvImporter({
-  currentStaffCount,
+  staff,
   currentSiteCount,
   onImportStaff,
   onImportSites,
@@ -96,10 +97,15 @@ export default function CsvImporter({
 
   function handleImportStaff() {
     if (!staffPreview?.valid.length) return;
-    const count = staffPreview.valid.length;
-    onImportStaff(staffPreview.valid);
+    let nextNo = parseInt(nextStaffNo(staff), 10);
+    const withNos = staffPreview.valid.map((s) => ({
+      ...s,
+      staffNo: s.staffNo || String(nextNo++),
+    }));
+    const count = withNos.length;
+    onImportStaff(withNos);
     clearStaffPreview();
-    setStaffSuccess(`${count}件のスタッフを追加しました（合計 ${currentStaffCount + count}件）`);
+    setStaffSuccess(`${count}件のスタッフを追加しました（合計 ${staff.length + count}件）`);
     setTimeout(() => setStaffSuccess(''), 5000);
   }
 
@@ -150,7 +156,7 @@ export default function CsvImporter({
           <button className="btn btn--ghost" onClick={downloadStaffTemplate}>
             テンプレートをダウンロード
           </button>
-          <span className="import-current">現在 {currentStaffCount}件登録済み</span>
+          <span className="import-current">現在 {staff.length}件登録済み</span>
         </div>
 
         {staffPreview && (

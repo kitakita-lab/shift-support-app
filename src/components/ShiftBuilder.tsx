@@ -1,5 +1,6 @@
 import { Staff, WorkSite, ShiftAssignment } from '../types';
 import { generateShifts } from '../utils/shiftGenerator';
+import { sortedByStaffNo } from '../utils/staffUtils';
 
 interface Props {
   staff: Staff[];
@@ -10,7 +11,11 @@ interface Props {
 
 export default function ShiftBuilder({ staff, workSites, assignments, onGenerate }: Props) {
   const staffMap: Record<string, string> = {};
-  staff.forEach((s) => (staffMap[s.id] = s.name));
+  const staffIndex: Record<string, Staff> = {};
+  staff.forEach((s) => {
+    staffMap[s.id] = s.name;
+    staffIndex[s.id] = s;
+  });
 
   const siteMap: Record<string, WorkSite> = {};
   workSites.forEach((w) => (siteMap[w.id] = w));
@@ -66,7 +71,7 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
                 {sorted.map((site) => {
                   const asgn = assignMap[site.id];
                   if (!asgn) return null;
-                  const names = asgn.assignedStaffIds.map((id) => staffMap[id] ?? id);
+                  const names = sortedByStaffNo(asgn.assignedStaffIds, staffIndex).map((id) => staffMap[id] ?? id);
                   const hasShortage = asgn.shortage > 0;
                   return (
                     <tr key={site.id} className={hasShortage ? 'row--alert' : ''}>

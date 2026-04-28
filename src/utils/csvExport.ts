@@ -1,4 +1,5 @@
 import { Staff, WorkSite, ShiftAssignment } from '../types';
+import { sortedByStaffNo } from './staffUtils';
 
 function escape(value: string | number): string {
   const str = String(value);
@@ -14,7 +15,11 @@ export function exportCsv(
   staffList: Staff[]
 ): void {
   const staffMap: Record<string, string> = {};
-  staffList.forEach((s) => (staffMap[s.id] = s.name));
+  const staffIndex: Record<string, Staff> = {};
+  staffList.forEach((s) => {
+    staffMap[s.id] = s.name;
+    staffIndex[s.id] = s;
+  });
 
   const assignMap: Record<string, ShiftAssignment> = {};
   assignments.forEach((a) => (assignMap[a.siteId] = a));
@@ -26,7 +31,7 @@ export function exportCsv(
   const rows = sorted.map((site) => {
     const asgn = assignMap[site.id];
     const staffNames = asgn
-      ? asgn.assignedStaffIds.map((id) => staffMap[id] ?? id).join(' / ')
+      ? sortedByStaffNo(asgn.assignedStaffIds, staffIndex).map((id) => staffMap[id] ?? id).join(' / ')
       : '';
     const shortage = asgn ? asgn.shortage : site.requiredPeople;
     return [
