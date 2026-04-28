@@ -190,8 +190,66 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
   return { valid, errors };
 }
 
-// ── テンプレートダウンロード ──────────────────────────────
+// ── 希望休CSV ─────────────────────────────────────────────
 
+export interface DaysOffRow {
+  rowNum: number;
+  staffNo: string;
+  name: string;
+  requestedDaysOff: string[];
+}
+
+export interface DaysOffParseResult {
+  rows: DaysOffRow[];
+  errors: ParseError[];
+}
+
+export function parseDaysOffCSV(rawText: string): DaysOffParseResult {
+  const lines = stripBom(rawText)
+    .split(/\r?\n/)
+    .filter((l) => l.trim() !== '');
+
+  const rows: DaysOffRow[] = [];
+  const errors: ParseError[] = [];
+
+  const first = lines[0]?.toLowerCase() ?? '';
+  const start = first.startsWith('staffno') || first.startsWith('name') ? 1 : 0;
+
+  for (let i = start; i < lines.length; i++) {
+    const rowNum = i + 1;
+    const fields = parseCSVLine(lines[i]);
+
+    if (fields.length < 2) {
+      errors.push({ row: rowNum, message: `列数不足（${fields.length}列）` });
+      continue;
+    }
+
+    const [staffNoRaw, nameRaw, daysOffRaw = ''] = fields;
+    const staffNo = staffNoRaw.trim();
+    const name = nameRaw.trim();
+
+    if (!staffNo && !name) {
+      errors.push({ row: rowNum, message: 'スタッフNoと名前が両方空です' });
+      continue;
+    }
+
+    const requestedDaysOff = daysOffRaw
+      ? daysOffRaw.split(',').map((d) => d.trim()).filter((d) => d !== '')
+      : [];
+
+    const invalidDates = requestedDaysOff.filter((d) => !isValidDate(d));
+    if (invalidDates.length > 0) {
+      errors.push({ row: rowNum, message: `不正な日付: ${invalidDates.join(', ')}` });
+      continue;
+    }
+
+    rows.push({ rowNum, staffNo, name, requestedDaysOff });
+  }
+
+  return { rows, errors };
+}
+
+// ── テンプレートダウンロード ──────────────────────────────
 function downloadCsv(content: string, filename: string): void {
   const bom = '﻿';
   const blob = new Blob([bom + content], { type: 'text/csv;charset=utf-8;' });
@@ -214,5 +272,12 @@ export function downloadSiteTemplate(): void {
   downloadCsv(
     `date,siteName,startTime,endTime,requiredPeople,memo\n2026-05-01,アリオ札幌,10:00,18:00,3,通常\n2026-05-02,南郷7丁目,09:00,17:00,2,`,
     'site_template.csv'
+  );
+}
+
+export function downloadDaysOffTemplate(): void {
+  downloadCsv(
+    `staffNo,name,requestedDaysOff\n001,セトケンスケ,"2026-05-03,2026-05-10,2026-05-18"\n002,マツハシマミ,"2026-05-01,2026-05-07"`,
+    'days_off_template.csv'
   );
 }
