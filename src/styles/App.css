@@ -726,3 +726,144 @@ h2 {
     flex-direction: column;
   }
 }
+
+/* ===== CSVインポート ===== */
+.file-input-hidden {
+  display: none;
+}
+
+.import-upload {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.import-current {
+  font-size: 13px;
+  color: #888;
+  margin-left: 4px;
+}
+
+/* フォーマット表示 */
+.import-format {
+  background: #1a1a2e;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+
+.import-format__title {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.import-format__code {
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 13px;
+  color: #98fb98;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  line-height: 1.7;
+}
+
+/* プレビュー */
+.import-preview {
+  border-top: 1px solid #e5e7eb;
+  padding-top: 16px;
+  margin-top: 4px;
+}
+
+.import-preview__filename {
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 12px;
+}
+
+/* エラーリスト */
+.import-errors {
+  background: #fff5f5;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.import-errors__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #dc2626;
+  margin-bottom: 8px;
+}
+
+.import-error-row {
+  font-size: 13px;
+  color: #b91c1c;
+  padding: 3px 0;
+  border-bottom: 1px solid #fee2e2;
+}
+
+.import-error-row:last-child {
+  border-bottom: none;
+}
+
+/* 件数表示 */
+.import-count {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #166534;
+  margin-bottom: 12px;
+}
+
+.import-count__num {
+  font-size: 30px;
+  font-weight: 700;
+  color: #16a34a;
+  line-height: 1;
+}
+
+.import-no-valid {
+  color: #aaa;
+  font-size: 14px;
+  padding: 8px 0;
+}
+
+/* アクションボタン行 */
+.import-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+/* ゴーストボタン（テンプレートDL用） */
+.btn--ghost {
+  background: none;
+  border: 1px solid #d1d5db;
+  color: #555;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
+.btn--ghost:hover {
+  background: #f3f4f6;
+}
+
+@media (max-width: 600px) {
+  .import-upload {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .import-format__code {
+    font-size: 11px;
+  }
+}
