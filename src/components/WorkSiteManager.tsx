@@ -84,6 +84,7 @@ function deriveMonthLabel(sites: WorkSite[]): string {
 
 function getGroupLabel(sites: WorkSite[]): string {
   if (sites.length === 0) return '(空)';
+  if (sites[0].groupLabel) return sites[0].groupLabel;
   const sorted = [...sites].sort((a, b) => a.date.localeCompare(b.date));
   return `${deriveMonthLabel(sorted)}：${sorted[0].siteName}（${deriveWeekdays(sorted)}）`;
 }

@@ -105,8 +105,13 @@ export default function CsvImporter({
 
   function handleImportSites() {
     if (!sitePreview?.valid.length) return;
-    const count = sitePreview.valid.length;
-    onImportSites(sitePreview.valid);
+    const groupId = crypto.randomUUID();
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const groupLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    const withGroup = sitePreview.valid.map((s) => ({ ...s, groupId, groupLabel }));
+    const count = withGroup.length;
+    onImportSites(withGroup);
     clearSitePreview();
     setSiteSuccess(`${count}件の現場を追加しました（合計 ${currentSiteCount + count}件）`);
     setTimeout(() => setSiteSuccess(''), 5000);
