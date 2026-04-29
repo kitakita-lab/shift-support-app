@@ -6,6 +6,7 @@ export interface Staff {
   requestedDaysOff: string[];
   maxWorkDays: number;
   memo: string;
+  preferredWorkSites: string[];
 }
 
 export interface WorkSite {

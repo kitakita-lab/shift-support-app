@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Staff } from '../types';
+import { Staff, WorkSite } from '../types';
 import { sortStaff, nextStaffNo } from '../utils/staffUtils';
 
 const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日'];
 
 interface Props {
   staff: Staff[];
+  workSites: WorkSite[];
   onChange: (staff: Staff[]) => void;
 }
 
@@ -17,7 +18,17 @@ function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
     requestedDaysOff: [],
     maxWorkDays: 20,
     memo: '',
+    preferredWorkSites: [],
   };
+}
+
+function formatPreferredSites(sites: string[]): string {
+  if (sites.length === 0) return '—';
+  const MAX = 2;
+  const shown = sites.slice(0, MAX);
+  return sites.length <= MAX
+    ? shown.join('、')
+    : `${shown.join('、')} +${sites.length - MAX}件`;
 }
 
 function toYearMonth(date: Date): string {
@@ -150,10 +161,11 @@ function DaysOffCalendar({ yearMonth, onMonthChange, daysOff, onChange }: Calend
   );
 }
 
-export default function StaffManager({ staff, onChange }: Props) {
+export default function StaffManager({ staff, workSites, onChange }: Props) {
   const [form, setForm] = useState<Omit<Staff, 'id'>>(() => emptyForm(staff));
   const [editId, setEditId] = useState<string | null>(null);
   const [currentMonth, setCurrentMonth] = useState(() => toYearMonth(new Date()));
+  const [editingNos, setEditingNos] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!editId) setForm((prev) => ({ ...prev, staffNo: nextStaffNo(staff) }));
@@ -167,6 +179,17 @@ export default function StaffManager({ staff, onChange }: Props) {
         : [...prev.availableWeekdays, day],
     }));
   }
+
+  function togglePreferredSite(name: string) {
+    setForm((prev) => ({
+      ...prev,
+      preferredWorkSites: prev.preferredWorkSites.includes(name)
+        ? prev.preferredWorkSites.filter((n) => n !== name)
+        : [...prev.preferredWorkSites, name],
+    }));
+  }
+
+  const uniqueSiteNames = [...new Set(workSites.map((w) => w.siteName))].sort();
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -189,6 +212,7 @@ export default function StaffManager({ staff, onChange }: Props) {
       requestedDaysOff: s.requestedDaysOff,
       maxWorkDays: s.maxWorkDays,
       memo: s.memo,
+      preferredWorkSites: s.preferredWorkSites,
     });
   }
 
@@ -199,6 +223,18 @@ export default function StaffManager({ staff, onChange }: Props) {
   function handleCancel() {
     setEditId(null);
     setForm(emptyForm(staff));
+  }
+
+  function handleStaffNoChange(id: string, value: string) {
+    setEditingNos((prev) => ({ ...prev, [id]: value }));
+  }
+
+  function handleStaffNoBlur(id: string) {
+    const next = (editingNos[id] ?? '').trim();
+    setEditingNos((prev) => { const n = { ...prev }; delete n[id]; return n; });
+    const original = staff.find((s) => s.id === id)?.staffNo ?? '';
+    if (next === original || next === '') return;
+    onChange(sortStaff(staff.map((s) => s.id === id ? { ...s, staffNo: next } : s)));
   }
 
   const [listYear, listMon] = currentMonth.split('-');
@@ -275,6 +311,31 @@ export default function StaffManager({ staff, onChange }: Props) {
             />
           </div>
 
+          <div className="form-row form-row--top">
+            <label className="form-label">優先現場</label>
+            <div>
+              {uniqueSiteNames.length === 0 ? (
+                <span className="empty-chips">現場が登録されていません</span>
+              ) : (
+                <div className="site-chips">
+                  {uniqueSiteNames.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      className={`site-chip${form.preferredWorkSites.includes(name) ? ' site-chip--active' : ''}`}
+                      onClick={() => togglePreferredSite(name)}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="section-desc" style={{ marginTop: '4px' }}>
+                シフト自動作成時、同条件なら優先的に割り当てます
+              </p>
+            </div>
+          </div>
+
           <h4 className="form-section-title">月別希望休カレンダー</h4>
           <p className="section-desc">日付をクリックして希望休を登録・解除できます</p>
 
@@ -304,7 +365,7 @@ export default function StaffManager({ staff, onChange }: Props) {
           <p className="empty-msg">スタッフが登録されていません</p>
         ) : (
           <div className="table-wrapper">
-            <table className="data-table">
+            <table className="data-table data-table--staff">
               <thead>
                 <tr>
                   <th>No.</th>
@@ -313,18 +374,32 @@ export default function StaffManager({ staff, onChange }: Props) {
                   <th>希望休（{monthLabel}）</th>
                   <th>最大日数</th>
                   <th>メモ</th>
+                  <th>優先現場</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {staff.map((s) => (
                   <tr key={s.id}>
-                    <td>{s.staffNo || '—'}</td>
-                    <td>{s.name}</td>
+                    <td>
+                      <input
+                        className="staffno-input"
+                        type="text"
+                        value={editingNos[s.id] ?? s.staffNo}
+                        placeholder="—"
+                        onChange={(e) => handleStaffNoChange(s.id, e.target.value)}
+                        onBlur={() => handleStaffNoBlur(s.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        }}
+                      />
+                    </td>
+                    <td className="name-cell">{s.name}</td>
                     <td>{s.availableWeekdays.join('・')}</td>
                     <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
                     <td>{s.maxWorkDays}日</td>
                     <td>{s.memo || '—'}</td>
+                    <td>{formatPreferredSites(s.preferredWorkSites)}</td>
                     <td className="action-cell">
                       <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
                         編集

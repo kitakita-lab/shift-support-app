@@ -31,11 +31,22 @@ export function generateShifts(
       return availableOnDay && notOnHoliday && underMaxDays;
     });
 
-    // 勤務日数が少ない順に並べて均等配分
-    candidates.sort((a, b) => workDayCount[a.id] - workDayCount[b.id]);
+    // 優先現場グループを先に割当、不足時のみ一般グループで補充
+    // 同一グループ内: 勤務日数少ない順 → staffNo順 → 名前順
+    const byWorkDaysThenStaffNo = (a: Staff, b: Staff): number => {
+      const diff = workDayCount[a.id] - workDayCount[b.id];
+      return diff !== 0 ? diff : compareStaffNo(a, b);
+    };
+    const preferred = candidates.filter((s) => s.preferredWorkSites.includes(site.siteName)).sort(byWorkDaysThenStaffNo);
+    const others = candidates.filter((s) => !s.preferredWorkSites.includes(site.siteName)).sort(byWorkDaysThenStaffNo);
+    const merged = [...preferred, ...others];
 
-    const assigned = candidates.slice(0, site.requiredPeople).sort(compareStaffNo);
+    const assigned = merged.slice(0, site.requiredPeople).sort(compareStaffNo);
     assigned.forEach((s) => (workDayCount[s.id] += 1));
+
+    if (import.meta.env.DEV) {
+      console.log(`[シフト] ${site.date} ${site.siteName}: 優先候補${preferred.length}人 / 一般候補${others.length}人 → 選出: [${assigned.map((s) => s.name).join(', ')}]`);
+    }
 
     const shortage = Math.max(0, site.requiredPeople - assigned.length);
 

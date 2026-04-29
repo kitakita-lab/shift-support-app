@@ -21,8 +21,8 @@ function save<T>(key: string, data: T[]): void {
 
 export const storage = {
   loadStaff: (): Staff[] =>
-    load<Partial<Staff> & Omit<Staff, 'staffNo'>>(KEYS.staff).map(
-      (s) => ({ staffNo: '', ...s } as Staff)
+    load<Partial<Staff> & Omit<Staff, 'staffNo' | 'preferredWorkSites'>>(KEYS.staff).map(
+      (s) => ({ staffNo: '', preferredWorkSites: [], ...s } as Staff)
     ),
   saveStaff: (data: Staff[]): void => save(KEYS.staff, data),
 

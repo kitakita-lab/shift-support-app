@@ -376,6 +376,103 @@ body {
   background: #fff5f5 !important;
 }
 
+.data-table--staff {
+  min-width: 890px;
+  table-layout: fixed;
+}
+
+.data-table--staff th:nth-child(1),
+.data-table--staff td:nth-child(1) { width: 72px; }
+
+.data-table--staff th:nth-child(2),
+.data-table--staff td:nth-child(2) { width: 140px; }
+
+.data-table--staff th:nth-child(3),
+.data-table--staff td:nth-child(3) { width: 140px; }
+
+.data-table--staff th:nth-child(4),
+.data-table--staff td:nth-child(4) { width: 160px; }
+
+.data-table--staff th:nth-child(5),
+.data-table--staff td:nth-child(5) { width: 80px; }
+
+/* 6列目（メモ）: 残り幅を自動で使う */
+
+.data-table--staff th:nth-child(7),
+.data-table--staff td:nth-child(7) { width: 130px; }
+
+.data-table--staff th:nth-child(8),
+.data-table--staff td:nth-child(8) { width: 110px; }
+
+.name-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.staffno-input {
+  width: 54px;
+  padding: 3px 6px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: center;
+  background: transparent;
+}
+
+.staffno-input:hover {
+  border-color: #9ca3af;
+}
+
+.staffno-input:focus {
+  outline: none;
+  border-color: #1a56db;
+  background: white;
+}
+
+.form-row--top {
+  align-items: flex-start;
+}
+
+.site-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.site-chip {
+  padding: 4px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 16px;
+  background: white;
+  font-size: 13px;
+  cursor: pointer;
+  color: #374151;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.site-chip:hover {
+  border-color: #1a56db;
+  color: #1a56db;
+}
+
+.site-chip--active {
+  background: #1a56db;
+  border-color: #1a56db;
+  color: white;
+}
+
+.site-chip--active:hover {
+  background: #1e40af;
+  border-color: #1e40af;
+}
+
+.empty-chips {
+  font-size: 13px;
+  color: #9ca3af;
+}
+
 .row--alert:hover {
   background: #ffecec !important;
 }
@@ -1112,6 +1209,11 @@ h2 {
 .assign-violation {
   color: #dc2626;
   font-weight: 600;
+}
+
+.assign-preferred {
+  color: #1a56db;
+  font-weight: 500;
 }
 
 .unassigned-label {
