@@ -763,6 +763,15 @@ h2 {
   min-width: 160px;
 }
 
+.edit-panel__field--wide {
+  min-width: 180px;
+}
+
+/* 編集中の行ハイライト */
+.site-editing-row {
+  background: #fefce8 !important;
+}
+
 /* アコーディオン本体 */
 .site-group__body {
   border-top: 1px solid #e5e7eb;

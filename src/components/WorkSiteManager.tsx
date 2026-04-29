@@ -92,7 +92,7 @@ function getGroupLabel(sites: WorkSite[]): string {
 // ─── types ─────────────────────────────────────────────────
 
 interface GroupEditForm { startTime: string; endTime: string; requiredPeople: number; }
-interface SiteEditForm  { date: string; startTime: string; endTime: string; requiredPeople: number; memo: string; }
+interface SiteEditForm  { siteName: string; date: string; startTime: string; endTime: string; requiredPeople: number; memo: string; }
 
 interface Props {
   workSites: WorkSite[];
@@ -112,7 +112,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [groupEditForm, setGroupEditForm]   = useState<GroupEditForm>({ startTime: '09:00', endTime: '18:00', requiredPeople: 1 });
   const [editingSiteId, setEditingSiteId]   = useState<string | null>(null);
-  const [siteEditForm, setSiteEditForm]     = useState<SiteEditForm>({ date: '', startTime: '', endTime: '', requiredPeople: 1, memo: '' });
+  const [siteEditForm, setSiteEditForm]     = useState<SiteEditForm>({ siteName: '', date: '', startTime: '', endTime: '', requiredPeople: 1, memo: '' });
 
   const targetDates = useMemo(() => calcTargetDates(form), [form]);
 
@@ -212,7 +212,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
   function startSiteEdit(site: WorkSite) {
     setEditingSiteId(site.id);
-    setSiteEditForm({ date: site.date, startTime: site.startTime, endTime: site.endTime, requiredPeople: site.requiredPeople, memo: site.memo });
+    setSiteEditForm({ siteName: site.siteName, date: site.date, startTime: site.startTime, endTime: site.endTime, requiredPeople: site.requiredPeople, memo: site.memo });
     setEditingGroupId(null);
   }
 
@@ -428,7 +428,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                           <tbody>
                             {sites.map((site) => (
                               <Fragment key={site.id}>
-                                <tr>
+                                <tr className={editingSiteId === site.id ? 'site-editing-row' : ''}>
                                   <td>{site.date}</td>
                                   <td>{site.startTime}</td>
                                   <td>{site.endTime}</td>
@@ -451,6 +451,12 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                   <tr className="site-edit-row">
                                     <td colSpan={6}>
                                       <div className="site-edit-form">
+                                        <label className="edit-panel__field edit-panel__field--wide">
+                                          現場名
+                                          <input type="text" className="form-input"
+                                            value={siteEditForm.siteName}
+                                            onChange={(e) => setSiteEditForm({ ...siteEditForm, siteName: e.target.value })} />
+                                        </label>
                                         <label className="edit-panel__field">
                                           日付
                                           <input type="date" className="form-input form-input--short"
@@ -523,20 +529,74 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                       </thead>
                       <tbody>
                         {ungroupedSites.map((site) => (
-                          <tr key={site.id}>
-                            <td>{site.date}</td>
-                            <td>{site.siteName}</td>
-                            <td>{site.startTime}</td>
-                            <td>{site.endTime}</td>
-                            <td>{site.requiredPeople}人</td>
-                            <td>{site.memo || '—'}</td>
-                            <td className="action-cell">
-                              <button className="btn btn--sm btn--danger"
-                                onClick={() => deleteSite(site.id)}>
-                                削除
-                              </button>
-                            </td>
-                          </tr>
+                          <Fragment key={site.id}>
+                            <tr className={editingSiteId === site.id ? 'site-editing-row' : ''}>
+                              <td>{site.date}</td>
+                              <td>{site.siteName}</td>
+                              <td>{site.startTime}</td>
+                              <td>{site.endTime}</td>
+                              <td>{site.requiredPeople}人</td>
+                              <td>{site.memo || '—'}</td>
+                              <td className="action-cell">
+                                <button className="btn btn--sm btn--secondary"
+                                  onClick={() => editingSiteId === site.id ? setEditingSiteId(null) : startSiteEdit(site)}>
+                                  {editingSiteId === site.id ? 'キャンセル' : '編集'}
+                                </button>
+                                <button className="btn btn--sm btn--danger"
+                                  onClick={() => deleteSite(site.id)}>
+                                  削除
+                                </button>
+                              </td>
+                            </tr>
+                            {editingSiteId === site.id && (
+                              <tr className="site-edit-row">
+                                <td colSpan={7}>
+                                  <div className="site-edit-form">
+                                    <label className="edit-panel__field edit-panel__field--wide">
+                                      現場名
+                                      <input type="text" className="form-input"
+                                        value={siteEditForm.siteName}
+                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, siteName: e.target.value })} />
+                                    </label>
+                                    <label className="edit-panel__field">
+                                      日付
+                                      <input type="date" className="form-input form-input--short"
+                                        value={siteEditForm.date}
+                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, date: e.target.value })} />
+                                    </label>
+                                    <label className="edit-panel__field">
+                                      開始
+                                      <input type="time" className="form-input form-input--short"
+                                        value={siteEditForm.startTime}
+                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, startTime: e.target.value })} />
+                                    </label>
+                                    <label className="edit-panel__field">
+                                      終了
+                                      <input type="time" className="form-input form-input--short"
+                                        value={siteEditForm.endTime}
+                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, endTime: e.target.value })} />
+                                    </label>
+                                    <label className="edit-panel__field">
+                                      人数
+                                      <input type="number" min={1} className="form-input form-input--short"
+                                        value={siteEditForm.requiredPeople}
+                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, requiredPeople: Number(e.target.value) })} />
+                                    </label>
+                                    <label className="edit-panel__field edit-panel__field--memo">
+                                      メモ
+                                      <input type="text" className="form-input"
+                                        value={siteEditForm.memo}
+                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, memo: e.target.value })} />
+                                    </label>
+                                    <button className="btn btn--primary btn--sm"
+                                      onClick={() => applySiteEdit(site.id)}>
+                                      更新
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
                         ))}
                       </tbody>
                     </table>
