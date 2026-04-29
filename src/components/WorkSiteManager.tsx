@@ -11,7 +11,7 @@ const WEEKDAYS = [
   { label: '日', day: 0 },
 ];
 
-// ─── helpers ───────────────────────────────────────────────
+// ─── BulkForm (一括登録) ────────────────────────────────────
 
 interface BulkForm {
   siteName: string;
@@ -25,7 +25,7 @@ interface BulkForm {
   memo: string;
 }
 
-function emptyForm(): BulkForm {
+function emptyBulkForm(): BulkForm {
   return {
     siteName: '',
     startDate: '',
@@ -39,15 +39,20 @@ function emptyForm(): BulkForm {
   };
 }
 
-function calcTargetDates(form: BulkForm): string[] {
-  if (!form.startDate || !form.endDate || form.startDate > form.endDate) return [];
+function calcTargetDates(
+  startDate: string,
+  endDate: string,
+  targetWeekdays: string[],
+  excludedDates: string[]
+): string[] {
+  if (!startDate || !endDate || startDate > endDate) return [];
   const weekdayNums = new Set(
-    WEEKDAYS.filter((w) => form.targetWeekdays.includes(w.label)).map((w) => w.day)
+    WEEKDAYS.filter((w) => targetWeekdays.includes(w.label)).map((w) => w.day)
   );
-  const excludedSet = new Set(form.excludedDates);
+  const excludedSet = new Set(excludedDates);
   const dates: string[] = [];
-  const cursor = new Date(form.startDate + 'T00:00:00');
-  const end = new Date(form.endDate + 'T00:00:00');
+  const cursor = new Date(startDate + 'T00:00:00');
+  const end = new Date(endDate + 'T00:00:00');
   while (cursor <= end) {
     if (weekdayNums.has(cursor.getDay())) {
       const iso = cursor.toISOString().slice(0, 10);
@@ -58,23 +63,101 @@ function calcTargetDates(form: BulkForm): string[] {
   return dates;
 }
 
+// ─── SessionForm (会期編集) ─────────────────────────────────
+
+interface SessionForm {
+  id: string;
+  startDate: string;
+  endDate: string;
+  targetWeekdays: string[];
+  startTime: string;
+  endTime: string;
+  requiredPeople: number;
+  memo: string;
+}
+
+interface SessionEditorState {
+  groupId: string;
+  siteName: string;
+  sessions: SessionForm[];
+  isExistingGroup: boolean;
+  sourceIds: string[];
+}
+
+function emptySession(): SessionForm {
+  return {
+    id: crypto.randomUUID(),
+    startDate: '',
+    endDate: '',
+    targetWeekdays: ['月', '火', '水', '木', '金'],
+    startTime: '09:00',
+    endTime: '18:00',
+    requiredPeople: 1,
+    memo: '',
+  };
+}
+
+function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
+  if (sites.length === 0) return [];
+  const sorted = [...sites].sort((a, b) => a.date.localeCompare(b.date));
+  const usedDays = new Set(sorted.map((s) => new Date(s.date + 'T00:00:00').getDay()));
+  const targetWeekdays = WEEKDAYS.filter((w) => usedDays.has(w.day)).map((w) => w.label);
+  const first = sorted[0];
+  return [{
+    id: crypto.randomUUID(),
+    startDate: sorted[0].date,
+    endDate: sorted[sorted.length - 1].date,
+    targetWeekdays,
+    startTime: first.startTime,
+    endTime: first.endTime,
+    requiredPeople: first.requiredPeople,
+    memo: first.memo,
+  }];
+}
+
+function computeGroupLabel(siteName: string, sessions: SessionForm[]): string {
+  if (sessions.length === 0) return `${siteName}：会期なし`;
+  if (sessions.length === 1) return `${siteName}：${sessions[0].startDate}〜${sessions[0].endDate}`;
+  return `${siteName}：複数会期`;
+}
+
+function buildSessionSites(state: SessionEditorState): WorkSite[] {
+  const { groupId, siteName, sessions } = state;
+  const groupLabel = computeGroupLabel(siteName, sessions);
+  const sites: WorkSite[] = [];
+  for (const session of sessions) {
+    const dates = calcTargetDates(session.startDate, session.endDate, session.targetWeekdays, []);
+    for (const date of dates) {
+      sites.push({
+        id: crypto.randomUUID(),
+        groupId,
+        groupLabel,
+        date,
+        siteName,
+        startTime: session.startTime,
+        endTime: session.endTime,
+        requiredPeople: session.requiredPeople,
+        memo: session.memo,
+      });
+    }
+  }
+  return sites;
+}
+
+// ─── helpers ───────────────────────────────────────────────
+
 function deriveWeekdays(sites: WorkSite[]): string {
   const nums = new Set(sites.map((s) => new Date(s.date + 'T00:00:00').getDay()));
-  return WEEKDAYS.filter((w) => nums.has(w.day))
-    .map((w) => w.label)
-    .join('');
+  return WEEKDAYS.filter((w) => nums.has(w.day)).map((w) => w.label).join('');
 }
 
 function deriveMonthLabel(sites: WorkSite[]): string {
   const sorted = [...sites].sort((a, b) => a.date.localeCompare(b.date));
   const first = new Date(sorted[0].date + 'T00:00:00');
-  const last = new Date(sorted[sorted.length - 1].date + 'T00:00:00');
-  const fy = first.getFullYear();
-  const ly = last.getFullYear();
-  const fm = first.getMonth() + 1;
-  const lm = last.getMonth() + 1;
-  const currentYear = new Date().getFullYear();
-  const showYear = fy !== currentYear || ly !== currentYear;
+  const last  = new Date(sorted[sorted.length - 1].date + 'T00:00:00');
+  const fy = first.getFullYear(), ly = last.getFullYear();
+  const fm = first.getMonth() + 1, lm = last.getMonth() + 1;
+  const showYear = fy !== new Date().getFullYear() || ly !== new Date().getFullYear();
   if (fy === ly) {
     const prefix = showYear ? `${fy}年` : '';
     return fm === lm ? `${prefix}${fm}月分` : `${prefix}${fm}〜${lm}月分`;
@@ -91,8 +174,14 @@ function getGroupLabel(sites: WorkSite[]): string {
 
 // ─── types ─────────────────────────────────────────────────
 
-interface GroupEditForm { startTime: string; endTime: string; requiredPeople: number; }
-interface SiteEditForm  { siteName: string; date: string; startTime: string; endTime: string; requiredPeople: number; memo: string; }
+interface SiteEditForm {
+  siteName: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  requiredPeople: number;
+  memo: string;
+}
 
 interface Props {
   workSites: WorkSite[];
@@ -102,30 +191,33 @@ interface Props {
 // ─── component ─────────────────────────────────────────────
 
 export default function WorkSiteManager({ workSites, onChange }: Props) {
-  // bulk form
-  const [form, setForm]               = useState<BulkForm>(emptyForm());
+  // 一括登録フォーム
+  const [form, setForm]               = useState<BulkForm>(emptyBulkForm());
   const [excludeInput, setExcludeInput] = useState('');
   const [successMsg, setSuccessMsg]   = useState('');
 
-  // list state
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
-  const [groupEditForm, setGroupEditForm]   = useState<GroupEditForm>({ startTime: '09:00', endTime: '18:00', requiredPeople: 1 });
-  const [editingSiteId, setEditingSiteId]   = useState<string | null>(null);
-  const [siteEditForm, setSiteEditForm]     = useState<SiteEditForm>({ siteName: '', date: '', startTime: '', endTime: '', requiredPeople: 1, memo: '' });
+  // 個別行編集
+  const [editingSiteId,  setEditingSiteId]  = useState<string | null>(null);
+  const [siteEditForm,   setSiteEditForm]   = useState<SiteEditForm>({
+    siteName: '', date: '', startTime: '', endTime: '', requiredPeople: 1, memo: '',
+  });
 
-  const targetDates = useMemo(() => calcTargetDates(form), [form]);
+  // 会期エディタ
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [sessionEditor,  setSessionEditor]  = useState<SessionEditorState | null>(null);
+
+  const targetDates = useMemo(
+    () => calcTargetDates(form.startDate, form.endDate, form.targetWeekdays, form.excludedDates),
+    [form]
+  );
 
   // グループ化
   const { sortedGroups, ungroupedSites } = useMemo(() => {
     const grouped: Record<string, WorkSite[]> = {};
     const ungrouped: WorkSite[] = [];
     workSites.forEach((site) => {
-      if (site.groupId) {
-        (grouped[site.groupId] ??= []).push(site);
-      } else {
-        ungrouped.push(site);
-      }
+      if (site.groupId) (grouped[site.groupId] ??= []).push(site);
+      else ungrouped.push(site);
     });
     const groupEntries = Object.entries(grouped)
       .map(([groupId, sites]) => ({
@@ -139,9 +231,9 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
     };
   }, [workSites]);
 
-  // ── bulk form handlers ──────────────────────────────────
+  // ── 一括登録 ──────────────────────────────────────────────
 
-  function toggleWeekday(label: string) {
+  function toggleBulkWeekday(label: string) {
     setForm((p) => ({
       ...p,
       targetWeekdays: p.targetWeekdays.includes(label)
@@ -172,12 +264,12 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
     }));
     onChange([...workSites, ...newSites]);
     setSuccessMsg(`${newSites.length}件の現場を登録しました`);
-    setForm(emptyForm());
+    setForm(emptyBulkForm());
     setExcludeInput('');
     setTimeout(() => setSuccessMsg(''), 4000);
   }
 
-  // ── group handlers ──────────────────────────────────────
+  // ── グループ操作 ───────────────────────────────────────────
 
   function toggleGroup(groupId: string) {
     setExpandedGroups((prev) => {
@@ -187,33 +279,24 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
     });
   }
 
-  function startGroupEdit(groupId: string, sites: WorkSite[]) {
-    setEditingGroupId(groupId);
-    setGroupEditForm({ startTime: sites[0].startTime, endTime: sites[0].endTime, requiredPeople: sites[0].requiredPeople });
-    setEditingSiteId(null);
-  }
-
-  function applyGroupEdit(groupId: string) {
-    onChange(workSites.map((s) =>
-      s.groupId === groupId ? { ...s, ...groupEditForm } : s
-    ));
-    setEditingGroupId(null);
-  }
-
   function deleteGroup(groupId: string) {
     const count = workSites.filter((s) => s.groupId === groupId).length;
     if (!confirm(`このグループ（${count}件）をすべて削除します。よろしいですか？`)) return;
     onChange(workSites.filter((s) => s.groupId !== groupId));
     setExpandedGroups((p) => { const n = new Set(p); n.delete(groupId); return n; });
-    if (editingGroupId === groupId) setEditingGroupId(null);
+    if (sessionEditor?.groupId === groupId) setSessionEditor(null);
   }
 
-  // ── site handlers ───────────────────────────────────────
+  // ── 個別行編集 ─────────────────────────────────────────────
 
   function startSiteEdit(site: WorkSite) {
     setEditingSiteId(site.id);
-    setSiteEditForm({ siteName: site.siteName, date: site.date, startTime: site.startTime, endTime: site.endTime, requiredPeople: site.requiredPeople, memo: site.memo });
-    setEditingGroupId(null);
+    setSiteEditForm({
+      siteName: site.siteName, date: site.date,
+      startTime: site.startTime, endTime: site.endTime,
+      requiredPeople: site.requiredPeople, memo: site.memo,
+    });
+    setSessionEditor(null);
   }
 
   function applySiteEdit(id: string) {
@@ -225,6 +308,186 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
     onChange(workSites.filter((s) => s.id !== id));
     if (editingSiteId === id) setEditingSiteId(null);
   }
+
+  // ── 会期エディタ操作 ────────────────────────────────────────
+
+  function openGroupSessionEditor(groupId: string, sites: WorkSite[]) {
+    setSessionEditor({
+      groupId,
+      siteName: sites[0]?.siteName ?? '',
+      sessions: deriveSessionsFromSites(sites),
+      isExistingGroup: true,
+      sourceIds: [],
+    });
+    setEditingSiteId(null);
+  }
+
+  function openSiteSessionEditor(site: WorkSite) {
+    const dow = new Date(site.date + 'T00:00:00').getDay();
+    const w   = WEEKDAYS.find((x) => x.day === dow);
+    setSessionEditor({
+      groupId: crypto.randomUUID(),
+      siteName: site.siteName,
+      sessions: [{
+        id: crypto.randomUUID(),
+        startDate: site.date,
+        endDate:   site.date,
+        targetWeekdays: w ? [w.label] : [],
+        startTime: site.startTime,
+        endTime:   site.endTime,
+        requiredPeople: site.requiredPeople,
+        memo: site.memo,
+      }],
+      isExistingGroup: false,
+      sourceIds: [site.id],
+    });
+    setEditingSiteId(null);
+  }
+
+  function applySessionEditor() {
+    if (!sessionEditor) return;
+    const newSites = buildSessionSites(sessionEditor);
+    const remaining = sessionEditor.isExistingGroup
+      ? workSites.filter((s) => s.groupId !== sessionEditor.groupId)
+      : workSites.filter((s) => !sessionEditor.sourceIds.includes(s.id));
+    onChange([...remaining, ...newSites]);
+    setSessionEditor(null);
+  }
+
+  function updateSession(id: string, patch: Partial<SessionForm>) {
+    if (!sessionEditor) return;
+    setSessionEditor({
+      ...sessionEditor,
+      sessions: sessionEditor.sessions.map((s) => s.id === id ? { ...s, ...patch } : s),
+    });
+  }
+
+  function toggleSessionWeekday(sessionId: string, label: string) {
+    const session = sessionEditor?.sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    updateSession(sessionId, {
+      targetWeekdays: session.targetWeekdays.includes(label)
+        ? session.targetWeekdays.filter((d) => d !== label)
+        : [...session.targetWeekdays, label],
+    });
+  }
+
+  function addSession() {
+    if (!sessionEditor) return;
+    setSessionEditor({ ...sessionEditor, sessions: [...sessionEditor.sessions, emptySession()] });
+  }
+
+  function removeSession(id: string) {
+    if (!sessionEditor) return;
+    setSessionEditor({ ...sessionEditor, sessions: sessionEditor.sessions.filter((s) => s.id !== id) });
+  }
+
+  function sessionPreviewCount(): number {
+    if (!sessionEditor) return 0;
+    return sessionEditor.sessions.reduce((sum, s) =>
+      sum + calcTargetDates(s.startDate, s.endDate, s.targetWeekdays, []).length, 0);
+  }
+
+  // ── 会期エディタ共通 JSX ────────────────────────────────────
+
+  const sessionEditorContent = sessionEditor ? (
+    <>
+      <div className="session-editor__sitename">
+        <label className="edit-panel__field edit-panel__field--wide">
+          現場名
+          <input type="text" className="form-input"
+            value={sessionEditor.siteName}
+            onChange={(e) => setSessionEditor({ ...sessionEditor, siteName: e.target.value })} />
+        </label>
+      </div>
+
+      {sessionEditor.sessions.length === 0 && (
+        <p className="session-editor__empty">
+          {sessionEditor.isExistingGroup
+            ? '会期が0件の場合、更新時にこのグループの現場日程がすべて削除されます。'
+            : '会期が0件の場合、この現場は削除されます。'}
+        </p>
+      )}
+
+      {sessionEditor.sessions.map((session, idx) => (
+        <div key={session.id} className="session-card">
+          <div className="session-card__title">
+            <span>会期 {idx + 1}</span>
+            <button type="button" className="btn btn--sm btn--danger"
+              onClick={() => removeSession(session.id)}>
+              この会期を削除
+            </button>
+          </div>
+          <div className="session-card__fields">
+            <label className="edit-panel__field">
+              開始日
+              <input type="date" className="form-input form-input--short"
+                value={session.startDate}
+                onChange={(e) => updateSession(session.id, { startDate: e.target.value })} />
+            </label>
+            <label className="edit-panel__field">
+              終了日
+              <input type="date" className="form-input form-input--short"
+                value={session.endDate}
+                onChange={(e) => updateSession(session.id, { endDate: e.target.value })} />
+            </label>
+            <label className="edit-panel__field">
+              対象曜日
+              <div className="weekday-group weekday-group--sm">
+                {WEEKDAYS.map(({ label }) => (
+                  <label key={label} className="weekday-label weekday-label--sm">
+                    <input type="checkbox"
+                      checked={session.targetWeekdays.includes(label)}
+                      onChange={() => toggleSessionWeekday(session.id, label)} />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </label>
+            <label className="edit-panel__field">
+              開始時間
+              <input type="time" className="form-input form-input--short"
+                value={session.startTime}
+                onChange={(e) => updateSession(session.id, { startTime: e.target.value })} />
+            </label>
+            <label className="edit-panel__field">
+              終了時間
+              <input type="time" className="form-input form-input--short"
+                value={session.endTime}
+                onChange={(e) => updateSession(session.id, { endTime: e.target.value })} />
+            </label>
+            <label className="edit-panel__field">
+              必要人数
+              <input type="number" min={1} className="form-input form-input--short"
+                value={session.requiredPeople}
+                onChange={(e) => updateSession(session.id, { requiredPeople: Number(e.target.value) })} />
+            </label>
+            <label className="edit-panel__field edit-panel__field--memo">
+              メモ
+              <input type="text" className="form-input"
+                value={session.memo}
+                onChange={(e) => updateSession(session.id, { memo: e.target.value })} />
+            </label>
+          </div>
+        </div>
+      ))}
+
+      <div className="session-editor__footer">
+        <button type="button" className="btn btn--secondary" onClick={addSession}>
+          ＋ 会期を追加
+        </button>
+        <div className="session-editor__footer-right">
+          <span className="session-preview">{sessionPreviewCount()}件の現場日程を生成</span>
+          <button type="button" className="btn btn--primary" onClick={applySessionEditor}>
+            更新
+          </button>
+          <button type="button" className="btn btn--secondary" onClick={() => setSessionEditor(null)}>
+            キャンセル
+          </button>
+        </div>
+      </div>
+    </>
+  ) : null;
 
   const isReady = form.siteName.trim() !== '' && targetDates.length > 0;
 
@@ -266,7 +529,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
               {WEEKDAYS.map(({ label }) => (
                 <label key={label} className="weekday-label">
                   <input type="checkbox" checked={form.targetWeekdays.includes(label)}
-                    onChange={() => toggleWeekday(label)} />
+                    onChange={() => toggleBulkWeekday(label)} />
                   {label}
                 </label>
               ))}
@@ -356,8 +619,8 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
             {/* グループ */}
             {sortedGroups.map(({ groupId, sites }) => {
-              const expanded      = expandedGroups.has(groupId);
-              const editingGroup  = editingGroupId === groupId;
+              const expanded         = expandedGroups.has(groupId);
+              const isEditingSession = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
               return (
                 <div key={groupId} className="site-group">
 
@@ -371,8 +634,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                     <span className="site-group__count">{sites.length}件</span>
                     <div className="site-group__actions">
                       <button className="btn btn--sm btn--secondary"
-                        onClick={() => editingGroup ? setEditingGroupId(null) : startGroupEdit(groupId, sites)}>
-                        {editingGroup ? 'キャンセル' : 'グループ編集'}
+                        onClick={() => isEditingSession
+                          ? setSessionEditor(null)
+                          : openGroupSessionEditor(groupId, sites)}>
+                        {isEditingSession ? 'キャンセル' : '会期編集'}
                       </button>
                       <button className="btn btn--sm btn--danger" onClick={() => deleteGroup(groupId)}>
                         グループ削除
@@ -380,33 +645,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                     </div>
                   </div>
 
-                  {/* グループ一括編集パネル */}
-                  {editingGroup && (
-                    <div className="site-group__edit-panel">
-                      <span className="edit-panel__label">{sites.length}件に一括適用：</span>
-                      <div className="edit-panel__fields">
-                        <label className="edit-panel__field">
-                          開始時間
-                          <input type="time" className="form-input form-input--short"
-                            value={groupEditForm.startTime}
-                            onChange={(e) => setGroupEditForm({ ...groupEditForm, startTime: e.target.value })} />
-                        </label>
-                        <label className="edit-panel__field">
-                          終了時間
-                          <input type="time" className="form-input form-input--short"
-                            value={groupEditForm.endTime}
-                            onChange={(e) => setGroupEditForm({ ...groupEditForm, endTime: e.target.value })} />
-                        </label>
-                        <label className="edit-panel__field">
-                          必要人数
-                          <input type="number" min={1} className="form-input form-input--short"
-                            value={groupEditForm.requiredPeople}
-                            onChange={(e) => setGroupEditForm({ ...groupEditForm, requiredPeople: Number(e.target.value) })} />
-                        </label>
-                        <button className="btn btn--primary" onClick={() => applyGroupEdit(groupId)}>
-                          適用
-                        </button>
-                      </div>
+                  {/* 会期編集パネル */}
+                  {isEditingSession && (
+                    <div className="session-editor">
+                      {sessionEditorContent}
                     </div>
                   )}
 
@@ -436,7 +678,9 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                   <td>{site.memo || '—'}</td>
                                   <td className="action-cell">
                                     <button className="btn btn--sm btn--secondary"
-                                      onClick={() => editingSiteId === site.id ? setEditingSiteId(null) : startSiteEdit(site)}>
+                                      onClick={() => editingSiteId === site.id
+                                        ? setEditingSiteId(null)
+                                        : startSiteEdit(site)}>
                                       {editingSiteId === site.id ? 'キャンセル' : '編集'}
                                     </button>
                                     <button className="btn btn--sm btn--danger"
@@ -446,7 +690,6 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                   </td>
                                 </tr>
 
-                                {/* 個別インライン編集行 */}
                                 {editingSiteId === site.id && (
                                   <tr className="site-edit-row">
                                     <td colSpan={6}>
@@ -528,76 +771,48 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                         </tr>
                       </thead>
                       <tbody>
-                        {ungroupedSites.map((site) => (
-                          <Fragment key={site.id}>
-                            <tr className={editingSiteId === site.id ? 'site-editing-row' : ''}>
-                              <td>{site.date}</td>
-                              <td>{site.siteName}</td>
-                              <td>{site.startTime}</td>
-                              <td>{site.endTime}</td>
-                              <td>{site.requiredPeople}人</td>
-                              <td>{site.memo || '—'}</td>
-                              <td className="action-cell">
-                                <button className="btn btn--sm btn--secondary"
-                                  onClick={() => editingSiteId === site.id ? setEditingSiteId(null) : startSiteEdit(site)}>
-                                  {editingSiteId === site.id ? 'キャンセル' : '編集'}
-                                </button>
-                                <button className="btn btn--sm btn--danger"
-                                  onClick={() => deleteSite(site.id)}>
-                                  削除
-                                </button>
-                              </td>
-                            </tr>
-                            {editingSiteId === site.id && (
-                              <tr className="site-edit-row">
-                                <td colSpan={7}>
-                                  <div className="site-edit-form">
-                                    <label className="edit-panel__field edit-panel__field--wide">
-                                      現場名
-                                      <input type="text" className="form-input"
-                                        value={siteEditForm.siteName}
-                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, siteName: e.target.value })} />
-                                    </label>
-                                    <label className="edit-panel__field">
-                                      日付
-                                      <input type="date" className="form-input form-input--short"
-                                        value={siteEditForm.date}
-                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, date: e.target.value })} />
-                                    </label>
-                                    <label className="edit-panel__field">
-                                      開始
-                                      <input type="time" className="form-input form-input--short"
-                                        value={siteEditForm.startTime}
-                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, startTime: e.target.value })} />
-                                    </label>
-                                    <label className="edit-panel__field">
-                                      終了
-                                      <input type="time" className="form-input form-input--short"
-                                        value={siteEditForm.endTime}
-                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, endTime: e.target.value })} />
-                                    </label>
-                                    <label className="edit-panel__field">
-                                      人数
-                                      <input type="number" min={1} className="form-input form-input--short"
-                                        value={siteEditForm.requiredPeople}
-                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, requiredPeople: Number(e.target.value) })} />
-                                    </label>
-                                    <label className="edit-panel__field edit-panel__field--memo">
-                                      メモ
-                                      <input type="text" className="form-input"
-                                        value={siteEditForm.memo}
-                                        onChange={(e) => setSiteEditForm({ ...siteEditForm, memo: e.target.value })} />
-                                    </label>
-                                    <button className="btn btn--primary btn--sm"
-                                      onClick={() => applySiteEdit(site.id)}>
-                                      更新
-                                    </button>
-                                  </div>
+                        {ungroupedSites.map((site) => {
+                          const isEditingThisSite =
+                            !sessionEditor?.isExistingGroup &&
+                            (sessionEditor?.sourceIds.includes(site.id) ?? false);
+                          return (
+                            <Fragment key={site.id}>
+                              <tr className={
+                                editingSiteId === site.id || isEditingThisSite
+                                  ? 'site-editing-row' : ''
+                              }>
+                                <td>{site.date}</td>
+                                <td>{site.siteName}</td>
+                                <td>{site.startTime}</td>
+                                <td>{site.endTime}</td>
+                                <td>{site.requiredPeople}人</td>
+                                <td>{site.memo || '—'}</td>
+                                <td className="action-cell">
+                                  <button className="btn btn--sm btn--secondary"
+                                    onClick={() => isEditingThisSite
+                                      ? setSessionEditor(null)
+                                      : openSiteSessionEditor(site)}>
+                                    {isEditingThisSite ? 'キャンセル' : '会期編集'}
+                                  </button>
+                                  <button className="btn btn--sm btn--danger"
+                                    onClick={() => deleteSite(site.id)}>
+                                    削除
+                                  </button>
                                 </td>
                               </tr>
-                            )}
-                          </Fragment>
-                        ))}
+
+                              {isEditingThisSite && (
+                                <tr className="site-edit-row">
+                                  <td colSpan={7}>
+                                    <div className="session-editor session-editor--inline">
+                                      {sessionEditorContent}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
