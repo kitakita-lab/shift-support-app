@@ -376,6 +376,18 @@ body {
   background: #fff5f5 !important;
 }
 
+.data-table--staff {
+  min-width: 640px;
+}
+
+.name-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 120px;
+  max-width: 200px;
+}
+
 .row--alert:hover {
   background: #ffecec !important;
 }

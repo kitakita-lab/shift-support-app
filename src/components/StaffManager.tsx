@@ -304,7 +304,7 @@ export default function StaffManager({ staff, onChange }: Props) {
           <p className="empty-msg">スタッフが登録されていません</p>
         ) : (
           <div className="table-wrapper">
-            <table className="data-table">
+            <table className="data-table data-table--staff">
               <thead>
                 <tr>
                   <th>No.</th>
@@ -320,7 +320,7 @@ export default function StaffManager({ staff, onChange }: Props) {
                 {staff.map((s) => (
                   <tr key={s.id}>
                     <td>{s.staffNo || '—'}</td>
-                    <td>{s.name}</td>
+                    <td className="name-cell">{s.name}</td>
                     <td>{s.availableWeekdays.join('・')}</td>
                     <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
                     <td>{s.maxWorkDays}日</td>
