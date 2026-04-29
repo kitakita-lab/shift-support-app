@@ -139,6 +139,10 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
                                     <span className="assign-violation" title="希望休日に割当されています">
                                       ⚠ {staffMap[id] ?? id}
                                     </span>
+                                  ) : staffIndex[id]?.preferredWorkSites.includes(site.siteName) ? (
+                                    <span className="assign-preferred" title="優先現場として設定されています">
+                                      ★ {staffMap[id] ?? id}
+                                    </span>
                                   ) : (
                                     staffMap[id] ?? id
                                   )}

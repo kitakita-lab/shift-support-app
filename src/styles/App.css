@@ -1211,6 +1211,11 @@ h2 {
   font-weight: 600;
 }
 
+.assign-preferred {
+  color: #1a56db;
+  font-weight: 500;
+}
+
 .unassigned-label {
   color: #9ca3af;
 }
