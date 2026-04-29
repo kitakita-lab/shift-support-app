@@ -377,15 +377,34 @@ body {
 }
 
 .data-table--staff {
-  min-width: 640px;
+  min-width: 750px;
+  table-layout: fixed;
 }
+
+.data-table--staff th:nth-child(1),
+.data-table--staff td:nth-child(1) { width: 60px; }
+
+.data-table--staff th:nth-child(2),
+.data-table--staff td:nth-child(2) { width: 140px; }
+
+.data-table--staff th:nth-child(3),
+.data-table--staff td:nth-child(3) { width: 140px; }
+
+.data-table--staff th:nth-child(4),
+.data-table--staff td:nth-child(4) { width: 160px; }
+
+.data-table--staff th:nth-child(5),
+.data-table--staff td:nth-child(5) { width: 80px; }
+
+/* 6列目（メモ）: 残り幅を自動で使う */
+
+.data-table--staff th:nth-child(7),
+.data-table--staff td:nth-child(7) { width: 110px; }
 
 .name-cell {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 120px;
-  max-width: 200px;
 }
 
 .row--alert:hover {
