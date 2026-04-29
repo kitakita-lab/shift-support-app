@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { WorkSite } from '../types';
 
 const WEEKDAYS = [
@@ -159,44 +159,51 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
   return sites;
 }
 
-// ─── helpers ───────────────────────────────────────────────
+// ─── DisplaySession (会期表示用) ──────────────────────────────
 
-function deriveWeekdays(sites: WorkSite[]): string {
-  const nums = new Set(sites.map((s) => new Date(s.date + 'T00:00:00').getDay()));
-  return WEEKDAYS.filter((w) => nums.has(w.day)).map((w) => w.label).join('');
-}
-
-function deriveMonthLabel(sites: WorkSite[]): string {
-  const sorted = [...sites].sort((a, b) => a.date.localeCompare(b.date));
-  const first = new Date(sorted[0].date + 'T00:00:00');
-  const last  = new Date(sorted[sorted.length - 1].date + 'T00:00:00');
-  const fy = first.getFullYear(), ly = last.getFullYear();
-  const fm = first.getMonth() + 1, lm = last.getMonth() + 1;
-  const showYear = fy !== new Date().getFullYear() || ly !== new Date().getFullYear();
-  if (fy === ly) {
-    const prefix = showYear ? `${fy}年` : '';
-    return fm === lm ? `${prefix}${fm}月分` : `${prefix}${fm}〜${lm}月分`;
-  }
-  return `${fy}年${fm}月〜${ly}年${lm}月分`;
-}
-
-function getGroupLabel(sites: WorkSite[]): string {
-  if (sites.length === 0) return '(空)';
-  if (sites[0].groupLabel) return sites[0].groupLabel;
-  const sorted = [...sites].sort((a, b) => a.date.localeCompare(b.date));
-  return `${deriveMonthLabel(sorted)}：${sorted[0].siteName}（${deriveWeekdays(sorted)}）`;
-}
-
-// ─── types ─────────────────────────────────────────────────
-
-interface SiteEditForm {
-  siteName: string;
-  date: string;
+interface DisplaySession {
+  sessionNo: number;
+  startDate: string;
+  endDate: string;
+  weekdays: string[];
   startTime: string;
   endTime: string;
   requiredPeople: number;
   memo: string;
+  dateCount: number;
 }
+
+function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
+  const active = sites.filter((s) => !s.isPlaceholder);
+  if (active.length === 0) return [];
+  const sorted = [...active].sort((a, b) => a.date.localeCompare(b.date));
+  const map = new Map<string, WorkSite[]>();
+  for (const site of sorted) {
+    const key = `${site.startTime}|${site.endTime}|${site.requiredPeople}|${site.memo}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(site);
+  }
+  const raw: Omit<DisplaySession, 'sessionNo'>[] = [];
+  for (const [, group] of map) {
+    const g = [...group].sort((a, b) => a.date.localeCompare(b.date));
+    const usedDays = new Set(g.map((s) => new Date(s.date + 'T00:00:00').getDay()));
+    raw.push({
+      startDate: g[0].date,
+      endDate: g[g.length - 1].date,
+      weekdays: WEEKDAYS.filter((w) => usedDays.has(w.day)).map((w) => w.label),
+      startTime: g[0].startTime,
+      endTime: g[0].endTime,
+      requiredPeople: g[0].requiredPeople,
+      memo: g[0].memo,
+      dateCount: g.length,
+    });
+  }
+  return raw
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))
+    .map((s, i) => ({ ...s, sessionNo: i + 1 }));
+}
+
+// ─── Props ─────────────────────────────────────────────────
 
 interface Props {
   workSites: WorkSite[];
@@ -206,27 +213,17 @@ interface Props {
 // ─── component ─────────────────────────────────────────────
 
 export default function WorkSiteManager({ workSites, onChange }: Props) {
-  // 一括登録フォーム
-  const [form, setForm]               = useState<BulkForm>(emptyBulkForm());
-  const [excludeInput, setExcludeInput] = useState('');
-  const [successMsg, setSuccessMsg]   = useState('');
-
-  // 個別行編集
-  const [editingSiteId,  setEditingSiteId]  = useState<string | null>(null);
-  const [siteEditForm,   setSiteEditForm]   = useState<SiteEditForm>({
-    siteName: '', date: '', startTime: '', endTime: '', requiredPeople: 1, memo: '',
-  });
-
-  // 会期エディタ
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [sessionEditor,  setSessionEditor]  = useState<SessionEditorState | null>(null);
+  const [form, setForm]                   = useState<BulkForm>(emptyBulkForm());
+  const [excludeInput, setExcludeInput]   = useState('');
+  const [successMsg, setSuccessMsg]       = useState('');
+  const [sessionEditor, setSessionEditor] = useState<SessionEditorState | null>(null);
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
 
   const targetDates = useMemo(
     () => calcTargetDates(form.startDate, form.endDate, form.targetWeekdays, form.excludedDates),
     [form]
   );
 
-  // グループ化
   const { sortedGroups, ungroupedSites } = useMemo(() => {
     const grouped: Record<string, WorkSite[]> = {};
     const ungrouped: WorkSite[] = [];
@@ -286,42 +283,25 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
   // ── グループ操作 ───────────────────────────────────────────
 
-  function toggleGroup(groupId: string) {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      next.has(groupId) ? next.delete(groupId) : next.add(groupId);
-      return next;
-    });
-  }
-
   function deleteGroup(groupId: string) {
     const count = workSites.filter((s) => s.groupId === groupId).length;
     if (!confirm(`このグループ（${count}件）をすべて削除します。よろしいですか？`)) return;
     onChange(workSites.filter((s) => s.groupId !== groupId));
-    setExpandedGroups((p) => { const n = new Set(p); n.delete(groupId); return n; });
     if (sessionEditor?.groupId === groupId) setSessionEditor(null);
-  }
-
-  // ── 個別行編集 ─────────────────────────────────────────────
-
-  function startSiteEdit(site: WorkSite) {
-    setEditingSiteId(site.id);
-    setSiteEditForm({
-      siteName: site.siteName, date: site.date,
-      startTime: site.startTime, endTime: site.endTime,
-      requiredPeople: site.requiredPeople, memo: site.memo,
-    });
-    setSessionEditor(null);
-  }
-
-  function applySiteEdit(id: string) {
-    onChange(workSites.map((s) => s.id === id ? { ...s, ...siteEditForm } : s));
-    setEditingSiteId(null);
   }
 
   function deleteSite(id: string) {
     onChange(workSites.filter((s) => s.id !== id));
-    if (editingSiteId === id) setEditingSiteId(null);
+  }
+
+  // ── 会期アコーディオン ──────────────────────────────────────
+
+  function toggleSession(key: string) {
+    setExpandedSessions((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
   }
 
   // ── 会期エディタ操作 ────────────────────────────────────────
@@ -334,7 +314,16 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
       isExistingGroup: true,
       sourceIds: [],
     });
-    setEditingSiteId(null);
+  }
+
+  function openGroupSessionEditorWithNewSession(groupId: string, sites: WorkSite[]) {
+    setSessionEditor({
+      groupId,
+      siteName: sites[0]?.siteName ?? '',
+      sessions: [...deriveSessionsFromSites(sites), emptySession()],
+      isExistingGroup: true,
+      sourceIds: [],
+    });
   }
 
   function openSiteSessionEditor(site: WorkSite) {
@@ -356,7 +345,6 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
       isExistingGroup: false,
       sourceIds: [site.id],
     });
-    setEditingSiteId(null);
   }
 
   function applySessionEditor() {
@@ -423,15 +411,15 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
       )}
 
       {sessionEditor.sessions.map((session, idx) => (
-        <div key={session.id} className="session-card">
-          <div className="session-card__title">
+        <div key={session.id} className="session-edit-card">
+          <div className="session-edit-card__title">
             <span>会期 {idx + 1}</span>
             <button type="button" className="btn btn--sm btn--danger"
               onClick={() => removeSession(session.id)}>
               この会期を削除
             </button>
           </div>
-          <div className="session-card__fields">
+          <div className="session-edit-card__fields">
             <label className="edit-panel__field">
               開始日
               <input type="date" className="form-input form-input--short"
@@ -623,222 +611,151 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
       {/* ── 登録済み現場一覧 ─────────────────────────── */}
       <div className="card">
-        <h3>登録済み現場 ({workSites.length}件)</h3>
+        <h3>登録済み現場 ({sortedGroups.length + ungroupedSites.length}件)</h3>
 
-        {workSites.length === 0 ? (
+        {sortedGroups.length === 0 && ungroupedSites.length === 0 ? (
           <p className="empty-msg">現場が登録されていません</p>
         ) : (
           <div className="site-list">
 
-            {/* グループ */}
             {sortedGroups.map(({ groupId, sites }) => {
-              const expanded         = expandedGroups.has(groupId);
               const isEditingSession = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
               const activeSites      = sites.filter((s) => !s.isPlaceholder);
-              return (
-                <div key={groupId} className="site-group">
+              const displaySessions  = groupSitesIntoDisplaySessions(sites);
+              const siteName         = sites[0]?.siteName ?? '';
 
-                  {/* グループヘッダー */}
-                  <div className="site-group__header">
-                    <button className="site-group__toggle" onClick={() => toggleGroup(groupId)}
-                      aria-label={expanded ? '閉じる' : '展開する'}>
-                      {expanded ? '▼' : '▶'}
-                    </button>
-                    <span className="site-group__label">{getGroupLabel(sites)}</span>
-                    <span className="site-group__count">{activeSites.length}件</span>
-                    <div className="site-group__actions">
+              return (
+                <div key={groupId} className="site-card">
+                  <div className="site-header">
+                    <div className="site-header__left">
+                      <div className="site-title">{siteName}</div>
+                      <div className="site-meta">
+                        {activeSites.length === 0 ? '会期なし' : `会期${displaySessions.length}件`}
+                      </div>
+                    </div>
+                    <div className="site-actions">
                       <button className="btn btn--sm btn--secondary"
                         onClick={() => isEditingSession
                           ? setSessionEditor(null)
                           : openGroupSessionEditor(groupId, sites)}>
                         {isEditingSession ? 'キャンセル' : '会期編集'}
                       </button>
-                      <button className="btn btn--sm btn--danger" onClick={() => deleteGroup(groupId)}>
-                        グループ削除
+                      <button className="btn btn--sm btn--ghost-danger"
+                        onClick={() => deleteGroup(groupId)}>
+                        削除
                       </button>
                     </div>
                   </div>
 
-                  {/* 会期編集パネル */}
                   {isEditingSession && (
                     <div className="session-editor">
                       {sessionEditorContent}
                     </div>
                   )}
 
-                  {/* アコーディオン：日別一覧 */}
-                  {expanded && (
-                    <div className="site-group__body">
-                      {activeSites.length === 0 ? (
-                        <p className="site-group__empty">
-                          会期なし — 「会期編集」から日程を追加できます
-                        </p>
-                      ) : (
-                      <div className="table-wrapper">
-                        <table className="data-table">
-                          <thead>
-                            <tr>
-                              <th>日付</th>
-                              <th>開始</th>
-                              <th>終了</th>
-                              <th>必要人数</th>
-                              <th>メモ</th>
-                              <th></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {activeSites.map((site) => (
-                              <Fragment key={site.id}>
-                                <tr className={editingSiteId === site.id ? 'site-editing-row' : ''}>
-                                  <td>{site.date}</td>
-                                  <td>{site.startTime}</td>
-                                  <td>{site.endTime}</td>
-                                  <td>{site.requiredPeople}人</td>
-                                  <td>{site.memo || '—'}</td>
-                                  <td className="action-cell">
-                                    <button className="btn btn--sm btn--secondary"
-                                      onClick={() => editingSiteId === site.id
-                                        ? setEditingSiteId(null)
-                                        : startSiteEdit(site)}>
-                                      {editingSiteId === site.id ? 'キャンセル' : '編集'}
-                                    </button>
-                                    <button className="btn btn--sm btn--danger"
-                                      onClick={() => deleteSite(site.id)}>
-                                      削除
-                                    </button>
-                                  </td>
-                                </tr>
-
-                                {editingSiteId === site.id && (
-                                  <tr className="site-edit-row">
-                                    <td colSpan={6}>
-                                      <div className="site-edit-form">
-                                        <label className="edit-panel__field edit-panel__field--wide">
-                                          現場名
-                                          <input type="text" className="form-input"
-                                            value={siteEditForm.siteName}
-                                            onChange={(e) => setSiteEditForm({ ...siteEditForm, siteName: e.target.value })} />
-                                        </label>
-                                        <label className="edit-panel__field">
-                                          日付
-                                          <input type="date" className="form-input form-input--short"
-                                            value={siteEditForm.date}
-                                            onChange={(e) => setSiteEditForm({ ...siteEditForm, date: e.target.value })} />
-                                        </label>
-                                        <label className="edit-panel__field">
-                                          開始
-                                          <input type="time" className="form-input form-input--short"
-                                            value={siteEditForm.startTime}
-                                            onChange={(e) => setSiteEditForm({ ...siteEditForm, startTime: e.target.value })} />
-                                        </label>
-                                        <label className="edit-panel__field">
-                                          終了
-                                          <input type="time" className="form-input form-input--short"
-                                            value={siteEditForm.endTime}
-                                            onChange={(e) => setSiteEditForm({ ...siteEditForm, endTime: e.target.value })} />
-                                        </label>
-                                        <label className="edit-panel__field">
-                                          人数
-                                          <input type="number" min={1} className="form-input form-input--short"
-                                            value={siteEditForm.requiredPeople}
-                                            onChange={(e) => setSiteEditForm({ ...siteEditForm, requiredPeople: Number(e.target.value) })} />
-                                        </label>
-                                        <label className="edit-panel__field edit-panel__field--memo">
-                                          メモ
-                                          <input type="text" className="form-input"
-                                            value={siteEditForm.memo}
-                                            onChange={(e) => setSiteEditForm({ ...siteEditForm, memo: e.target.value })} />
-                                        </label>
-                                        <button className="btn btn--primary btn--sm"
-                                          onClick={() => applySiteEdit(site.id)}>
-                                          更新
-                                        </button>
-                                      </div>
-                                    </td>
-                                  </tr>
+                  {activeSites.length === 0 ? (
+                    <div className="site-empty">会期なし（まだ登録されていません）</div>
+                  ) : (
+                    <div className="session-list">
+                      {displaySessions.map((session, idx) => {
+                        const key    = `${groupId}-${idx}`;
+                        const isOpen = expandedSessions.has(key);
+                        return (
+                          <div key={key} className="session-card">
+                            <button
+                              className="session-summary"
+                              onClick={() => toggleSession(key)}>
+                              <span className="session-summary__date">
+                                📅 {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}
+                                <span className="session-chevron">{isOpen ? '▲' : '▼'}</span>
+                              </span>
+                              <div className="session-summary__meta">
+                                <span className="session-summary__weekdays">🗓 {session.weekdays.join('')}</span>
+                                <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
+                                <span className="session-summary__people">👤 {session.requiredPeople}人</span>
+                              </div>
+                            </button>
+                            {isOpen && (
+                              <div className="session-detail">
+                                <div className="session-detail__row">
+                                  <span className="session-detail__label">曜日</span>
+                                  <span>{session.weekdays.join('・')}</span>
+                                </div>
+                                <div className="session-detail__row">
+                                  <span className="session-detail__label">時間</span>
+                                  <span>{session.startTime}〜{session.endTime}</span>
+                                </div>
+                                <div className="session-detail__row">
+                                  <span className="session-detail__label">必要人数</span>
+                                  <span>{session.requiredPeople}人</span>
+                                </div>
+                                {session.memo && (
+                                  <div className="session-detail__row">
+                                    <span className="session-detail__label">メモ</span>
+                                    <span>{session.memo}</span>
+                                  </div>
                                 )}
-                              </Fragment>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
+                  )}
+
+                  {!isEditingSession && (
+                    <button
+                      className="btn btn--sm btn--secondary site-add-session-btn"
+                      onClick={() => openGroupSessionEditorWithNewSession(groupId, sites)}>
+                      ＋ 会期を追加
+                    </button>
                   )}
                 </div>
               );
             })}
 
-            {/* グループなし（旧データ等） */}
             {ungroupedSites.length > 0 && (
-              <div className="site-group site-group--ungrouped">
-                <div className="site-group__header">
-                  <span className="site-group__label">グループなし</span>
-                  <span className="site-group__count">{ungroupedSites.length}件</span>
-                </div>
-                <div className="site-group__body">
-                  <div className="table-wrapper">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>日付</th>
-                          <th>現場名</th>
-                          <th>開始</th>
-                          <th>終了</th>
-                          <th>必要人数</th>
-                          <th>メモ</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {ungroupedSites.map((site) => {
-                          const isEditingThisSite =
-                            !sessionEditor?.isExistingGroup &&
-                            (sessionEditor?.sourceIds.includes(site.id) ?? false);
-                          return (
-                            <Fragment key={site.id}>
-                              <tr className={
-                                editingSiteId === site.id || isEditingThisSite
-                                  ? 'site-editing-row' : ''
-                              }>
-                                <td>{site.date}</td>
-                                <td className="site-col">{site.siteName}</td>
-                                <td>{site.startTime}</td>
-                                <td>{site.endTime}</td>
-                                <td>{site.requiredPeople}人</td>
-                                <td>{site.memo || '—'}</td>
-                                <td className="action-cell">
-                                  <button className="btn btn--sm btn--secondary"
-                                    onClick={() => isEditingThisSite
-                                      ? setSessionEditor(null)
-                                      : openSiteSessionEditor(site)}>
-                                    {isEditingThisSite ? 'キャンセル' : '会期編集'}
-                                  </button>
-                                  <button className="btn btn--sm btn--danger"
-                                    onClick={() => deleteSite(site.id)}>
-                                    削除
-                                  </button>
-                                </td>
-                              </tr>
-
-                              {isEditingThisSite && (
-                                <tr className="site-edit-row">
-                                  <td colSpan={7}>
-                                    <div className="session-editor session-editor--inline">
-                                      {sessionEditorContent}
-                                    </div>
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+              <div className="site-ungrouped-section">
+                <p className="site-ungrouped-label">グループなし（{ungroupedSites.length}件）</p>
+                {ungroupedSites.map((site) => {
+                  const isConvertingThis =
+                    !sessionEditor?.isExistingGroup &&
+                    (sessionEditor?.sourceIds.includes(site.id) ?? false);
+                  return (
+                    <div key={site.id} className="site-card site-card--ungrouped">
+                      <div className="site-header">
+                        <div className="site-header__left">
+                          <div className="site-title">{site.siteName}</div>
+                          <div className="site-meta">{site.date}</div>
+                        </div>
+                        <div className="site-actions">
+                          <button className="btn btn--sm btn--secondary"
+                            onClick={() => isConvertingThis
+                              ? setSessionEditor(null)
+                              : openSiteSessionEditor(site)}>
+                            {isConvertingThis ? 'キャンセル' : '会期化'}
+                          </button>
+                          <button className="btn btn--sm btn--ghost-danger"
+                            onClick={() => deleteSite(site.id)}>
+                            削除
+                          </button>
+                        </div>
+                      </div>
+                      {isConvertingThis && (
+                        <div className="session-editor session-editor--inline">
+                          {sessionEditorContent}
+                        </div>
+                      )}
+                      <div className="site-detail">
+                        {site.startTime}〜{site.endTime} / {site.requiredPeople}人
+                        {site.memo ? ` / ${site.memo}` : ''}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
+
           </div>
         )}
       </div>

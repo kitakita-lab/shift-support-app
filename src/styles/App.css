@@ -665,82 +665,170 @@ h2 {
   gap: 10px;
 }
 
-.site-group {
+/* ===== 現場カード ===== */
+.site-card {
+  background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  overflow: hidden;
+  border-radius: 12px;
+  padding: 12px;
 }
 
-.site-group--ungrouped {
-  border-color: #d1d5db;
+.site-card--ungrouped {
   border-style: dashed;
+  border-color: #d1d5db;
 }
 
-.site-group__header {
+.site-header {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  background: #f8f9fa;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
-.site-group__toggle {
-  background: none;
-  border: 1px solid #d1d5db;
-  cursor: pointer;
-  font-size: 11px;
-  color: #555;
-  padding: 3px 7px;
-  border-radius: 4px;
-  flex-shrink: 0;
-  transition: background 0.1s;
-}
-
-.site-group__toggle:hover {
-  background: #e5e7eb;
-}
-
-.site-group__label {
+.site-header__left {
   flex: 1;
-  font-weight: 600;
-  font-size: 14px;
-  color: #1a1a2e;
   min-width: 0;
 }
 
-.site-group__count {
-  font-size: 12px;
-  color: #666;
-  background: #e5e7eb;
-  padding: 2px 9px;
-  border-radius: 10px;
-  flex-shrink: 0;
+.site-title {
+  font-weight: bold;
+  font-size: 16px;
+  color: #1a1a2e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.site-group__actions {
+.site-meta {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.site-actions {
   display: flex;
   gap: 6px;
   flex-shrink: 0;
 }
 
-/* グループ一括編集パネル */
-.site-group__edit-panel {
-  background: #f0f6ff;
-  border-top: 1px solid #c7d7f5;
-  padding: 12px 14px;
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
+.site-empty {
+  font-size: 13px;
+  color: #9ca3af;
+  padding: 4px 0 10px;
 }
 
-.edit-panel__label {
+.site-detail {
   font-size: 13px;
+  color: #6b7280;
+  padding: 4px 0 8px;
+}
+
+.site-add-session-btn {
+  margin-top: 8px;
+  width: 100%;
+}
+
+/* ===== 会期表示（アコーディオン） ===== */
+.session-list {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 8px;
+}
+
+.session-card {
+  background: #f8f9fb;
+  border-radius: 8px;
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+}
+
+.session-summary {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.session-summary:hover {
+  background: #f1f3f9;
+}
+
+.session-summary__date {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   font-weight: 600;
-  color: #1a56db;
+  font-size: 13px;
+  color: #111827;
+}
+
+.session-summary__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.session-chevron {
+  font-size: 11px;
+  color: #9ca3af;
   flex-shrink: 0;
-  padding-bottom: 2px;
+}
+
+.session-detail {
+  padding: 8px 12px 10px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.session-detail__row {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  color: #374151;
+}
+
+.session-detail__label {
+  font-weight: 600;
+  color: #6b7280;
+  min-width: 60px;
+  flex-shrink: 0;
+}
+
+/* ===== グループなしセクション ===== */
+.site-ungrouped-section {
+  margin-top: 4px;
+}
+
+.site-ungrouped-label {
+  font-size: 12px;
+  color: #9ca3af;
+  margin: 0 0 6px;
+}
+
+/* ===== 削除ボタン（控えめ） ===== */
+.btn--ghost-danger {
+  background: none;
+  color: #9ca3af;
+  border: 1px solid #e5e7eb;
+}
+
+.btn--ghost-danger:hover {
+  color: #dc2626;
+  border-color: #fca5a5;
+  background: #fef2f2;
 }
 
 /* ===== 会期エディタ ===== */
@@ -769,7 +857,7 @@ h2 {
   margin-bottom: 10px;
 }
 
-.session-card {
+.session-edit-card {
   border: 1px solid #c7d7f5;
   border-radius: 6px;
   background: white;
@@ -777,7 +865,7 @@ h2 {
   margin-bottom: 10px;
 }
 
-.session-card__title {
+.session-edit-card__title {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -787,7 +875,7 @@ h2 {
   color: #1a56db;
 }
 
-.session-card__fields {
+.session-edit-card__fields {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
@@ -824,19 +912,6 @@ h2 {
   padding: 2px 7px;
 }
 
-/* 現場名セル：折り返し防止 */
-.site-col {
-  white-space: nowrap;
-  min-width: 140px;
-}
-
-/* 会期なし状態のメッセージ */
-.site-group__empty {
-  padding: 10px 16px;
-  font-size: 13px;
-  color: #9ca3af;
-  border-top: 1px solid #e5e7eb;
-}
 
 .edit-panel__fields {
   display: flex;
@@ -862,71 +937,6 @@ h2 {
   min-width: 180px;
 }
 
-/* 編集中の行ハイライト */
-.site-editing-row {
-  background: #fefce8 !important;
-}
-
-/* アコーディオン本体 */
-.site-group__body {
-  border-top: 1px solid #e5e7eb;
-}
-
-.site-group__body .data-table {
-  min-width: 380px;
-}
-
-/* 個別インライン編集行 */
-.site-edit-row td {
-  background: #fffbeb;
-  padding: 10px 14px;
-}
-
-.site-edit-form {
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
-  flex-wrap: wrap;
-}
-
-/* ===== レスポンシブ（グループ） ===== */
-@media (max-width: 600px) {
-  .site-group__header {
-    gap: 8px;
-  }
-
-  .site-group__label {
-    font-size: 13px;
-    width: 100%;
-    order: 2;
-  }
-
-  .site-group__toggle {
-    order: 1;
-  }
-
-  .site-group__count {
-    order: 3;
-  }
-
-  .site-group__actions {
-    order: 4;
-    width: 100%;
-  }
-
-  .site-group__edit-panel {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .edit-panel__fields {
-    width: 100%;
-  }
-
-  .site-edit-form {
-    flex-direction: column;
-  }
-}
 
 /* ===== CSVインポート ===== */
 .file-input-hidden {
