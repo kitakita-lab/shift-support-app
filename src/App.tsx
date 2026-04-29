@@ -84,10 +84,18 @@ export default function App() {
         )}
         {activeTab === 'import' && (
           <CsvImporter
-            currentStaffCount={staff.length}
+            staff={staff}
             currentSiteCount={workSites.length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
             onImportSites={(imported) => setWorkSites((prev) => [...prev, ...imported])}
+            onApplyDaysOff={(updates) =>
+              setStaff((prev) =>
+                prev.map((s) => {
+                  const upd = updates.find((u) => u.id === s.id);
+                  return upd ? { ...s, requestedDaysOff: upd.requestedDaysOff } : s;
+                })
+              )
+            }
           />
         )}
       </main>

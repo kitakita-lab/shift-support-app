@@ -114,6 +114,7 @@ export function parseStaffCSV(rawText: string): StaffParseResult {
 
     valid.push({
       id: crypto.randomUUID(),
+      staffNo: '',
       name,
       availableWeekdays,
       requestedDaysOff,
@@ -189,8 +190,158 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
   return { valid, errors };
 }
 
-// ── テンプレートダウンロード ──────────────────────────────
+// ── 希望休CSV ─────────────────────────────────────────────
 
+export interface DaysOffRow {
+  rowNum: number;
+  staffNo: string;
+  name: string;
+  requestedDaysOff: string[];
+}
+
+export interface DaysOffParseResult {
+  rows: DaysOffRow[];
+  errors: ParseError[];
+}
+
+export function parseDaysOffCSV(rawText: string): DaysOffParseResult {
+  const lines = stripBom(rawText)
+    .split(/\r?\n/)
+    .filter((l) => l.trim() !== '');
+
+  const rows: DaysOffRow[] = [];
+  const errors: ParseError[] = [];
+
+  if (lines.length === 0) return { rows, errors };
+
+  // ── フォーマット自動検出 ─────────────────────────────────
+  const firstFields = parseCSVLine(lines[0]);
+  const headerCandidates = firstFields.map((f) => f.trim().toLowerCase());
+  const hasHeader = headerCandidates.some((f) =>
+    ['name', 'staffno', 'date', 'requesteddaysoff'].includes(f)
+  );
+
+  let start: number;
+  let isDatePerRow: boolean;
+  let hasStaffNoCol: boolean;
+
+  if (hasHeader) {
+    start = 1;
+    isDatePerRow = headerCandidates.includes('date');
+    hasStaffNoCol = headerCandidates.includes('staffno');
+  } else {
+    start = 0;
+    if (firstFields.length >= 3) {
+      // 3列: col2が単一日付 → staffNo,name,date形式; それ以外 → batch
+      isDatePerRow = isValidDate(firstFields[2].trim());
+      hasStaffNoCol = isDatePerRow;
+    } else if (firstFields.length === 2) {
+      // 2列: col1が日付 → name,date形式
+      isDatePerRow = isValidDate(firstFields[1].trim());
+      hasStaffNoCol = false;
+    } else {
+      isDatePerRow = false;
+      hasStaffNoCol = false;
+    }
+  }
+
+  // ── 1行1日付形式のパース（同スタッフ行をまとめる）─────────
+  if (isDatePerRow) {
+    const acc = new Map<
+      string,
+      { staffNo: string; name: string; dates: Set<string>; firstRow: number }
+    >();
+
+    for (let i = start; i < lines.length; i++) {
+      const rowNum = i + 1;
+      const fields = parseCSVLine(lines[i]);
+
+      let staffNo = '';
+      let name = '';
+      let dateStr = '';
+
+      if (hasStaffNoCol && fields.length >= 3) {
+        staffNo = fields[0].trim();
+        name    = fields[1].trim();
+        dateStr = fields[2].trim();
+      } else if (!hasStaffNoCol && fields.length >= 2) {
+        name    = fields[0].trim();
+        dateStr = fields[1].trim();
+      } else {
+        errors.push({ row: rowNum, message: `列数不足（${fields.length}列）` });
+        continue;
+      }
+
+      if (!staffNo && !name) {
+        errors.push({ row: rowNum, message: 'スタッフNoと名前が両方空です' });
+        continue;
+      }
+      if (!isValidDate(dateStr)) {
+        errors.push({
+          row: rowNum,
+          message: `不正な日付: "${dateStr}"（YYYY-MM-DD形式）`,
+        });
+        continue;
+      }
+
+      const key = staffNo || name;
+      if (!acc.has(key)) {
+        acc.set(key, { staffNo, name, dates: new Set(), firstRow: rowNum });
+      } else {
+        const entry = acc.get(key)!;
+        if (staffNo && !entry.staffNo) entry.staffNo = staffNo;
+        if (name   && !entry.name)    entry.name    = name;
+      }
+      acc.get(key)!.dates.add(dateStr);
+    }
+
+    for (const [, entry] of acc) {
+      rows.push({
+        rowNum: entry.firstRow,
+        staffNo: entry.staffNo,
+        name: entry.name,
+        requestedDaysOff: [...entry.dates].sort(),
+      });
+    }
+    return { rows, errors };
+  }
+
+  // ── 一括形式のパース（1スタッフ1行）──────────────────────
+  for (let i = start; i < lines.length; i++) {
+    const rowNum = i + 1;
+    const fields = parseCSVLine(lines[i]);
+
+    if (fields.length < 2) {
+      errors.push({ row: rowNum, message: `列数不足（${fields.length}列）` });
+      continue;
+    }
+
+    const [staffNoRaw, nameRaw, daysOffRaw = ''] = fields;
+    const staffNo = staffNoRaw.trim();
+    const name    = nameRaw.trim();
+
+    if (!staffNo && !name) {
+      errors.push({ row: rowNum, message: 'スタッフNoと名前が両方空です' });
+      continue;
+    }
+
+    const requestedDaysOff = daysOffRaw
+      ? daysOffRaw.split(',').map((d) => d.trim()).filter((d) => d !== '')
+      : [];
+
+    const invalidDates = requestedDaysOff.filter((d) => !isValidDate(d));
+    if (invalidDates.length > 0) {
+      errors.push({ row: rowNum, message: `不正な日付: ${invalidDates.join(', ')}` });
+      continue;
+    }
+
+    rows.push({ rowNum, staffNo, name, requestedDaysOff });
+  }
+
+  return { rows, errors };
+}
+
+// ── テンプレートダウンロード ──────────────────────────────
 function downloadCsv(content: string, filename: string): void {
   const bom = '﻿';
   const blob = new Blob([bom + content], { type: 'text/csv;charset=utf-8;' });
@@ -213,5 +364,19 @@ export function downloadSiteTemplate(): void {
   downloadCsv(
     `date,siteName,startTime,endTime,requiredPeople,memo\n2026-05-01,アリオ札幌,10:00,18:00,3,通常\n2026-05-02,南郷7丁目,09:00,17:00,2,`,
     'site_template.csv'
+  );
+}
+
+export function downloadDaysOffTemplate(): void {
+  downloadCsv(
+    `staffNo,name,requestedDaysOff\n001,セトケンスケ,"2026-05-03,2026-05-10,2026-05-18"\n002,マツハシマミ,"2026-05-01,2026-05-07"`,
+    'days_off_template.csv'
+  );
+}
+
+export function downloadDaysOffDateTemplate(): void {
+  downloadCsv(
+    `staffNo,name,date\n001,セトケンスケ,2026-05-03\n001,セトケンスケ,2026-05-10\n001,セトケンスケ,2026-05-18\n002,マツハシマミ,2026-05-01\n002,マツハシマミ,2026-05-07`,
+    'days_off_date_template.csv'
   );
 }

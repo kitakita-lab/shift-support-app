@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Staff } from '../types';
+import { sortStaff, nextStaffNo } from '../utils/staffUtils';
 
 const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日'];
 
@@ -8,8 +9,9 @@ interface Props {
   onChange: (staff: Staff[]) => void;
 }
 
-function emptyForm(): Omit<Staff, 'id'> {
+function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
   return {
+    staffNo: nextStaffNo(staff),
     name: '',
     availableWeekdays: [...WEEKDAYS],
     requestedDaysOff: [],
@@ -18,10 +20,126 @@ function emptyForm(): Omit<Staff, 'id'> {
   };
 }
 
+function toYearMonth(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function buildCalendarDays(yearMonth: string): (string | null)[] {
+  const [y, m] = yearMonth.split('-').map(Number);
+  const firstDay = new Date(y, m - 1, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const cells: (string | null)[] = Array(firstDay).fill(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push(`${yearMonth}-${String(d).padStart(2, '0')}`);
+  }
+  return cells;
+}
+
+const DOW_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
+
+interface CalendarProps {
+  daysOff: string[];
+  onChange: (days: string[]) => void;
+}
+
+function DaysOffCalendar({ daysOff, onChange }: CalendarProps) {
+  const [yearMonth, setYearMonth] = useState(() => toYearMonth(new Date()));
+  const cells = buildCalendarDays(yearMonth);
+  const today = new Date().toISOString().slice(0, 10);
+  const offSet = new Set(daysOff);
+
+  function toggle(date: string) {
+    if (offSet.has(date)) {
+      onChange(daysOff.filter((d) => d !== date).sort());
+    } else {
+      onChange([...daysOff, date].sort());
+    }
+  }
+
+  return (
+    <div className="cal">
+      <div className="cal__nav">
+        <button
+          type="button"
+          className="btn btn--sm btn--secondary"
+          onClick={() => {
+            const [y, m] = yearMonth.split('-').map(Number);
+            const prev = new Date(y, m - 2, 1);
+            setYearMonth(toYearMonth(prev));
+          }}
+        >
+          ‹
+        </button>
+        <input
+          type="month"
+          className="cal__month-input"
+          value={yearMonth}
+          onChange={(e) => setYearMonth(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn btn--sm btn--secondary"
+          onClick={() => {
+            const [y, m] = yearMonth.split('-').map(Number);
+            const next = new Date(y, m, 1);
+            setYearMonth(toYearMonth(next));
+          }}
+        >
+          ›
+        </button>
+      </div>
+      <div className="cal__grid">
+        {DOW_LABELS.map((d) => (
+          <div key={d} className={`cal__dow${d === '日' ? ' cal__dow--sun' : d === '土' ? ' cal__dow--sat' : ''}`}>
+            {d}
+          </div>
+        ))}
+        {cells.map((date, i) =>
+          date === null ? (
+            <div key={`empty-${i}`} className="cal__day cal__day--empty" />
+          ) : (
+            <button
+              key={date}
+              type="button"
+              className={[
+                'cal__day',
+                offSet.has(date) ? 'cal__day--off' : '',
+                date === today ? 'cal__day--today' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              onClick={() => toggle(date)}
+            >
+              {parseInt(date.slice(8), 10)}
+            </button>
+          )
+        )}
+      </div>
+      {daysOff.filter((d) => d.startsWith(yearMonth)).length > 0 && (
+        <div className="cal__summary">
+          {daysOff
+            .filter((d) => d.startsWith(yearMonth))
+            .map((d) => (
+              <span key={d} className="tag">
+                {d.slice(5)}
+                <button type="button" className="tag__remove" onClick={() => toggle(d)}>
+                  ×
+                </button>
+              </span>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function StaffManager({ staff, onChange }: Props) {
-  const [form, setForm] = useState(emptyForm());
-  const [dayOffInput, setDayOffInput] = useState('');
+  const [form, setForm] = useState<Omit<Staff, 'id'>>(() => emptyForm(staff));
   const [editId, setEditId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!editId) setForm((prev) => ({ ...prev, staffNo: nextStaffNo(staff) }));
+  }, [staff, editId]);
 
   function handleWeekdayToggle(day: string) {
     setForm((prev) => ({
@@ -32,39 +150,22 @@ export default function StaffManager({ staff, onChange }: Props) {
     }));
   }
 
-  function handleAddDayOff() {
-    if (!dayOffInput) return;
-    if (form.requestedDaysOff.includes(dayOffInput)) return;
-    setForm((prev) => ({
-      ...prev,
-      requestedDaysOff: [...prev.requestedDaysOff, dayOffInput].sort(),
-    }));
-    setDayOffInput('');
-  }
-
-  function handleRemoveDayOff(d: string) {
-    setForm((prev) => ({
-      ...prev,
-      requestedDaysOff: prev.requestedDaysOff.filter((x) => x !== d),
-    }));
-  }
-
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return;
     if (editId) {
-      onChange(staff.map((s) => (s.id === editId ? { ...form, id: editId } : s)));
+      onChange(sortStaff(staff.map((s) => (s.id === editId ? { ...form, id: editId } : s))));
       setEditId(null);
     } else {
-      onChange([...staff, { ...form, id: crypto.randomUUID() }]);
+      onChange(sortStaff([...staff, { ...form, id: crypto.randomUUID() }]));
     }
-    setForm(emptyForm());
-    setDayOffInput('');
+    setForm(emptyForm(staff));
   }
 
   function handleEdit(s: Staff) {
     setEditId(s.id);
     setForm({
+      staffNo: s.staffNo,
       name: s.name,
       availableWeekdays: s.availableWeekdays,
       requestedDaysOff: s.requestedDaysOff,
@@ -79,16 +180,29 @@ export default function StaffManager({ staff, onChange }: Props) {
 
   function handleCancel() {
     setEditId(null);
-    setForm(emptyForm());
-    setDayOffInput('');
+    setForm(emptyForm(staff));
   }
 
   return (
     <div>
       <h2>スタッフ管理</h2>
+
       <div className="card">
         <h3>{editId ? 'スタッフ編集' : 'スタッフ登録'}</h3>
         <form onSubmit={handleSubmit} className="form">
+          <h4 className="form-section-title">基本情報</h4>
+
+          <div className="form-row">
+            <label className="form-label">スタッフNo.</label>
+            <input
+              className="form-input form-input--short"
+              type="text"
+              value={form.staffNo}
+              onChange={(e) => setForm({ ...form, staffNo: e.target.value })}
+              placeholder="1"
+            />
+          </div>
+
           <div className="form-row">
             <label className="form-label">名前 *</label>
             <input
@@ -118,37 +232,6 @@ export default function StaffManager({ staff, onChange }: Props) {
           </div>
 
           <div className="form-row">
-            <label className="form-label">希望休</label>
-            <div className="day-off-group">
-              <div className="day-off-input-row">
-                <input
-                  className="form-input"
-                  type="date"
-                  value={dayOffInput}
-                  onChange={(e) => setDayOffInput(e.target.value)}
-                />
-                <button type="button" className="btn btn--secondary" onClick={handleAddDayOff}>
-                  追加
-                </button>
-              </div>
-              <div className="tag-list">
-                {form.requestedDaysOff.map((d) => (
-                  <span key={d} className="tag">
-                    {d}
-                    <button
-                      type="button"
-                      className="tag__remove"
-                      onClick={() => handleRemoveDayOff(d)}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="form-row">
             <label className="form-label">最大勤務日数</label>
             <input
               className="form-input form-input--short"
@@ -170,6 +253,14 @@ export default function StaffManager({ staff, onChange }: Props) {
               placeholder="任意"
             />
           </div>
+
+          <h4 className="form-section-title">月別希望休カレンダー</h4>
+          <p className="section-desc">日付をクリックして希望休を登録・解除できます</p>
+
+          <DaysOffCalendar
+            daysOff={form.requestedDaysOff}
+            onChange={(days) => setForm((prev) => ({ ...prev, requestedDaysOff: days }))}
+          />
 
           <div className="form-actions">
             <button type="submit" className="btn btn--primary">
@@ -193,6 +284,7 @@ export default function StaffManager({ staff, onChange }: Props) {
             <table className="data-table">
               <thead>
                 <tr>
+                  <th>No.</th>
                   <th>名前</th>
                   <th>勤務可能曜日</th>
                   <th>希望休</th>
@@ -204,9 +296,10 @@ export default function StaffManager({ staff, onChange }: Props) {
               <tbody>
                 {staff.map((s) => (
                   <tr key={s.id}>
+                    <td>{s.staffNo || '—'}</td>
                     <td>{s.name}</td>
                     <td>{s.availableWeekdays.join('・')}</td>
-                    <td>{s.requestedDaysOff.join(', ') || '—'}</td>
+                    <td>{s.requestedDaysOff.length > 0 ? s.requestedDaysOff.join(', ') : '—'}</td>
                     <td>{s.maxWorkDays}日</td>
                     <td>{s.memo || '—'}</td>
                     <td className="action-cell">
