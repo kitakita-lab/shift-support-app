@@ -667,7 +667,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                               onClick={() => toggleSession(key)}>
                               <span className="session-no">会期{session.sessionNo}</span>
                               <span className="session-range">
-                                {session.startDate}〜{session.endDate}（{session.dateCount}日）
+                                {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}｜{session.weekdays.join('')}｜{session.startTime}〜{session.endTime}｜{session.requiredPeople}人
                               </span>
                               <span className="session-chevron">{isOpen ? '▲' : '▼'}</span>
                             </button>
