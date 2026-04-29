@@ -19,6 +19,7 @@ export interface WorkSite {
   endTime: string;
   requiredPeople: number;
   memo: string;
+  isPlaceholder?: boolean;
 }
 
 export interface ShiftAssignment {

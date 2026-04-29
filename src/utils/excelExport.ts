@@ -162,7 +162,7 @@ export async function exportExcel(
   const assignMap: Record<string, ShiftAssignment> = {};
   assignments.forEach((a) => (assignMap[a.siteId] = a));
 
-  const sorted = [...workSites].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = [...workSites.filter((s) => !s.isPlaceholder)].sort((a, b) => a.date.localeCompare(b.date));
 
   buildSiteSheet(wb, sorted, assignMap, staffMap, staffIndex);
   buildStaffSheet(wb, sorted, assignMap, staffMap, staffIndex);

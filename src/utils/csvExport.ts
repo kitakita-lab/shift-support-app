@@ -26,7 +26,7 @@ export function exportCsv(
 
   const headers = ['日付', '現場名', '開始時間', '終了時間', '必要人数', '割当スタッフ', '不足人数'];
 
-  const sorted = [...workSites].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = [...workSites.filter((s) => !s.isPlaceholder)].sort((a, b) => a.date.localeCompare(b.date));
 
   const rows = sorted.map((site) => {
     const asgn = assignMap[site.id];
