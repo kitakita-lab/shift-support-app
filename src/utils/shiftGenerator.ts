@@ -32,9 +32,13 @@ export function generateShifts(
     });
 
     // 優先現場グループを先に割当、不足時のみ一般グループで補充
-    const byWorkDays = (a: Staff, b: Staff) => workDayCount[a.id] - workDayCount[b.id];
-    const preferred = candidates.filter((s) => s.preferredWorkSites.includes(site.siteName)).sort(byWorkDays);
-    const others = candidates.filter((s) => !s.preferredWorkSites.includes(site.siteName)).sort(byWorkDays);
+    // 同一グループ内: 勤務日数少ない順 → staffNo順 → 名前順
+    const byWorkDaysThenStaffNo = (a: Staff, b: Staff): number => {
+      const diff = workDayCount[a.id] - workDayCount[b.id];
+      return diff !== 0 ? diff : compareStaffNo(a, b);
+    };
+    const preferred = candidates.filter((s) => s.preferredWorkSites.includes(site.siteName)).sort(byWorkDaysThenStaffNo);
+    const others = candidates.filter((s) => !s.preferredWorkSites.includes(site.siteName)).sort(byWorkDaysThenStaffNo);
     const merged = [...preferred, ...others];
 
     const assigned = merged.slice(0, site.requiredPeople).sort(compareStaffNo);
