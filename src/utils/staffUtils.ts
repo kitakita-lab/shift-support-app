@@ -3,10 +3,16 @@ import { Staff } from '../types';
 export function compareStaffNo(a: Staff, b: Staff): number {
   const na = parseInt(a.staffNo, 10);
   const nb = parseInt(b.staffNo, 10);
-  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  if (!isNaN(na) && !isNaN(nb)) {
+    const d = na - nb;
+    return d !== 0 ? d : a.name.localeCompare(b.name, 'ja');
+  }
   if (!isNaN(na)) return -1;
   if (!isNaN(nb)) return 1;
-  if (a.staffNo && b.staffNo) return a.staffNo.localeCompare(b.staffNo, 'ja');
+  if (a.staffNo && b.staffNo) {
+    const d = a.staffNo.localeCompare(b.staffNo, 'ja');
+    return d !== 0 ? d : a.name.localeCompare(b.name, 'ja');
+  }
   if (a.staffNo) return -1;
   if (b.staffNo) return 1;
   return a.name.localeCompare(b.name, 'ja');

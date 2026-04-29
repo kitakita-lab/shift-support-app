@@ -377,12 +377,12 @@ body {
 }
 
 .data-table--staff {
-  min-width: 750px;
+  min-width: 760px;
   table-layout: fixed;
 }
 
 .data-table--staff th:nth-child(1),
-.data-table--staff td:nth-child(1) { width: 60px; }
+.data-table--staff td:nth-child(1) { width: 72px; }
 
 .data-table--staff th:nth-child(2),
 .data-table--staff td:nth-child(2) { width: 140px; }
@@ -405,6 +405,26 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.staffno-input {
+  width: 54px;
+  padding: 3px 6px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 13px;
+  text-align: center;
+  background: transparent;
+}
+
+.staffno-input:hover {
+  border-color: #9ca3af;
+}
+
+.staffno-input:focus {
+  outline: none;
+  border-color: #1a56db;
+  background: white;
 }
 
 .row--alert:hover {

@@ -154,6 +154,7 @@ export default function StaffManager({ staff, onChange }: Props) {
   const [form, setForm] = useState<Omit<Staff, 'id'>>(() => emptyForm(staff));
   const [editId, setEditId] = useState<string | null>(null);
   const [currentMonth, setCurrentMonth] = useState(() => toYearMonth(new Date()));
+  const [editingNos, setEditingNos] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!editId) setForm((prev) => ({ ...prev, staffNo: nextStaffNo(staff) }));
@@ -199,6 +200,18 @@ export default function StaffManager({ staff, onChange }: Props) {
   function handleCancel() {
     setEditId(null);
     setForm(emptyForm(staff));
+  }
+
+  function handleStaffNoChange(id: string, value: string) {
+    setEditingNos((prev) => ({ ...prev, [id]: value }));
+  }
+
+  function handleStaffNoBlur(id: string) {
+    const next = (editingNos[id] ?? '').trim();
+    setEditingNos((prev) => { const n = { ...prev }; delete n[id]; return n; });
+    const original = staff.find((s) => s.id === id)?.staffNo ?? '';
+    if (next === original || next === '') return;
+    onChange(sortStaff(staff.map((s) => s.id === id ? { ...s, staffNo: next } : s)));
   }
 
   const [listYear, listMon] = currentMonth.split('-');
@@ -319,7 +332,19 @@ export default function StaffManager({ staff, onChange }: Props) {
               <tbody>
                 {staff.map((s) => (
                   <tr key={s.id}>
-                    <td>{s.staffNo || '—'}</td>
+                    <td>
+                      <input
+                        className="staffno-input"
+                        type="text"
+                        value={editingNos[s.id] ?? s.staffNo}
+                        placeholder="—"
+                        onChange={(e) => handleStaffNoChange(s.id, e.target.value)}
+                        onBlur={() => handleStaffNoBlur(s.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        }}
+                      />
+                    </td>
                     <td className="name-cell">{s.name}</td>
                     <td>{s.availableWeekdays.join('・')}</td>
                     <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
