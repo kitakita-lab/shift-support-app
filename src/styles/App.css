@@ -824,6 +824,20 @@ h2 {
   padding: 2px 7px;
 }
 
+/* 現場名セル：折り返し防止 */
+.site-col {
+  white-space: nowrap;
+  min-width: 140px;
+}
+
+/* 会期なし状態のメッセージ */
+.site-group__empty {
+  padding: 10px 16px;
+  font-size: 13px;
+  color: #9ca3af;
+  border-top: 1px solid #e5e7eb;
+}
+
 .edit-panel__fields {
   display: flex;
   gap: 10px;

@@ -98,8 +98,9 @@ function emptySession(): SessionForm {
 }
 
 function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
-  if (sites.length === 0) return [];
-  const sorted = [...sites].sort((a, b) => a.date.localeCompare(b.date));
+  const activeSites = sites.filter((s) => !s.isPlaceholder);
+  if (activeSites.length === 0) return [];
+  const sorted = [...activeSites].sort((a, b) => a.date.localeCompare(b.date));
   const usedDays = new Set(sorted.map((s) => new Date(s.date + 'T00:00:00').getDay()));
   const targetWeekdays = WEEKDAYS.filter((w) => usedDays.has(w.day)).map((w) => w.label);
   const first = sorted[0];
@@ -124,6 +125,20 @@ function computeGroupLabel(siteName: string, sessions: SessionForm[]): string {
 function buildSessionSites(state: SessionEditorState): WorkSite[] {
   const { groupId, siteName, sessions } = state;
   const groupLabel = computeGroupLabel(siteName, sessions);
+  if (sessions.length === 0) {
+    return [{
+      id: crypto.randomUUID(),
+      groupId,
+      groupLabel,
+      date: '',
+      siteName,
+      startTime: '',
+      endTime: '',
+      requiredPeople: 0,
+      memo: '',
+      isPlaceholder: true,
+    }];
+  }
   const sites: WorkSite[] = [];
   for (const session of sessions) {
     const dates = calcTargetDates(session.startDate, session.endDate, session.targetWeekdays, []);
@@ -403,9 +418,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
       {sessionEditor.sessions.length === 0 && (
         <p className="session-editor__empty">
-          {sessionEditor.isExistingGroup
-            ? '会期が0件の場合、更新時にこのグループの現場日程がすべて削除されます。'
-            : '会期が0件の場合、この現場は削除されます。'}
+          会期が0件の場合、現場データは残りますが日程は生成されません（シフト作成・出力対象外）。
         </p>
       )}
 
@@ -621,6 +634,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
             {sortedGroups.map(({ groupId, sites }) => {
               const expanded         = expandedGroups.has(groupId);
               const isEditingSession = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
+              const activeSites      = sites.filter((s) => !s.isPlaceholder);
               return (
                 <div key={groupId} className="site-group">
 
@@ -631,7 +645,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                       {expanded ? '▼' : '▶'}
                     </button>
                     <span className="site-group__label">{getGroupLabel(sites)}</span>
-                    <span className="site-group__count">{sites.length}件</span>
+                    <span className="site-group__count">{activeSites.length}件</span>
                     <div className="site-group__actions">
                       <button className="btn btn--sm btn--secondary"
                         onClick={() => isEditingSession
@@ -655,6 +669,11 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                   {/* アコーディオン：日別一覧 */}
                   {expanded && (
                     <div className="site-group__body">
+                      {activeSites.length === 0 ? (
+                        <p className="site-group__empty">
+                          会期なし — 「会期編集」から日程を追加できます
+                        </p>
+                      ) : (
                       <div className="table-wrapper">
                         <table className="data-table">
                           <thead>
@@ -668,7 +687,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                             </tr>
                           </thead>
                           <tbody>
-                            {sites.map((site) => (
+                            {activeSites.map((site) => (
                               <Fragment key={site.id}>
                                 <tr className={editingSiteId === site.id ? 'site-editing-row' : ''}>
                                   <td>{site.date}</td>
@@ -743,6 +762,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                           </tbody>
                         </table>
                       </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -782,7 +802,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                   ? 'site-editing-row' : ''
                               }>
                                 <td>{site.date}</td>
-                                <td>{site.siteName}</td>
+                                <td className="site-col">{site.siteName}</td>
                                 <td>{site.startTime}</td>
                                 <td>{site.endTime}</td>
                                 <td>{site.requiredPeople}人</td>

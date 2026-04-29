@@ -21,7 +21,9 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
   const assignMap: Record<string, ShiftAssignment> = {};
   assignments.forEach((a) => (assignMap[a.siteId] = a));
 
-  const sorted = [...workSites].sort((a, b) => a.date.localeCompare(b.date));
+  // プレースホルダー（会期なし現場）はシフト作成対象外
+  const activeSites = workSites.filter((s) => !s.isPlaceholder);
+  const sorted = [...activeSites].sort((a, b) => a.date.localeCompare(b.date));
 
   // date → staff who requested that date off (deduplicated dates, sorted by staffNo)
   const seenDates = new Set<string>();
@@ -35,15 +37,15 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
   }
 
   function handleGenerate() {
-    if (workSites.length === 0) {
-      alert('現場が登録されていません');
+    if (activeSites.length === 0) {
+      alert('シフト対象の現場が登録されていません');
       return;
     }
     if (staff.length === 0) {
       alert('スタッフが登録されていません');
       return;
     }
-    const result = generateShifts(staff, workSites);
+    const result = generateShifts(staff, activeSites);
     onGenerate(result);
   }
 
@@ -175,7 +177,7 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
         </div>
       )}
 
-      {assignments.length === 0 && workSites.length > 0 && (
+      {assignments.length === 0 && activeSites.length > 0 && (
         <div className="card">
           <p className="empty-msg">「シフトを自動作成」ボタンを押してください</p>
         </div>
