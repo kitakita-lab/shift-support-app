@@ -26,7 +26,7 @@ function toYearMonth(date: Date): string {
 
 function buildCalendarDays(yearMonth: string): (string | null)[] {
   const [y, m] = yearMonth.split('-').map(Number);
-  const firstDay = new Date(y, m - 1, 1).getDay(); // 0=Sun
+  const firstDay = new Date(y, m - 1, 1).getDay();
   const daysInMonth = new Date(y, m, 0).getDate();
   const cells: (string | null)[] = Array(firstDay).fill(null);
   for (let d = 1; d <= daysInMonth; d++) {
@@ -35,18 +35,34 @@ function buildCalendarDays(yearMonth: string): (string | null)[] {
   return cells;
 }
 
+// MM/DD 形式に変換し、3件超は「他N件」で省略
+function formatDaysOff(days: string[], yearMonth: string): string {
+  const filtered = days.filter((d) => d.startsWith(yearMonth));
+  if (filtered.length === 0) return '—';
+  const MAX = 3;
+  const shown = filtered.slice(0, MAX).map((d) => d.slice(5).replace('-', '/'));
+  return filtered.length <= MAX
+    ? shown.join('、')
+    : `${shown.join('、')} 他${filtered.length - MAX}件`;
+}
+
 const DOW_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
 
 interface CalendarProps {
+  yearMonth: string;
+  onMonthChange: (yearMonth: string) => void;
   daysOff: string[];
   onChange: (days: string[]) => void;
 }
 
-function DaysOffCalendar({ daysOff, onChange }: CalendarProps) {
-  const [yearMonth, setYearMonth] = useState(() => toYearMonth(new Date()));
+function DaysOffCalendar({ yearMonth, onMonthChange, daysOff, onChange }: CalendarProps) {
   const cells = buildCalendarDays(yearMonth);
   const today = new Date().toISOString().slice(0, 10);
   const offSet = new Set(daysOff);
+
+  function changeMonth(ym: string) {
+    onMonthChange(ym);
+  }
 
   function toggle(date: string) {
     if (offSet.has(date)) {
@@ -64,8 +80,7 @@ function DaysOffCalendar({ daysOff, onChange }: CalendarProps) {
           className="btn btn--sm btn--secondary"
           onClick={() => {
             const [y, m] = yearMonth.split('-').map(Number);
-            const prev = new Date(y, m - 2, 1);
-            setYearMonth(toYearMonth(prev));
+            changeMonth(toYearMonth(new Date(y, m - 2, 1)));
           }}
         >
           ‹
@@ -74,15 +89,14 @@ function DaysOffCalendar({ daysOff, onChange }: CalendarProps) {
           type="month"
           className="cal__month-input"
           value={yearMonth}
-          onChange={(e) => setYearMonth(e.target.value)}
+          onChange={(e) => changeMonth(e.target.value)}
         />
         <button
           type="button"
           className="btn btn--sm btn--secondary"
           onClick={() => {
             const [y, m] = yearMonth.split('-').map(Number);
-            const next = new Date(y, m, 1);
-            setYearMonth(toYearMonth(next));
+            changeMonth(toYearMonth(new Date(y, m, 1)));
           }}
         >
           ›
@@ -90,7 +104,10 @@ function DaysOffCalendar({ daysOff, onChange }: CalendarProps) {
       </div>
       <div className="cal__grid">
         {DOW_LABELS.map((d) => (
-          <div key={d} className={`cal__dow${d === '日' ? ' cal__dow--sun' : d === '土' ? ' cal__dow--sat' : ''}`}>
+          <div
+            key={d}
+            className={`cal__dow${d === '日' ? ' cal__dow--sun' : d === '土' ? ' cal__dow--sat' : ''}`}
+          >
             {d}
           </div>
         ))}
@@ -136,6 +153,7 @@ function DaysOffCalendar({ daysOff, onChange }: CalendarProps) {
 export default function StaffManager({ staff, onChange }: Props) {
   const [form, setForm] = useState<Omit<Staff, 'id'>>(() => emptyForm(staff));
   const [editId, setEditId] = useState<string | null>(null);
+  const [currentMonth, setCurrentMonth] = useState(() => toYearMonth(new Date()));
 
   useEffect(() => {
     if (!editId) setForm((prev) => ({ ...prev, staffNo: nextStaffNo(staff) }));
@@ -182,6 +200,9 @@ export default function StaffManager({ staff, onChange }: Props) {
     setEditId(null);
     setForm(emptyForm(staff));
   }
+
+  const [listYear, listMon] = currentMonth.split('-');
+  const monthLabel = `${listYear}年${parseInt(listMon, 10)}月`;
 
   return (
     <div>
@@ -258,6 +279,8 @@ export default function StaffManager({ staff, onChange }: Props) {
           <p className="section-desc">日付をクリックして希望休を登録・解除できます</p>
 
           <DaysOffCalendar
+            yearMonth={currentMonth}
+            onMonthChange={setCurrentMonth}
             daysOff={form.requestedDaysOff}
             onChange={(days) => setForm((prev) => ({ ...prev, requestedDaysOff: days }))}
           />
@@ -287,7 +310,7 @@ export default function StaffManager({ staff, onChange }: Props) {
                   <th>No.</th>
                   <th>名前</th>
                   <th>勤務可能曜日</th>
-                  <th>希望休</th>
+                  <th>希望休（{monthLabel}）</th>
                   <th>最大日数</th>
                   <th>メモ</th>
                   <th></th>
@@ -299,7 +322,7 @@ export default function StaffManager({ staff, onChange }: Props) {
                     <td>{s.staffNo || '—'}</td>
                     <td>{s.name}</td>
                     <td>{s.availableWeekdays.join('・')}</td>
-                    <td>{s.requestedDaysOff.length > 0 ? s.requestedDaysOff.join(', ') : '—'}</td>
+                    <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
                     <td>{s.maxWorkDays}日</td>
                     <td>{s.memo || '—'}</td>
                     <td className="action-cell">
