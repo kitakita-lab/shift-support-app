@@ -31,8 +31,13 @@ export function generateShifts(
       return availableOnDay && notOnHoliday && underMaxDays;
     });
 
-    // 勤務日数が少ない順に並べて均等配分
-    candidates.sort((a, b) => workDayCount[a.id] - workDayCount[b.id]);
+    // 優先現場指定があるスタッフを同じ勤務日数内で優先、その後均等配分
+    candidates.sort((a, b) => {
+      const aP = a.preferredWorkSites.includes(site.siteName) ? 0 : 1;
+      const bP = b.preferredWorkSites.includes(site.siteName) ? 0 : 1;
+      if (aP !== bP) return aP - bP;
+      return workDayCount[a.id] - workDayCount[b.id];
+    });
 
     const assigned = candidates.slice(0, site.requiredPeople).sort(compareStaffNo);
     assigned.forEach((s) => (workDayCount[s.id] += 1));

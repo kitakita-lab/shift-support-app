@@ -120,6 +120,7 @@ export function parseStaffCSV(rawText: string): StaffParseResult {
       requestedDaysOff,
       maxWorkDays,
       memo: memoRaw.trim(),
+      preferredWorkSites: [],
     });
   }
 

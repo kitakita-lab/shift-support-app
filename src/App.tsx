@@ -61,7 +61,7 @@ export default function App() {
           <Dashboard staff={staff} workSites={workSites} assignments={assignments} />
         )}
         {activeTab === 'staff' && (
-          <StaffManager staff={staff} onChange={setStaff} />
+          <StaffManager staff={staff} workSites={workSites} onChange={setStaff} />
         )}
         {activeTab === 'worksite' && (
           <WorkSiteManager workSites={workSites} onChange={setWorkSites} />
