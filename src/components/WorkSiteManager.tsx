@@ -9,9 +9,10 @@ const createId = (): string =>
     : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 // YYYY-MM-DD を必ずローカル日付として解釈する。
+// YYYY-MM-DD と YYYY/MM/DD の両方を受け付け、必ずローカル日付として構築する。
 // new Date("YYYY-MM-DD") は UTC midnight として扱われ timezone で1日ずれるため使用禁止。
 function parseDateLocal(s: string): Date {
-  const [y, m, d] = s.split('-').map(Number);
+  const [y, m, d] = s.replace(/\//g, '-').split('-').map(Number);
   return new Date(y, m - 1, d);
 }
 

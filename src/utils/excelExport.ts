@@ -167,7 +167,8 @@ export async function exportExcel(
   buildSiteSheet(wb, sorted, assignMap, staffMap, staffIndex);
   buildStaffSheet(wb, sorted, assignMap, staffMap, staffIndex);
 
-  const today  = new Date().toISOString().slice(0, 10);
+  const _now   = new Date();
+  const today  = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(_now.getDate()).padStart(2, '0')}`;
   const buffer = await wb.xlsx.writeBuffer();
   const blob   = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

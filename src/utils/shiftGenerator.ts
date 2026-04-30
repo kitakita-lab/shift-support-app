@@ -4,8 +4,8 @@ import { compareStaffNo } from './staffUtils';
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
 
 function getWeekdayLabel(dateStr: string): string {
-  const d = new Date(dateStr + 'T00:00:00');
-  return WEEKDAY_LABELS[d.getDay()];
+  const [y, m, d] = dateStr.replace(/\//g, '-').split('-').map(Number);
+  return WEEKDAY_LABELS[new Date(y, m - 1, d).getDay()];
 }
 
 export function generateShifts(
