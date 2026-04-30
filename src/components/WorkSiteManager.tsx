@@ -8,13 +8,19 @@ const createId = (): string =>
     ? crypto.randomUUID()
     : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+// YYYY-MM-DD を必ずローカル日付として解釈する。
+// new Date("YYYY-MM-DD") は UTC midnight として扱われ timezone で1日ずれるため使用禁止。
+function parseDateLocal(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
 function calcDateRange(startDate: string, endDate: string): string[] {
   if (!startDate || !endDate || endDate < startDate) return [];
   const dates: string[] = [];
-  const cursor = new Date(startDate + 'T00:00:00');
-  const end    = new Date(endDate   + 'T00:00:00');
+  const cursor = parseDateLocal(startDate);
+  const end    = parseDateLocal(endDate);
   while (cursor <= end) {
-    // Use local date methods to avoid UTC offset shifting the date (e.g. UTC+9 midnight → prev day in UTC)
     const y = cursor.getFullYear();
     const m = String(cursor.getMonth() + 1).padStart(2, '0');
     const d = String(cursor.getDate()).padStart(2, '0');
@@ -26,8 +32,8 @@ function calcDateRange(startDate: string, endDate: string): string[] {
 
 function calcDayCount(startDate: string, endDate: string): number {
   if (!startDate || !endDate || endDate < startDate) return 0;
-  const start = new Date(startDate + 'T00:00:00');
-  const end   = new Date(endDate   + 'T00:00:00');
+  const start = parseDateLocal(startDate);
+  const end   = parseDateLocal(endDate);
   return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
 }
 
@@ -112,7 +118,7 @@ function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
     const prev = current[current.length - 1];
     const site = sorted[i];
     const dayDiff = Math.round(
-      (new Date(site.date + 'T00:00:00').getTime() - new Date(prev.date + 'T00:00:00').getTime()) / 86400000
+      (parseDateLocal(site.date).getTime() - parseDateLocal(prev.date).getTime()) / 86400000
     );
     const sameSettings =
       prev.startTime === site.startTime &&
@@ -240,7 +246,7 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
       const prev = current[current.length - 1];
       const site = sorted[i];
       const dayDiff = Math.round(
-        (new Date(site.date + 'T00:00:00').getTime() - new Date(prev.date + 'T00:00:00').getTime()) / 86400000
+        (parseDateLocal(site.date).getTime() - parseDateLocal(prev.date).getTime()) / 86400000
       );
       const sameSettings =
         prev.startTime === site.startTime &&
