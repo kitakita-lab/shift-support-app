@@ -168,20 +168,6 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
       });
     }
   }
-  if (sites.length === 0) {
-    return [{
-      id: createId(),
-      groupId,
-      groupLabel,
-      date: '',
-      siteName,
-      startTime: '',
-      endTime: '',
-      requiredPeople: 0,
-      memo: '',
-      isPlaceholder: true,
-    }];
-  }
   return sites;
 }
 
@@ -383,29 +369,11 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   function deleteDisplaySession(groupId: string, display: DisplaySession) {
     // sessionId のみで削除対象を特定する。sessionId がない行は削除しない
     const removed = workSites.filter((s) => {
-      if (s.groupId !== groupId || s.isPlaceholder) return true;
+      if (s.groupId !== groupId) return true;
       if (!s.sessionId) return true;
       return s.sessionId !== display.sessionId;
     });
-    // 会期が 0 件になっても会場カードは残す（プレースホルダーを置く）
-    const groupActive = removed.filter((s) => s.groupId === groupId && !s.isPlaceholder);
-    if (groupActive.length === 0) {
-      const orig = workSites.find((s) => s.groupId === groupId);
-      const siteName = orig?.siteName ?? '';
-      onChange([
-        ...removed.filter((s) => s.groupId !== groupId),
-        {
-          id: createId(), groupId,
-          groupLabel: `${siteName}：会期なし`,
-          date: '', siteName,
-          startTime: '', endTime: '',
-          requiredPeople: 0, memo: '',
-          isPlaceholder: true,
-        },
-      ]);
-    } else {
-      onChange(removed);
-    }
+    onChange(removed);
   }
 
   // ── 会期アコーディオン ──────────────────────────────────────
@@ -675,7 +643,6 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
             {sortedGroups.map(({ groupId, sites }) => {
               const isEditingSession = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
-              const activeSites      = sites.filter((s) => !s.isPlaceholder);
               const displaySessions  = groupSitesIntoDisplaySessions(sites);
               const siteName         = sites[0]?.siteName ?? '';
 
@@ -685,7 +652,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                     <div className="site-header__left">
                       <div className="site-title">{siteName}</div>
                       <div className="site-meta">
-                        {activeSites.length === 0 ? '会期なし' : `会期${displaySessions.length}件`}
+                        {`会期${displaySessions.length}件`}
                       </div>
                     </div>
                     <div className="site-actions">
@@ -708,10 +675,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                     </div>
                   )}
 
-                  {activeSites.length === 0 ? (
-                    <div className="site-empty">会期なし（まだ登録されていません）</div>
-                  ) : (
-                    <div className="session-list">
+                  <div className="session-list">
                       {displaySessions.map((session) => {
                         const key    = `${groupId}-${session.sessionId}`;
                         const isOpen = expandedSessions.has(key);
@@ -766,7 +730,6 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                         );
                       })}
                     </div>
-                  )}
 
                   {!isEditingSession && (
                     <button
