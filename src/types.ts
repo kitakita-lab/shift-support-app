@@ -13,6 +13,7 @@ export interface WorkSite {
   id: string;
   groupId?: string;
   groupLabel?: string;
+  sessionId?: string;
   date: string;
   siteName: string;
   startTime: string;

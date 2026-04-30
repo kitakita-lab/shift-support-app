@@ -886,10 +886,24 @@ h2 {
 }
 
 .session-edit-card__fields {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 10px;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: start;
+}
+
+.session-edit-card__fields .edit-panel__field--memo {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 480px) {
+  .session-edit-card__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .session-edit-card__fields .edit-panel__field--memo {
+    grid-column: 1;
+  }
 }
 
 .session-editor__footer {
