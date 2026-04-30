@@ -44,7 +44,7 @@ interface SessionForm {
   endDate: string;
   startTime: string;
   endTime: string;
-  requiredPeople: number;
+  requiredPeople: number | '';  // 入力中は空文字を許可。保存時のみ 1 以上に補正する
   memo: string;
 }
 
@@ -54,6 +54,10 @@ interface SessionEditorState {
   sessions: SessionForm[];
   isExistingGroup: boolean;
   sourceIds: string[];
+}
+
+function normalizeRequiredPeople(v: number | ''): number {
+  return typeof v === 'number' && v >= 1 ? v : 1;
 }
 
 function emptySession(): SessionForm {
@@ -159,7 +163,7 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
         siteName,
         startTime:      session.startTime,
         endTime:        session.endTime,
-        requiredPeople: session.requiredPeople,
+        requiredPeople: normalizeRequiredPeople(session.requiredPeople),
         memo:           session.memo,
       });
     }
@@ -352,7 +356,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
           siteName:       newSiteName,
           startTime:      session.startTime,
           endTime:        session.endTime,
-          requiredPeople: session.requiredPeople,
+          requiredPeople: normalizeRequiredPeople(session.requiredPeople),
           memo:           session.memo,
         });
       }
@@ -374,6 +378,41 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
   function deleteSite(id: string) {
     onChange(workSites.filter((s) => s.id !== id));
+  }
+
+  function deleteDisplaySession(groupId: string, display: DisplaySession) {
+    // sessionId が実際の WorkSite レコードに存在するか確認（レガシーデータ判定）
+    const isRealId = workSites.some((s) => s.sessionId === display.sessionId);
+    const removed = workSites.filter((s) => {
+      if (s.groupId !== groupId || s.isPlaceholder) return true;
+      if (isRealId) return s.sessionId !== display.sessionId;
+      // レガシーデータ：日付範囲 + 時刻で照合
+      return !(
+        s.date >= display.startDate &&
+        s.date <= display.endDate &&
+        s.startTime === display.startTime &&
+        s.endTime === display.endTime
+      );
+    });
+    // 会期が 0 件になっても会場カードは残す（プレースホルダーを置く）
+    const groupActive = removed.filter((s) => s.groupId === groupId && !s.isPlaceholder);
+    if (groupActive.length === 0) {
+      const orig = workSites.find((s) => s.groupId === groupId);
+      const siteName = orig?.siteName ?? '';
+      onChange([
+        ...removed.filter((s) => s.groupId !== groupId),
+        {
+          id: createId(), groupId,
+          groupLabel: `${siteName}：会期なし`,
+          date: '', siteName,
+          startTime: '', endTime: '',
+          requiredPeople: 0, memo: '',
+          isPlaceholder: true,
+        },
+      ]);
+    } else {
+      onChange(removed);
+    }
   }
 
   // ── 会期アコーディオン ──────────────────────────────────────
@@ -483,7 +522,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
         <div className="session-edit-card__title">
           <span>会期 {idx + 1}</span>
           <button type="button" className="btn btn--sm btn--danger"
-            onClick={() => onRemove(session.id)}>
+            onClick={() => {
+              if (!confirm('この会期を削除します。よろしいですか？')) return;
+              onRemove(session.id);
+            }}>
             この会期を削除
           </button>
         </div>
@@ -517,8 +559,13 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
             <input type="number" min={1} className="form-input form-input--short"
               value={session.requiredPeople}
               onChange={(e) => {
-                const raw = parseInt(e.target.value, 10);
-                onUpdate(session.id, { requiredPeople: isNaN(raw) || raw < 1 ? 1 : raw });
+                const raw = e.target.value;
+                if (raw === '') {
+                  onUpdate(session.id, { requiredPeople: '' });
+                } else {
+                  const num = parseInt(raw, 10);
+                  onUpdate(session.id, { requiredPeople: isNaN(num) ? '' : num });
+                }
               }} />
           </label>
           <label className="edit-panel__field edit-panel__field--memo">
@@ -677,18 +724,29 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                         const isOpen = expandedSessions.has(key);
                         return (
                           <div key={key} className="session-card">
-                            <button
-                              className="session-summary"
-                              onClick={() => toggleSession(key)}>
-                              <span className="session-summary__date">
-                                📅 {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}（{session.dateCount}日）
-                                <span className="session-chevron">{isOpen ? '▲' : '▼'}</span>
-                              </span>
-                              <div className="session-summary__meta">
-                                <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
-                                <span className="session-summary__people">👤 {session.requiredPeople}人</span>
-                              </div>
-                            </button>
+                            <div className="session-card__header">
+                              <button
+                                className="session-summary"
+                                onClick={() => toggleSession(key)}>
+                                <span className="session-summary__date">
+                                  📅 {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}（{session.dateCount}日）
+                                  <span className="session-chevron">{isOpen ? '▲' : '▼'}</span>
+                                </span>
+                                <div className="session-summary__meta">
+                                  <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
+                                  <span className="session-summary__people">👤 {session.requiredPeople}人</span>
+                                </div>
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn--sm btn--ghost-danger session-card__delete"
+                                onClick={() => {
+                                  if (!confirm('この会期を削除します。よろしいですか？')) return;
+                                  deleteDisplaySession(groupId, session);
+                                }}>
+                                削除
+                              </button>
+                            </div>
                             {isOpen && (
                               <div className="session-detail">
                                 <div className="session-detail__row">

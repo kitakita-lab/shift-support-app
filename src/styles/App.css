@@ -754,6 +754,24 @@ h2 {
   border: 1px solid #e5e7eb;
 }
 
+.session-card__header {
+  display: flex;
+  align-items: stretch;
+}
+
+.session-card__header > .session-summary {
+  flex: 1;
+  width: auto;
+}
+
+.session-card__delete {
+  padding: 8px 10px;
+  border-left: 1px solid #e5e7eb;
+  border-radius: 0;
+  flex-shrink: 0;
+  align-self: center;
+}
+
 .session-summary {
   width: 100%;
   display: flex;
