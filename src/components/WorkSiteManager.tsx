@@ -381,18 +381,11 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   }
 
   function deleteDisplaySession(groupId: string, display: DisplaySession) {
-    // sessionId が実際の WorkSite レコードに存在するか確認（レガシーデータ判定）
-    const isRealId = workSites.some((s) => s.sessionId === display.sessionId);
+    // sessionId のみで削除対象を特定する。sessionId がない行は削除しない
     const removed = workSites.filter((s) => {
       if (s.groupId !== groupId || s.isPlaceholder) return true;
-      if (isRealId) return s.sessionId !== display.sessionId;
-      // レガシーデータ：日付範囲 + 時刻で照合
-      return !(
-        s.date >= display.startDate &&
-        s.date <= display.endDate &&
-        s.startTime === display.startTime &&
-        s.endTime === display.endTime
-      );
+      if (!s.sessionId) return true;
+      return s.sessionId !== display.sessionId;
     });
     // 会期が 0 件になっても会場カードは残す（プレースホルダーを置く）
     const groupActive = removed.filter((s) => s.groupId === groupId && !s.isPlaceholder);
