@@ -3,6 +3,11 @@ import { WorkSite } from '../types';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
+const createId = (): string =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
 function calcDateRange(startDate: string, endDate: string): string[] {
   if (!startDate || !endDate || endDate < startDate) return [];
   const dates: string[] = [];
@@ -44,7 +49,7 @@ interface SessionEditorState {
 
 function emptySession(): SessionForm {
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     startDate: '',
     endDate: '',
     startTime: '09:00',
@@ -70,7 +75,7 @@ function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
     for (const [, group] of bySession) {
       const g = [...group].sort((a, b) => a.date.localeCompare(b.date));
       result.push({
-        id:             crypto.randomUUID(),
+        id:             createId(),
         startDate:      g[0].date,
         endDate:        g[g.length - 1].date,
         startTime:      g[0].startTime,
@@ -89,7 +94,7 @@ function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
   const flushCurrent = () => {
     const g = current;
     sessions.push({
-      id:             crypto.randomUUID(),
+      id:             createId(),
       startDate:      g[0].date,
       endDate:        g[g.length - 1].date,
       startTime:      g[0].startTime,
@@ -132,10 +137,10 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
   const groupLabel = computeGroupLabel(siteName, sessions);
   const sites: WorkSite[] = [];
   for (const session of sessions) {
-    const sessionId = crypto.randomUUID();
+    const sessionId = createId();
     for (const date of calcDateRange(session.startDate, session.endDate)) {
       sites.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         groupId,
         groupLabel,
         sessionId,
@@ -150,7 +155,7 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
   }
   if (sites.length === 0) {
     return [{
-      id: crypto.randomUUID(),
+      id: createId(),
       groupId,
       groupLabel,
       date: '',
@@ -316,14 +321,14 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   function handleNewSiteSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!isReady) return;
-    const groupId    = crypto.randomUUID();
+    const groupId    = createId();
     const groupLabel = computeGroupLabel(newSiteName, newSessions);
     const newSites: WorkSite[] = [];
     for (const session of newSessions) {
-      const sessionId = crypto.randomUUID();
+      const sessionId = createId();
       for (const date of calcDateRange(session.startDate, session.endDate)) {
         newSites.push({
-          id: crypto.randomUUID(),
+          id: createId(),
           groupId,
           groupLabel,
           sessionId,
@@ -389,10 +394,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
   function openSiteSessionEditor(site: WorkSite) {
     setSessionEditor({
-      groupId:  crypto.randomUUID(),
+      groupId:  createId(),
       siteName: site.siteName,
       sessions: [{
-        id:             crypto.randomUUID(),
+        id:             createId(),
         startDate:      site.date,
         endDate:        site.date,
         startTime:      site.startTime,
