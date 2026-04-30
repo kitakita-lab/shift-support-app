@@ -3,6 +3,11 @@ import { WorkSite } from '../types';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
+const createId = (): string =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
 function calcDateRange(startDate: string, endDate: string): string[] {
   if (!startDate || !endDate || endDate < startDate) return [];
   const dates: string[] = [];
@@ -44,7 +49,7 @@ interface SessionEditorState {
 
 function emptySession(): SessionForm {
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     startDate: '',
     endDate: '',
     startTime: '09:00',
@@ -57,17 +62,67 @@ function emptySession(): SessionForm {
 function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
   const active = sites.filter((s) => !s.isPlaceholder);
   if (active.length === 0) return [emptySession()];
+
+  const hasSessionIds = active.some((s) => s.sessionId);
+  if (hasSessionIds) {
+    const bySession = new Map<string, WorkSite[]>();
+    for (const site of active) {
+      const key = site.sessionId ?? `__nosession_${site.date}`;
+      if (!bySession.has(key)) bySession.set(key, []);
+      bySession.get(key)!.push(site);
+    }
+    const result: SessionForm[] = [];
+    for (const [, group] of bySession) {
+      const g = [...group].sort((a, b) => a.date.localeCompare(b.date));
+      result.push({
+        id:             createId(),
+        startDate:      g[0].date,
+        endDate:        g[g.length - 1].date,
+        startTime:      g[0].startTime,
+        endTime:        g[0].endTime,
+        requiredPeople: g[0].requiredPeople,
+        memo:           g[0].memo,
+      });
+    }
+    return result.sort((a, b) => a.startDate.localeCompare(b.startDate));
+  }
+
+  // Fallback: gap detection for legacy records without sessionId
   const sorted = [...active].sort((a, b) => a.date.localeCompare(b.date));
-  const first  = sorted[0];
-  return [{
-    id: crypto.randomUUID(),
-    startDate:      sorted[0].date,
-    endDate:        sorted[sorted.length - 1].date,
-    startTime:      first.startTime,
-    endTime:        first.endTime,
-    requiredPeople: first.requiredPeople,
-    memo:           first.memo,
-  }];
+  const sessions: SessionForm[] = [];
+  let current: WorkSite[] = [sorted[0]];
+  const flushCurrent = () => {
+    const g = current;
+    sessions.push({
+      id:             createId(),
+      startDate:      g[0].date,
+      endDate:        g[g.length - 1].date,
+      startTime:      g[0].startTime,
+      endTime:        g[0].endTime,
+      requiredPeople: g[0].requiredPeople,
+      memo:           g[0].memo,
+    });
+  };
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = current[current.length - 1];
+    const site = sorted[i];
+    const dayDiff = Math.round(
+      (new Date(site.date + 'T00:00:00').getTime() - new Date(prev.date + 'T00:00:00').getTime()) / 86400000
+    );
+    const sameSettings =
+      prev.startTime === site.startTime &&
+      prev.endTime === site.endTime &&
+      prev.requiredPeople === site.requiredPeople &&
+      prev.memo === site.memo;
+    if (sameSettings && dayDiff === 1) {
+      current.push(site);
+    } else {
+      flushCurrent();
+      current = [site];
+    }
+  }
+  flushCurrent();
+  return sessions;
 }
 
 function computeGroupLabel(siteName: string, sessions: SessionForm[]): string {
@@ -82,11 +137,13 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
   const groupLabel = computeGroupLabel(siteName, sessions);
   const sites: WorkSite[] = [];
   for (const session of sessions) {
+    const sessionId = createId();
     for (const date of calcDateRange(session.startDate, session.endDate)) {
       sites.push({
-        id: crypto.randomUUID(),
+        id: createId(),
         groupId,
         groupLabel,
+        sessionId,
         date,
         siteName,
         startTime:      session.startTime,
@@ -98,7 +155,7 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
   }
   if (sites.length === 0) {
     return [{
-      id: crypto.randomUUID(),
+      id: createId(),
       groupId,
       groupLabel,
       date: '',
@@ -129,26 +186,66 @@ interface DisplaySession {
 function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
   const active = sites.filter((s) => !s.isPlaceholder);
   if (active.length === 0) return [];
-  const sorted = [...active].sort((a, b) => a.date.localeCompare(b.date));
-  const map = new Map<string, WorkSite[]>();
-  for (const site of sorted) {
-    const key = `${site.startTime}|${site.endTime}|${site.requiredPeople}|${site.memo}`;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(site);
-  }
+
   const raw: Omit<DisplaySession, 'sessionNo'>[] = [];
-  for (const [, group] of map) {
-    const g = [...group].sort((a, b) => a.date.localeCompare(b.date));
-    raw.push({
-      startDate:      g[0].date,
-      endDate:        g[g.length - 1].date,
-      startTime:      g[0].startTime,
-      endTime:        g[0].endTime,
-      requiredPeople: g[0].requiredPeople,
-      memo:           g[0].memo,
-      dateCount:      g.length,
-    });
+  const hasSessionIds = active.some((s) => s.sessionId);
+
+  if (hasSessionIds) {
+    const bySession = new Map<string, WorkSite[]>();
+    for (const site of active) {
+      const key = site.sessionId ?? `__nosession_${site.date}`;
+      if (!bySession.has(key)) bySession.set(key, []);
+      bySession.get(key)!.push(site);
+    }
+    for (const [, group] of bySession) {
+      const g = [...group].sort((a, b) => a.date.localeCompare(b.date));
+      raw.push({
+        startDate:      g[0].date,
+        endDate:        g[g.length - 1].date,
+        startTime:      g[0].startTime,
+        endTime:        g[0].endTime,
+        requiredPeople: g[0].requiredPeople,
+        memo:           g[0].memo,
+        dateCount:      g.length,
+      });
+    }
+  } else {
+    // Fallback: gap detection for legacy records without sessionId
+    const sorted = [...active].sort((a, b) => a.date.localeCompare(b.date));
+    let current: WorkSite[] = [sorted[0]];
+    const flushCurrent = () => {
+      const g = current;
+      raw.push({
+        startDate:      g[0].date,
+        endDate:        g[g.length - 1].date,
+        startTime:      g[0].startTime,
+        endTime:        g[0].endTime,
+        requiredPeople: g[0].requiredPeople,
+        memo:           g[0].memo,
+        dateCount:      g.length,
+      });
+    };
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = current[current.length - 1];
+      const site = sorted[i];
+      const dayDiff = Math.round(
+        (new Date(site.date + 'T00:00:00').getTime() - new Date(prev.date + 'T00:00:00').getTime()) / 86400000
+      );
+      const sameSettings =
+        prev.startTime === site.startTime &&
+        prev.endTime === site.endTime &&
+        prev.requiredPeople === site.requiredPeople &&
+        prev.memo === site.memo;
+      if (sameSettings && dayDiff === 1) {
+        current.push(site);
+      } else {
+        flushCurrent();
+        current = [site];
+      }
+    }
+    flushCurrent();
   }
+
   return raw
     .sort((a, b) => a.startDate.localeCompare(b.startDate))
     .map((s, i) => ({ ...s, sessionNo: i + 1 }));
@@ -224,15 +321,17 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   function handleNewSiteSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!isReady) return;
-    const groupId    = crypto.randomUUID();
+    const groupId    = createId();
     const groupLabel = computeGroupLabel(newSiteName, newSessions);
     const newSites: WorkSite[] = [];
     for (const session of newSessions) {
+      const sessionId = createId();
       for (const date of calcDateRange(session.startDate, session.endDate)) {
         newSites.push({
-          id: crypto.randomUUID(),
+          id: createId(),
           groupId,
           groupLabel,
+          sessionId,
           date,
           siteName:       newSiteName,
           startTime:      session.startTime,
@@ -295,10 +394,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
   function openSiteSessionEditor(site: WorkSite) {
     setSessionEditor({
-      groupId:  crypto.randomUUID(),
+      groupId:  createId(),
       siteName: site.siteName,
       sessions: [{
-        id:             crypto.randomUUID(),
+        id:             createId(),
         startDate:      site.date,
         endDate:        site.date,
         startTime:      site.startTime,
@@ -554,7 +653,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                               className="session-summary"
                               onClick={() => toggleSession(key)}>
                               <span className="session-summary__date">
-                                📅 {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}
+                                📅 {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}（{session.dateCount}日）
                                 <span className="session-chevron">{isOpen ? '▲' : '▼'}</span>
                               </span>
                               <div className="session-summary__meta">
