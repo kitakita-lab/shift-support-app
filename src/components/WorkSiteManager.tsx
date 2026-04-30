@@ -8,13 +8,22 @@ const createId = (): string =>
     ? crypto.randomUUID()
     : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+// YYYY-MM-DD を必ずローカル日付として解釈する。
+// YYYY-MM-DD と YYYY/MM/DD の両方を受け付け、必ずローカル日付として構築する。
+// new Date("YYYY-MM-DD") は UTC midnight として扱われ timezone で1日ずれるため使用禁止。
+function parseDateLocal(s: string): Date {
+  const [y, m, d] = s.replace(/\//g, '-').split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
 function calcDateRange(startDate: string, endDate: string): string[] {
   if (!startDate || !endDate || endDate < startDate) return [];
+  const pad = (n: number) => n.toString().padStart(2, '0');
   const dates: string[] = [];
-  const cursor = new Date(startDate + 'T00:00:00');
-  const end    = new Date(endDate   + 'T00:00:00');
+  const cursor = parseDateLocal(startDate);
+  const end    = parseDateLocal(endDate);
   while (cursor <= end) {
-    dates.push(cursor.toISOString().slice(0, 10));
+    dates.push(`${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}-${pad(cursor.getDate())}`);
     cursor.setDate(cursor.getDate() + 1);
   }
   return dates;
@@ -22,8 +31,8 @@ function calcDateRange(startDate: string, endDate: string): string[] {
 
 function calcDayCount(startDate: string, endDate: string): number {
   if (!startDate || !endDate || endDate < startDate) return 0;
-  const start = new Date(startDate + 'T00:00:00');
-  const end   = new Date(endDate   + 'T00:00:00');
+  const start = parseDateLocal(startDate);
+  const end   = parseDateLocal(endDate);
   return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
 }
 
@@ -74,8 +83,9 @@ function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
     const result: SessionForm[] = [];
     for (const [, group] of bySession) {
       const g = [...group].sort((a, b) => a.date.localeCompare(b.date));
+      // Preserve sessionId as the form id so identity stays stable across editor open/save
       result.push({
-        id:             createId(),
+        id:             g[0].sessionId ?? createId(),
         startDate:      g[0].date,
         endDate:        g[g.length - 1].date,
         startTime:      g[0].startTime,
@@ -107,7 +117,7 @@ function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
     const prev = current[current.length - 1];
     const site = sorted[i];
     const dayDiff = Math.round(
-      (new Date(site.date + 'T00:00:00').getTime() - new Date(prev.date + 'T00:00:00').getTime()) / 86400000
+      (parseDateLocal(site.date).getTime() - parseDateLocal(prev.date).getTime()) / 86400000
     );
     const sameSettings =
       prev.startTime === site.startTime &&
@@ -137,7 +147,8 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
   const groupLabel = computeGroupLabel(siteName, sessions);
   const sites: WorkSite[] = [];
   for (const session of sessions) {
-    const sessionId = createId();
+    // Use session.id as sessionId so identity is preserved across edits
+    const sessionId = session.id;
     for (const date of calcDateRange(session.startDate, session.endDate)) {
       sites.push({
         id: createId(),
@@ -173,6 +184,7 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
 // ─── DisplaySession (会期表示用) ──────────────────────────────
 
 interface DisplaySession {
+  sessionId: string;
   sessionNo: number;
   startDate: string;
   endDate: string;
@@ -197,9 +209,10 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
       if (!bySession.has(key)) bySession.set(key, []);
       bySession.get(key)!.push(site);
     }
-    for (const [, group] of bySession) {
+    for (const [key, group] of bySession) {
       const g = [...group].sort((a, b) => a.date.localeCompare(b.date));
       raw.push({
+        sessionId:      g[0].sessionId ?? key,
         startDate:      g[0].date,
         endDate:        g[g.length - 1].date,
         startTime:      g[0].startTime,
@@ -215,7 +228,10 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
     let current: WorkSite[] = [sorted[0]];
     const flushCurrent = () => {
       const g = current;
+      // Synthetic stable key for legacy data: start|end|startTime|endTime
+      const syntheticId = `${g[0].date}|${g[g.length - 1].date}|${g[0].startTime}|${g[0].endTime}`;
       raw.push({
+        sessionId:      syntheticId,
         startDate:      g[0].date,
         endDate:        g[g.length - 1].date,
         startTime:      g[0].startTime,
@@ -229,7 +245,7 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
       const prev = current[current.length - 1];
       const site = sorted[i];
       const dayDiff = Math.round(
-        (new Date(site.date + 'T00:00:00').getTime() - new Date(prev.date + 'T00:00:00').getTime()) / 86400000
+        (parseDateLocal(site.date).getTime() - parseDateLocal(prev.date).getTime()) / 86400000
       );
       const sameSettings =
         prev.startTime === site.startTime &&
@@ -325,7 +341,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
     const groupLabel = computeGroupLabel(newSiteName, newSessions);
     const newSites: WorkSite[] = [];
     for (const session of newSessions) {
-      const sessionId = createId();
+      const sessionId = session.id;
       for (const date of calcDateRange(session.startDate, session.endDate)) {
         newSites.push({
           id: createId(),
@@ -421,24 +437,30 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   }
 
   function updateSession(id: string, patch: Partial<SessionForm>) {
-    if (!sessionEditor) return;
-    setSessionEditor({
-      ...sessionEditor,
-      sessions: sessionEditor.sessions.map((s) => s.id === id ? { ...s, ...patch } : s),
+    setSessionEditor((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        sessions: prev.sessions.map((s) => s.id === id ? { ...s, ...patch } : s),
+      };
     });
   }
 
   function addSession() {
-    if (!sessionEditor) return;
-    setSessionEditor({ ...sessionEditor, sessions: [...sessionEditor.sessions, emptySession()] });
+    setSessionEditor((prev) => {
+      if (!prev) return prev;
+      return { ...prev, sessions: [...prev.sessions, emptySession()] };
+    });
   }
 
   function removeSession(id: string) {
-    if (!sessionEditor) return;
-    const remaining = sessionEditor.sessions.filter((s) => s.id !== id);
-    setSessionEditor({
-      ...sessionEditor,
-      sessions: remaining.length > 0 ? remaining : [emptySession()],
+    setSessionEditor((prev) => {
+      if (!prev) return prev;
+      const remaining = prev.sessions.filter((s) => s.id !== id);
+      return {
+        ...prev,
+        sessions: remaining.length > 0 ? remaining : [emptySession()],
+      };
     });
   }
 
@@ -494,7 +516,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
             必要人数
             <input type="number" min={1} className="form-input form-input--short"
               value={session.requiredPeople}
-              onChange={(e) => onUpdate(session.id, { requiredPeople: Number(e.target.value) })} />
+              onChange={(e) => {
+                const raw = parseInt(e.target.value, 10);
+                onUpdate(session.id, { requiredPeople: isNaN(raw) || raw < 1 ? 1 : raw });
+              }} />
           </label>
           <label className="edit-panel__field edit-panel__field--memo">
             メモ
@@ -519,7 +544,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
           現場名
           <input type="text" className="form-input"
             value={sessionEditor.siteName}
-            onChange={(e) => setSessionEditor({ ...sessionEditor, siteName: e.target.value })} />
+            onChange={(e) => {
+              const v = e.target.value;
+              setSessionEditor((prev) => prev ? { ...prev, siteName: v } : prev);
+            }} />
         </label>
       </div>
 
@@ -644,8 +672,8 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                     <div className="site-empty">会期なし（まだ登録されていません）</div>
                   ) : (
                     <div className="session-list">
-                      {displaySessions.map((session, idx) => {
-                        const key    = `${groupId}-${idx}`;
+                      {displaySessions.map((session) => {
+                        const key    = `${groupId}-${session.sessionId}`;
                         const isOpen = expandedSessions.has(key);
                         return (
                           <div key={key} className="session-card">

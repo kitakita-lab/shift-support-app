@@ -68,7 +68,9 @@ interface CalendarProps {
 
 function DaysOffCalendar({ yearMonth, onMonthChange, daysOff, onChange }: CalendarProps) {
   const cells = buildCalendarDays(yearMonth);
-  const today = new Date().toISOString().slice(0, 10);
+  const _now  = new Date();
+  const pad   = (n: number) => n.toString().padStart(2, '0');
+  const today = `${_now.getFullYear()}-${pad(_now.getMonth() + 1)}-${pad(_now.getDate())}`;
   const offSet = new Set(daysOff);
 
   function changeMonth(ym: string) {
