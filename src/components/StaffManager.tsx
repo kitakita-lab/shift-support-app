@@ -323,7 +323,9 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
         {staff.length === 0 ? (
           <p className="empty-msg">スタッフが登録されていません</p>
         ) : (
-          <div className="table-wrapper">
+          <>
+          {/* PC：テーブル表示 */}
+          <div className="table-wrapper staff-table-wrapper">
             <table className="data-table data-table--staff">
               <thead>
                 <tr>
@@ -338,7 +340,7 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
               <tbody>
                 {staff.map((s) => (
                   <tr key={s.id}>
-                    <td data-label="No.">
+                    <td>
                       <input
                         className="staffno-input"
                         type="text"
@@ -351,10 +353,10 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
                         }}
                       />
                     </td>
-                    <td data-label="名前" className="name-cell">{s.name}</td>
-                    <td data-label="希望休">{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
-                    <td data-label="メモ">{s.memo || '—'}</td>
-                    <td data-label="優先現場" className="preferred-sites-cell">{formatPreferredSites(s.preferredWorkSites)}</td>
+                    <td className="name-cell">{s.name}</td>
+                    <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
+                    <td>{s.memo || '—'}</td>
+                    <td className="preferred-sites-cell">{formatPreferredSites(s.preferredWorkSites)}</td>
                     <td className="action-cell">
                       <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
                         編集
@@ -371,6 +373,53 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
               </tbody>
             </table>
           </div>
+
+          {/* モバイル：カード表示 */}
+          <div className="staff-card-list">
+            {staff.map((s) => (
+              <div key={s.id} className="staff-card">
+                <div className="staff-card__header">
+                  <input
+                    className="staffno-input"
+                    type="text"
+                    value={editingNos[s.id] ?? s.staffNo}
+                    placeholder="—"
+                    onChange={(e) => handleStaffNoChange(s.id, e.target.value)}
+                    onBlur={() => handleStaffNoBlur(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    }}
+                  />
+                  <span className="staff-card__name">{s.name}</span>
+                </div>
+                <div className="staff-card__body">
+                  <div className="staff-card__row">
+                    <span className="staff-card__label">希望休</span>
+                    <span className="staff-card__value">{formatDaysOff(s.requestedDaysOff, currentMonth)}</span>
+                  </div>
+                  <div className="staff-card__row">
+                    <span className="staff-card__label">優先現場</span>
+                    <span className="staff-card__value">{formatPreferredSites(s.preferredWorkSites)}</span>
+                  </div>
+                  {s.memo && (
+                    <div className="staff-card__row">
+                      <span className="staff-card__label">メモ</span>
+                      <span className="staff-card__value">{s.memo}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="staff-card__actions">
+                  <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
+                    編集
+                  </button>
+                  <button className="btn btn--sm btn--danger" onClick={() => handleDelete(s.id)}>
+                    削除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          </>
         )}
       </div>
     </div>
