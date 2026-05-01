@@ -591,15 +591,15 @@ h2 {
   .staff-card-list {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
   }
 
   .staff-card {
     background: #fff;
     border: 1px solid #e5e7eb;
-    border-radius: 10px;
+    border-radius: 8px;
     overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
   }
 
   /* ── ヘッダー（No. + 名前）── */
@@ -607,14 +607,23 @@ h2 {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 14px;
+    padding: 12px 14px;
     background: #f8f9fb;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid #e9ecef;
+  }
+
+  /* No. インプットを小さく・控えめに */
+  .staff-card__header .staffno-input {
+    width: 44px;
+    font-size: 12px;
+    color: #9ca3af;
+    border-color: #e5e7eb;
+    padding: 2px 4px;
   }
 
   .staff-card__name {
     font-weight: 700;
-    font-size: 15px;
+    font-size: 17px;
     color: #111827;
     flex: 1;
     min-width: 0;
@@ -625,10 +634,10 @@ h2 {
 
   /* ── 本文（希望休・優先現場・メモ）── */
   .staff-card__body {
-    padding: 8px 14px;
+    padding: 10px 14px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .staff-card__row {
@@ -640,17 +649,33 @@ h2 {
 
   .staff-card__label {
     font-size: 11px;
-    font-weight: 600;
-    color: #6b7280;
+    font-weight: 500;
+    color: #999;
     min-width: 52px;
     flex-shrink: 0;
     padding-top: 2px;
   }
 
   .staff-card__value {
-    color: #374151;
+    color: #333;
     line-height: 1.5;
     word-break: break-word;
+  }
+
+  /* 優先現場：最大2行でclamp */
+  .staff-card__value--clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  /* メモ行：薄い背景で囲う */
+  .staff-card__row--memo {
+    background: #f7f7f7;
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin: 0 -2px;
   }
 
   /* ── アクション（編集・削除）── */
@@ -664,6 +689,32 @@ h2 {
   .staff-card__actions .btn {
     flex: 1;
     text-align: center;
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+
+  /* 編集：グレーアウトライン */
+  .staff-card__actions .btn--secondary {
+    background: transparent;
+    border: 1px solid #d1d5db;
+    color: #6b7280;
+    box-shadow: none;
+  }
+
+  .staff-card__actions .btn--secondary:hover {
+    background: #f9fafb;
+  }
+
+  /* 削除：赤アウトライン・控えめサイズ */
+  .staff-card__actions .btn--danger {
+    background: transparent;
+    border: 1px solid #fca5a5;
+    color: #dc2626;
+    box-shadow: none;
+  }
+
+  .staff-card__actions .btn--danger:hover {
+    background: #fff5f5;
   }
 }
 

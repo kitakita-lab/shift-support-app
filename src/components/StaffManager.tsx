@@ -399,10 +399,10 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
                   </div>
                   <div className="staff-card__row">
                     <span className="staff-card__label">優先現場</span>
-                    <span className="staff-card__value">{formatPreferredSites(s.preferredWorkSites)}</span>
+                    <span className="staff-card__value staff-card__value--clamp">{formatPreferredSites(s.preferredWorkSites)}</span>
                   </div>
                   {s.memo && (
-                    <div className="staff-card__row">
+                    <div className="staff-card__row staff-card__row--memo">
                       <span className="staff-card__label">メモ</span>
                       <span className="staff-card__value">{s.memo}</span>
                     </div>
