@@ -376,33 +376,28 @@ body {
   background: #fff5f5 !important;
 }
 
+/* 6列構成（No., 名前, 希望休, メモ, 優先現場, 操作）*/
 .data-table--staff {
-  min-width: 890px;
-  table-layout: fixed;
+  min-width: 0;
 }
 
+/* No. 列 */
 .data-table--staff th:nth-child(1),
-.data-table--staff td:nth-child(1) { width: 72px; }
+.data-table--staff td:nth-child(1) { width: 68px; }
 
-.data-table--staff th:nth-child(2),
-.data-table--staff td:nth-child(2) { width: 140px; }
-
+/* 希望休 列 */
 .data-table--staff th:nth-child(3),
-.data-table--staff td:nth-child(3) { width: 140px; }
+.data-table--staff td:nth-child(3) { width: 130px; white-space: nowrap; }
 
-.data-table--staff th:nth-child(4),
-.data-table--staff td:nth-child(4) { width: 160px; }
+/* 操作 列 */
+.data-table--staff th:nth-child(6),
+.data-table--staff td:nth-child(6) { width: 110px; }
 
-.data-table--staff th:nth-child(5),
-.data-table--staff td:nth-child(5) { width: 80px; }
-
-/* 6列目（メモ）: 残り幅を自動で使う */
-
-.data-table--staff th:nth-child(7),
-.data-table--staff td:nth-child(7) { width: 130px; }
-
-.data-table--staff th:nth-child(8),
-.data-table--staff td:nth-child(8) { width: 110px; }
+/* 優先現場：複数ある場合に自然な折り返しを許容 */
+.preferred-sites-cell {
+  white-space: normal;
+  word-break: break-all;
+}
 
 .name-cell {
   white-space: nowrap;
@@ -576,6 +571,67 @@ h2 {
   .action-cell {
     flex-direction: column;
     gap: 4px;
+  }
+}
+
+/* ===== スタッフ一覧：モバイルカード表示 ===== */
+@media (max-width: 600px) {
+  .data-table--staff thead {
+    display: none;
+  }
+
+  .data-table--staff,
+  .data-table--staff tbody,
+  .data-table--staff tr {
+    display: block;
+    width: 100%;
+  }
+
+  .data-table--staff tr {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  }
+
+  .data-table--staff tr:last-child td {
+    border-bottom: none;
+  }
+
+  .data-table--staff td {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 4px 0;
+    border: none;
+    font-size: 13px;
+    width: auto !important;
+    white-space: normal !important;
+  }
+
+  .data-table--staff td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    font-size: 11px;
+    color: #6b7280;
+    min-width: 52px;
+    flex-shrink: 0;
+    padding-top: 2px;
+  }
+
+  .data-table--staff td.action-cell {
+    flex-direction: row;
+    justify-content: flex-start;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #f0f0f0;
+    gap: 6px;
+  }
+
+  .data-table--staff td.action-cell::before {
+    display: none;
   }
 }
 

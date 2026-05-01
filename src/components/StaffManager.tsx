@@ -22,11 +22,7 @@ function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
 
 function formatPreferredSites(sites: string[]): string {
   if (sites.length === 0) return '—';
-  const MAX = 2;
-  const shown = sites.slice(0, MAX);
-  return sites.length <= MAX
-    ? shown.join('、')
-    : `${shown.join('、')} +${sites.length - MAX}件`;
+  return sites.join('、');
 }
 
 function toYearMonth(date: Date): string {
@@ -342,7 +338,7 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
               <tbody>
                 {staff.map((s) => (
                   <tr key={s.id}>
-                    <td>
+                    <td data-label="No.">
                       <input
                         className="staffno-input"
                         type="text"
@@ -355,10 +351,10 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
                         }}
                       />
                     </td>
-                    <td className="name-cell">{s.name}</td>
-                    <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
-                    <td>{s.memo || '—'}</td>
-                    <td>{formatPreferredSites(s.preferredWorkSites)}</td>
+                    <td data-label="名前" className="name-cell">{s.name}</td>
+                    <td data-label="希望休">{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
+                    <td data-label="メモ">{s.memo || '—'}</td>
+                    <td data-label="優先現場" className="preferred-sites-cell">{formatPreferredSites(s.preferredWorkSites)}</td>
                     <td className="action-cell">
                       <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
                         編集
