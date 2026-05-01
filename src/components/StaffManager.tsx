@@ -22,11 +22,7 @@ function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
 
 function formatPreferredSites(sites: string[]): string {
   if (sites.length === 0) return '—';
-  const MAX = 2;
-  const shown = sites.slice(0, MAX);
-  return sites.length <= MAX
-    ? shown.join('、')
-    : `${shown.join('、')} +${sites.length - MAX}件`;
+  return sites.join('、');
 }
 
 function toYearMonth(date: Date): string {
@@ -327,7 +323,9 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
         {staff.length === 0 ? (
           <p className="empty-msg">スタッフが登録されていません</p>
         ) : (
-          <div className="table-wrapper">
+          <>
+          {/* PC：テーブル表示 */}
+          <div className="table-wrapper staff-table-wrapper">
             <table className="data-table data-table--staff">
               <thead>
                 <tr>
@@ -358,7 +356,7 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
                     <td className="name-cell">{s.name}</td>
                     <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
                     <td>{s.memo || '—'}</td>
-                    <td>{formatPreferredSites(s.preferredWorkSites)}</td>
+                    <td className="preferred-sites-cell">{formatPreferredSites(s.preferredWorkSites)}</td>
                     <td className="action-cell">
                       <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
                         編集
@@ -375,6 +373,67 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
               </tbody>
             </table>
           </div>
+
+          {/* モバイル：カード表示 */}
+          <div className="staff-card-list">
+            {staff.map((s) => {
+              const daysOffText = formatDaysOff(s.requestedDaysOff, currentMonth);
+              const hasDaysOff  = daysOffText !== '—';
+              return (
+                <div key={s.id} className="staff-card">
+                  {/* ── ヘッダー（名前左・No右）── */}
+                  <div className="staff-card__header">
+                    <span className="staff-card__name">{s.name}</span>
+                    <span className="staff-card__no">{s.staffNo || '—'}</span>
+                  </div>
+
+                  {/* ── 本文 ── */}
+                  <div className="staff-card__body">
+                    {/* 希望休：あり→赤、なし→グレー */}
+                    <div className={`staff-card__daysoff${hasDaysOff ? ' staff-card__daysoff--has' : ''}`}>
+                      <span className="staff-card__label">希望休</span>
+                      <span className="staff-card__daysoff-value">
+                        {hasDaysOff ? daysOffText : '希望休なし'}
+                      </span>
+                    </div>
+
+                    {/* 優先現場：チップ形式 */}
+                    <div className="staff-card__row">
+                      <span className="staff-card__label">優先現場</span>
+                      <div className="staff-card__chips">
+                        {s.preferredWorkSites.length === 0 ? (
+                          <span className="staff-card__value">—</span>
+                        ) : (
+                          s.preferredWorkSites.map((site) => (
+                            <span key={site} className="staff-card__chip">{site}</span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* メモ：空なら非表示 */}
+                    {s.memo && (
+                      <div className="staff-card__row staff-card__row--memo">
+                        <span className="staff-card__label">メモ</span>
+                        <span className="staff-card__value staff-card__value--memo">{s.memo}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ── アクション（右寄せ）── */}
+                  <div className="staff-card__actions">
+                    <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
+                      編集
+                    </button>
+                    <button className="btn btn--sm btn--danger" onClick={() => handleDelete(s.id)}>
+                      削除
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          </>
         )}
       </div>
     </div>
