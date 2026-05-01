@@ -12,7 +12,7 @@ export function generateShifts(
   staff: Staff[],
   workSites: WorkSite[]
 ): ShiftAssignment[] {
-  const sortedSites = [...workSites].sort((a, b) => a.date.localeCompare(b.date));
+  const sortedSites = [...workSites.filter((s) => !s.isPlaceholder)].sort((a, b) => a.date.localeCompare(b.date));
 
   // 各スタッフの割当日数を追跡
   const workDayCount: Record<string, number> = {};
