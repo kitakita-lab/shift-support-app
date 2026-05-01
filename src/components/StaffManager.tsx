@@ -2,8 +2,6 @@ import { useState, useEffect } from 'react';
 import { Staff, WorkSite } from '../types';
 import { sortStaff, nextStaffNo } from '../utils/staffUtils';
 
-const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日'];
-
 interface Props {
   staff: Staff[];
   workSites: WorkSite[];
@@ -14,7 +12,7 @@ function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
   return {
     staffNo: nextStaffNo(staff),
     name: '',
-    availableWeekdays: [...WEEKDAYS],
+    availableWeekdays: [],
     requestedDaysOff: [],
     maxWorkDays: 20,
     memo: '',
@@ -173,15 +171,6 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
     if (!editId) setForm((prev) => ({ ...prev, staffNo: nextStaffNo(staff) }));
   }, [staff, editId]);
 
-  function handleWeekdayToggle(day: string) {
-    setForm((prev) => ({
-      ...prev,
-      availableWeekdays: prev.availableWeekdays.includes(day)
-        ? prev.availableWeekdays.filter((d) => d !== day)
-        : [...prev.availableWeekdays, day],
-    }));
-  }
-
   function togglePreferredSite(name: string) {
     setForm((prev) => ({
       ...prev,
@@ -275,34 +264,6 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
           </div>
 
           <div className="form-row">
-            <label className="form-label">勤務可能曜日</label>
-            <div className="weekday-group">
-              {WEEKDAYS.map((day) => (
-                <label key={day} className="weekday-label">
-                  <input
-                    type="checkbox"
-                    checked={form.availableWeekdays.includes(day)}
-                    onChange={() => handleWeekdayToggle(day)}
-                  />
-                  {day}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="form-row">
-            <label className="form-label">最大勤務日数</label>
-            <input
-              className="form-input form-input--short"
-              type="number"
-              min={1}
-              max={31}
-              value={form.maxWorkDays}
-              onChange={(e) => setForm({ ...form, maxWorkDays: Number(e.target.value) })}
-            />
-          </div>
-
-          <div className="form-row">
             <label className="form-label">メモ</label>
             <input
               className="form-input"
@@ -372,9 +333,7 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
                 <tr>
                   <th>No.</th>
                   <th>名前</th>
-                  <th>勤務可能曜日</th>
                   <th>希望休（{monthLabel}）</th>
-                  <th>最大日数</th>
                   <th>メモ</th>
                   <th>優先現場</th>
                   <th></th>
@@ -397,9 +356,7 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
                       />
                     </td>
                     <td className="name-cell">{s.name}</td>
-                    <td>{s.availableWeekdays.join('・')}</td>
                     <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
-                    <td>{s.maxWorkDays}日</td>
                     <td>{s.memo || '—'}</td>
                     <td>{formatPreferredSites(s.preferredWorkSites)}</td>
                     <td className="action-cell">
