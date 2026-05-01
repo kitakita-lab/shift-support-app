@@ -376,48 +376,62 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
 
           {/* モバイル：カード表示 */}
           <div className="staff-card-list">
-            {staff.map((s) => (
-              <div key={s.id} className="staff-card">
-                <div className="staff-card__header">
-                  <input
-                    className="staffno-input"
-                    type="text"
-                    value={editingNos[s.id] ?? s.staffNo}
-                    placeholder="—"
-                    onChange={(e) => handleStaffNoChange(s.id, e.target.value)}
-                    onBlur={() => handleStaffNoBlur(s.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                    }}
-                  />
-                  <span className="staff-card__name">{s.name}</span>
-                </div>
-                <div className="staff-card__body">
-                  <div className="staff-card__row">
-                    <span className="staff-card__label">希望休</span>
-                    <span className="staff-card__value">{formatDaysOff(s.requestedDaysOff, currentMonth)}</span>
+            {staff.map((s) => {
+              const daysOffText = formatDaysOff(s.requestedDaysOff, currentMonth);
+              const hasDaysOff  = daysOffText !== '—';
+              return (
+                <div key={s.id} className="staff-card">
+                  {/* ── ヘッダー（名前左・No右）── */}
+                  <div className="staff-card__header">
+                    <span className="staff-card__name">{s.name}</span>
+                    <span className="staff-card__no">{s.staffNo || '—'}</span>
                   </div>
-                  <div className="staff-card__row">
-                    <span className="staff-card__label">優先現場</span>
-                    <span className="staff-card__value staff-card__value--clamp">{formatPreferredSites(s.preferredWorkSites)}</span>
-                  </div>
-                  {s.memo && (
-                    <div className="staff-card__row staff-card__row--memo">
-                      <span className="staff-card__label">メモ</span>
-                      <span className="staff-card__value">{s.memo}</span>
+
+                  {/* ── 本文 ── */}
+                  <div className="staff-card__body">
+                    {/* 希望休：あり→赤、なし→グレー */}
+                    <div className={`staff-card__daysoff${hasDaysOff ? ' staff-card__daysoff--has' : ''}`}>
+                      <span className="staff-card__label">希望休</span>
+                      <span className="staff-card__daysoff-value">
+                        {hasDaysOff ? daysOffText : '希望休なし'}
+                      </span>
                     </div>
-                  )}
+
+                    {/* 優先現場：チップ形式 */}
+                    <div className="staff-card__row">
+                      <span className="staff-card__label">優先現場</span>
+                      <div className="staff-card__chips">
+                        {s.preferredWorkSites.length === 0 ? (
+                          <span className="staff-card__value">—</span>
+                        ) : (
+                          s.preferredWorkSites.map((site) => (
+                            <span key={site} className="staff-card__chip">{site}</span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* メモ：空なら非表示 */}
+                    {s.memo && (
+                      <div className="staff-card__row staff-card__row--memo">
+                        <span className="staff-card__label">メモ</span>
+                        <span className="staff-card__value staff-card__value--memo">{s.memo}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ── アクション（右寄せ）── */}
+                  <div className="staff-card__actions">
+                    <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
+                      編集
+                    </button>
+                    <button className="btn btn--sm btn--danger" onClick={() => handleDelete(s.id)}>
+                      削除
+                    </button>
+                  </div>
                 </div>
-                <div className="staff-card__actions">
-                  <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
-                    編集
-                  </button>
-                  <button className="btn btn--sm btn--danger" onClick={() => handleDelete(s.id)}>
-                    削除
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           </>
         )}
