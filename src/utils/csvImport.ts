@@ -134,10 +134,30 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
     .split(/\r?\n/)
     .filter((l) => l.trim() !== '');
 
-  const valid: WorkSite[] = [];
   const errors: ParseError[] = [];
 
-  const start = lines[0]?.toLowerCase().startsWith('date') ? 1 : 0;
+  // ── ヘッダー行からカラムインデックスを検出 ──────────────────
+  // 将来の Bubble 出力列（demandId, clientName, siteId 等）が来ても壊れない
+  const firstLine  = lines[0] ?? '';
+  const headerLow  = parseCSVLine(firstLine).map((f) => f.trim().toLowerCase());
+  const hasHeader  = headerLow.includes('date') || headerLow.includes('sitename');
+
+  const colIdx = (name: string, fallback: number): number => {
+    const i = headerLow.indexOf(name);
+    return i >= 0 ? i : fallback;
+  };
+
+  const dateIdx      = colIdx('date',           0);
+  const siteNameIdx  = colIdx('sitename',        1);
+  const startTimeIdx = colIdx('starttime',       2);
+  const endTimeIdx   = colIdx('endtime',         3);
+  const reqIdx       = colIdx('requiredpeople',  4);
+  const memoIdx      = colIdx('memo',            5);
+
+  const start = hasHeader ? 1 : 0;
+
+  // ── 行ごとにパース（生データ収集）───────────────────────────
+  const rawRows: WorkSite[] = [];
 
   for (let i = start; i < lines.length; i++) {
     const rowNum = i + 1;
@@ -148,11 +168,12 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
       continue;
     }
 
-    const [dateRaw, siteNameRaw, startTimeRaw, endTimeRaw, reqRaw, memoRaw = ''] = fields;
-    const date = dateRaw.trim();
-    const siteName = siteNameRaw.trim();
-    const startTime = startTimeRaw.trim();
-    const endTime = endTimeRaw.trim();
+    const date      = (fields[dateIdx]      ?? '').trim();
+    const siteName  = (fields[siteNameIdx]  ?? '').trim();
+    const startTime = (fields[startTimeIdx] ?? '').trim();
+    const endTime   = (fields[endTimeIdx]   ?? '').trim();
+    const reqRaw    = (fields[reqIdx]       ?? '').trim();
+    const memoRaw   = (fields[memoIdx]      ?? '').trim();
 
     if (!isValidDate(date)) {
       errors.push({ row: rowNum, message: `日付が不正: "${date}"（YYYY-MM-DD形式）` });
@@ -171,22 +192,46 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
       continue;
     }
 
-    const requiredPeople = parseInt(reqRaw.trim(), 10);
+    const requiredPeople = parseInt(reqRaw, 10);
     if (isNaN(requiredPeople) || requiredPeople < 1) {
-      errors.push({ row: rowNum, message: `必要人数が不正: "${reqRaw.trim()}"` });
+      errors.push({ row: rowNum, message: `必要人数が不正: "${reqRaw}"` });
       continue;
     }
 
-    valid.push({
+    rawRows.push({
       id: crypto.randomUUID(),
       date,
       siteName,
       startTime,
       endTime,
       requiredPeople,
-      memo: memoRaw.trim(),
+      memo: memoRaw,
     });
   }
+
+  // ── 日別需要モデル：同一の date+siteName+startTime+endTime を集約 ──
+  // requiredPeople を加算、memo は非空・重複なしでカンマ結合
+  const aggregateMap = new Map<string, WorkSite>();
+  for (const row of rawRows) {
+    const key = `${row.date}_${row.siteName}_${row.startTime}_${row.endTime}`;
+    const hit = aggregateMap.get(key);
+    if (hit) {
+      hit.requiredPeople += row.requiredPeople;
+      if (row.memo) {
+        const parts = hit.memo ? hit.memo.split(',').map((s) => s.trim()) : [];
+        if (!parts.includes(row.memo)) {
+          parts.push(row.memo);
+          hit.memo = parts.join(', ');
+        }
+      }
+    } else {
+      aggregateMap.set(key, { ...row });
+    }
+  }
+
+  const valid = [...aggregateMap.values()].sort(
+    (a, b) => a.date.localeCompare(b.date) || a.siteName.localeCompare(b.siteName)
+  );
 
   return { valid, errors };
 }
