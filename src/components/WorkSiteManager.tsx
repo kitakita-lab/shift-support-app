@@ -878,15 +878,25 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
               const siteName         = sites[0]?.siteName ?? '';
               const isVenueOpen      = expandedVenues.has(groupId);
 
+              const venueSummary = activeSites.length === 0
+                ? '会期なし'
+                : (() => {
+                    const totalDays = displaySessions.reduce((sum, s) => sum + s.dateCount, 0);
+                    const maxPeople = Math.max(...displaySessions.map((s) =>
+                      s.dailyPeople.length > 0
+                        ? Math.max(...s.dailyPeople.map((d) => d.requiredPeople))
+                        : s.requiredPeople
+                    ));
+                    return `会期${displaySessions.length}件 / 合計${totalDays}日 / 最大${maxPeople}人`;
+                  })();
+
               return (
                 <div key={groupId} className="site-card">
                   <div className="site-header">
                     <button className="site-header__main" onClick={() => toggleVenue(groupId)}>
                       <div className="site-header__info">
                         <div className="site-title">{siteName}</div>
-                        <div className="site-meta">
-                          {activeSites.length === 0 ? '会期なし' : `会期${displaySessions.length}件`}
-                        </div>
+                        <div className="site-meta">{venueSummary}</div>
                       </div>
                       <span className="venue-chevron">{isVenueOpen ? '▲' : '▼'}</span>
                     </button>
