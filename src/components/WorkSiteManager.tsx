@@ -878,17 +878,17 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
               const siteName         = sites[0]?.siteName ?? '';
               const isVenueOpen      = expandedVenues.has(groupId);
 
-              const venueSummary = activeSites.length === 0
-                ? '会期なし'
-                : (() => {
+              const venueStats = activeSites.length > 0
+                ? (() => {
                     const totalDays = displaySessions.reduce((sum, s) => sum + s.dateCount, 0);
                     const maxPeople = Math.max(...displaySessions.map((s) =>
                       s.dailyPeople.length > 0
                         ? Math.max(...s.dailyPeople.map((d) => d.requiredPeople))
                         : s.requiredPeople
                     ));
-                    return `会期${displaySessions.length}件 / 合計${totalDays}日 / 最大${maxPeople}人`;
-                  })();
+                    return { totalDays, maxPeople, sessionCount: displaySessions.length };
+                  })()
+                : null;
 
               return (
                 <div key={groupId} className="site-card">
@@ -896,7 +896,18 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                     <button className="site-header__main" onClick={() => toggleVenue(groupId)}>
                       <div className="site-header__info">
                         <div className="site-title">{siteName}</div>
-                        <div className="site-meta">{venueSummary}</div>
+                        <div className="site-meta">
+                          {venueStats === null ? (
+                            <span className="site-summary__unregistered">未登録</span>
+                          ) : (
+                            <>
+                              <span className={`site-summary__max site-summary__max--${venueStats.maxPeople >= 4 ? 'high' : venueStats.maxPeople >= 3 ? 'medium' : 'normal'}`}>
+                                最大{venueStats.maxPeople}人
+                              </span>
+                              <span className="site-summary__sub">（{venueStats.totalDays}日 / {venueStats.sessionCount}件）</span>
+                            </>
+                          )}
+                        </div>
                       </div>
                       <span className="venue-chevron">{isVenueOpen ? '▲' : '▼'}</span>
                     </button>

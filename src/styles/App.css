@@ -909,6 +909,30 @@ h2 {
   font-size: 12px;
   color: #6b7280;
   margin-top: 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+.site-summary__max {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.site-summary__max--high   { color: #dc2626; }
+.site-summary__max--medium { color: #ea580c; }
+.site-summary__max--normal { color: #6b7280; }
+
+.site-summary__sub {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.site-summary__unregistered {
+  font-size: 12px;
+  color: #9ca3af;
+  font-style: italic;
 }
 
 .site-actions {
