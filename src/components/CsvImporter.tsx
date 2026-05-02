@@ -254,11 +254,19 @@ export default function CsvImporter({
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const groupLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    const withGroup = sitePreview.valid.map((s) => ({ ...s, groupId, groupLabel }));
+    // 集約済みの各 WorkSite に一意の sessionId を付与。
+    // sessionId がないと WorkSiteManager が fallback のギャップ検出を使い
+    // 同一日が別会期として表示されるため必須。
+    const withGroup = sitePreview.valid.map((s) => ({
+      ...s,
+      groupId,
+      groupLabel,
+      sessionId: crypto.randomUUID(),
+    }));
     const count = withGroup.length;
     onImportSites(withGroup);
     clearSitePreview();
-    setSiteSuccess(`${count}件の現場を追加しました（合計 ${currentSiteCount + count}件）`);
+    setSiteSuccess(`${count}会期の現場を追加しました（合計 ${currentSiteCount + count}件）`);
     setTimeout(() => setSiteSuccess(''), 5000);
   }
 
@@ -422,7 +430,7 @@ export default function CsvImporter({
             <ErrorList errors={sitePreview.errors} />
             {sitePreview.valid.length > 0 ? (
               <>
-                <ImportCount count={sitePreview.valid.length} />
+                <ImportCount count={sitePreview.valid.length} suffix="会期（集約済み）を取り込みます" />
                 <div className="table-wrapper">
                   <table className="data-table">
                     <thead>
@@ -451,7 +459,7 @@ export default function CsvImporter({
                 </div>
                 <div className="import-actions">
                   <button className="btn btn--primary" onClick={handleImportSites}>
-                    {sitePreview.valid.length}件を追加する
+                    {sitePreview.valid.length}会期を追加する
                   </button>
                   <button className="btn btn--secondary" onClick={clearSitePreview}>
                     キャンセル
