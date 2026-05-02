@@ -44,6 +44,32 @@ function formatDateWithDow(dateStr: string): string {
   return `${mm}/${dd}（${dow}）`;
 }
 
+// 連続する同一人数の日をまとめて区間配列に変換する
+function groupDailyRows(
+  rows: { date: string; requiredPeople: number }[]
+): { startDate: string; endDate: string; requiredPeople: number }[] {
+  if (rows.length === 0) return [];
+  const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date));
+  const groups: { startDate: string; endDate: string; requiredPeople: number }[] = [];
+  let start = sorted[0];
+  let end   = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    const cur     = sorted[i];
+    const dayDiff = Math.round(
+      (parseDateLocal(cur.date).getTime() - parseDateLocal(end.date).getTime()) / 86400000
+    );
+    if (cur.requiredPeople === start.requiredPeople && dayDiff === 1) {
+      end = cur;
+    } else {
+      groups.push({ startDate: start.date, endDate: end.date, requiredPeople: start.requiredPeople });
+      start = cur;
+      end   = cur;
+    }
+  }
+  groups.push({ startDate: start.date, endDate: end.date, requiredPeople: start.requiredPeople });
+  return groups;
+}
+
 // ─── CSV 取込ヘルパー ─────────────────────────────────────────
 
 // 連続日 + 同一時間帯（requiredPeople は無視）でグルーピングしたときの会期数・現場数を返す
@@ -913,12 +939,17 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                 </div>
                                 {isOpen && (
                                   <div className="session-daily">
-                                    {dailyRows.map((row) => (
-                                      <div key={row.date} className="daily-row">
-                                        <span className="daily-row__date">{formatDateWithDow(row.date)}</span>
-                                        <span className="daily-row__people">{row.requiredPeople}人</span>
-                                      </div>
-                                    ))}
+                                    {groupDailyRows(dailyRows).map((group) => {
+                                      const label = group.startDate === group.endDate
+                                        ? formatDateWithDow(group.startDate)
+                                        : `${formatDateWithDow(group.startDate)}〜${formatDateWithDow(group.endDate)}`;
+                                      return (
+                                        <div key={group.startDate} className="daily-row">
+                                          <span className="daily-row__date">{label}</span>
+                                          <span className="daily-row__people">{group.requiredPeople}人</span>
+                                        </div>
+                                      );
+                                    })}
                                     {session.memo && (
                                       <div className="daily-row daily-row--memo">
                                         <span className="daily-row__date">メモ</span>
