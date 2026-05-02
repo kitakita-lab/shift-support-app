@@ -1615,3 +1615,118 @@ h2 {
   color: #6b7280;
   white-space: nowrap;
 }
+
+/* ===== 現場リストヘッダー（CSV取込ボタン付き）===== */
+.site-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 8px;
+  margin-bottom: 16px;
+}
+
+.site-list-header h3 {
+  font-size: 16px;
+  color: #333;
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* ===== 日別必要人数リスト ===== */
+.daily-people-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.daily-people-row {
+  font-size: 13px;
+  color: #374151;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== モーダル ===== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.modal {
+  background: white;
+  border-radius: 16px 16px 0 0;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.15);
+}
+
+@media (min-width: 600px) {
+  .modal-overlay {
+    align-items: center;
+    padding: 20px;
+  }
+
+  .modal {
+    border-radius: 12px;
+    max-width: 480px;
+    max-height: 80vh;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  }
+}
+
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}
+
+.modal__header h3 {
+  font-size: 16px;
+  color: #111827;
+  margin: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.modal__close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: #9ca3af;
+  padding: 4px 8px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.modal__close:hover {
+  color: #374151;
+  background: #f3f4f6;
+}
+
+.modal__body {
+  padding: 16px 20px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.modal__footer {
+  display: flex;
+  gap: 10px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}

@@ -93,7 +93,7 @@ function parseSiteDate(s: string): Date {
   return new Date(y, m - 1, d);
 }
 
-// 連続日 + 同一設定でグルーピングしたときの会期数・現場数を返す（プレビュー表示用）
+// 連続日 + 同一時間帯でグルーピングしたときの会期数・現場数を返す（プレビュー表示用）
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteName = new Map<string, WorkSite[]>();
   for (const site of sites) {
@@ -109,8 +109,7 @@ function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCo
       const cur = sorted[i];
       const sameSettings =
         cur.startTime === prev.startTime &&
-        cur.endTime   === prev.endTime   &&
-        cur.requiredPeople === prev.requiredPeople;
+        cur.endTime   === prev.endTime;
       const dayDiff = Math.round(
         (parseSiteDate(cur.date).getTime() - parseSiteDate(prev.date).getTime()) / 86400000
       );
@@ -312,7 +311,7 @@ export default function CsvImporter({
       groupIdBySiteName.set(siteName, groupId);
       const sorted = [...siteGroup].sort((a, b) => a.date.localeCompare(b.date));
 
-      // 連続日 + 同一設定 → 同じ sessionId にまとめる
+      // 連続日 + 同一時間帯 → 同じ sessionId にまとめる（requiredPeople は無視）
       let currentSessionId = crypto.randomUUID();
       sessionCount++;
       let prev = sorted[0];
@@ -327,8 +326,7 @@ export default function CsvImporter({
         const cur = sorted[i];
         const sameSettings =
           cur.startTime === prev.startTime &&
-          cur.endTime   === prev.endTime   &&
-          cur.requiredPeople === prev.requiredPeople;
+          cur.endTime   === prev.endTime;
         const dayDiff = Math.round(
           (parseSiteDate(cur.date).getTime() - parseSiteDate(prev.date).getTime()) / 86400000
         );

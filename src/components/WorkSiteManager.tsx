@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useRef, useState, useMemo } from 'react';
 import { WorkSite } from '../types';
+import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
@@ -9,7 +10,6 @@ const createId = (): string =>
     : `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 // YYYY-MM-DD を必ずローカル日付として解釈する。
-// YYYY-MM-DD と YYYY/MM/DD の両方を受け付け、必ずローカル日付として構築する。
 // new Date("YYYY-MM-DD") は UTC midnight として扱われ timezone で1日ずれるため使用禁止。
 function parseDateLocal(s: string): Date {
   const [y, m, d] = s.replace(/\//g, '-').split('-').map(Number);
@@ -34,6 +34,101 @@ function calcDayCount(startDate: string, endDate: string): number {
   const start = parseDateLocal(startDate);
   const end   = parseDateLocal(endDate);
   return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+}
+
+// ─── CSV 取込ヘルパー ─────────────────────────────────────────
+
+// 連続日 + 同一時間帯（requiredPeople は無視）でグルーピングしたときの会期数・現場数を返す
+function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
+  const bySiteName = new Map<string, WorkSite[]>();
+  for (const site of sites) {
+    if (!bySiteName.has(site.siteName)) bySiteName.set(site.siteName, []);
+    bySiteName.get(site.siteName)!.push(site);
+  }
+  let sessionCount = 0;
+  for (const [, group] of bySiteName) {
+    const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
+    sessionCount++;
+    let prev = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+      const cur = sorted[i];
+      const sameSettings = cur.startTime === prev.startTime && cur.endTime === prev.endTime;
+      const dayDiff = Math.round(
+        (parseDateLocal(cur.date).getTime() - parseDateLocal(prev.date).getTime()) / 86400000
+      );
+      if (!sameSettings || dayDiff !== 1) sessionCount++;
+      prev = cur;
+    }
+  }
+  return { sessionCount, venueCount: bySiteName.size };
+}
+
+// CSV パース済みデータに groupId / sessionId を付与して WorkSite[] を返す
+function buildCsvImportGroups(sites: WorkSite[]): WorkSite[] {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+  const bySiteName = new Map<string, WorkSite[]>();
+  for (const site of sites) {
+    if (!bySiteName.has(site.siteName)) bySiteName.set(site.siteName, []);
+    bySiteName.get(site.siteName)!.push(site);
+  }
+
+  const result: WorkSite[] = [];
+  for (const [siteName, siteGroup] of bySiteName) {
+    const groupId = createId();
+    const sorted = [...siteGroup].sort((a, b) => a.date.localeCompare(b.date));
+    let currentSessionId = createId();
+    let prev = sorted[0];
+    result.push({ ...prev, groupId, groupLabel: `${siteName}：${importLabel}`, sessionId: currentSessionId });
+    for (let i = 1; i < sorted.length; i++) {
+      const cur = sorted[i];
+      const sameSettings = cur.startTime === prev.startTime && cur.endTime === prev.endTime;
+      const dayDiff = Math.round(
+        (parseDateLocal(cur.date).getTime() - parseDateLocal(prev.date).getTime()) / 86400000
+      );
+      if (!sameSettings || dayDiff !== 1) {
+        currentSessionId = createId();
+      }
+      result.push({ ...cur, groupId, groupLabel: `${siteName}：${importLabel}`, sessionId: currentSessionId });
+      prev = cur;
+    }
+  }
+  return result;
+}
+
+// 日別必要人数を連続同一人数でまとめてテキスト行の配列にする
+function compactDailyPeople(dailyPeople: { date: string; requiredPeople: number }[]): string[] {
+  if (dailyPeople.length === 0) return [];
+  const sorted = [...dailyPeople].sort((a, b) => a.date.localeCompare(b.date));
+  const fmt = (d: string) => d.slice(5).replace('-', '/');
+  const result: string[] = [];
+  let start = sorted[0];
+  let end   = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    const cur = sorted[i];
+    const dayDiff = Math.round(
+      (parseDateLocal(cur.date).getTime() - parseDateLocal(end.date).getTime()) / 86400000
+    );
+    if (cur.requiredPeople === start.requiredPeople && dayDiff === 1) {
+      end = cur;
+    } else {
+      result.push(
+        start.date === end.date
+          ? `${fmt(start.date)}：${start.requiredPeople}人`
+          : `${fmt(start.date)}〜${fmt(end.date)}：${start.requiredPeople}人`
+      );
+      start = cur;
+      end   = cur;
+    }
+  }
+  result.push(
+    start.date === end.date
+      ? `${fmt(start.date)}：${start.requiredPeople}人`
+      : `${fmt(start.date)}〜${fmt(end.date)}：${start.requiredPeople}人`
+  );
+  return result;
 }
 
 // ─── SessionForm (会期) ────────────────────────────────────
@@ -190,7 +285,9 @@ interface DisplaySession {
   endDate: string;
   startTime: string;
   endTime: string;
-  requiredPeople: number;
+  requiredPeople: number;      // 最大値（isUniformPeople が true のときの表示値）
+  isUniformPeople: boolean;    // 全日同一人数なら true
+  dailyPeople: { date: string; requiredPeople: number }[];  // 日別必要人数
   memo: string;
   dateCount: number;
 }
@@ -202,7 +299,6 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
   type Proto = Omit<DisplaySession, 'sessionNo'>;
 
   // ── Phase 1: sessionId ごとにグルーピング ──────────────────────
-  // sessionId なしの場合は 1 サイト = 1 仮セッション
   const phase1: Proto[] = [];
   const hasSessionIds = active.some((s) => s.sessionId);
 
@@ -215,29 +311,36 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
     }
     for (const [key, group] of bySession) {
       const g = [...group].sort((a, b) => a.date.localeCompare(b.date));
+      const dailyPeople = g.map((s) => ({ date: s.date, requiredPeople: s.requiredPeople }));
+      const maxPeople   = Math.max(...g.map((s) => s.requiredPeople));
+      const isUniform   = g.every((s) => s.requiredPeople === g[0].requiredPeople);
       phase1.push({
-        sessionId:      g[0].sessionId ?? key,
-        startDate:      g[0].date,
-        endDate:        g[g.length - 1].date,
-        startTime:      g[0].startTime,
-        endTime:        g[0].endTime,
-        requiredPeople: Math.max(...g.map((s) => s.requiredPeople)),
-        memo:           g[0].memo,
-        dateCount:      g.length,
+        sessionId:       g[0].sessionId ?? key,
+        startDate:       g[0].date,
+        endDate:         g[g.length - 1].date,
+        startTime:       g[0].startTime,
+        endTime:         g[0].endTime,
+        requiredPeople:  maxPeople,
+        isUniformPeople: isUniform,
+        dailyPeople,
+        memo:            g[0].memo,
+        dateCount:       g.length,
       });
     }
   } else {
     const sorted = [...active].sort((a, b) => a.date.localeCompare(b.date));
     for (const site of sorted) {
       phase1.push({
-        sessionId:      `__nosession_${site.id}`,
-        startDate:      site.date,
-        endDate:        site.date,
-        startTime:      site.startTime,
-        endTime:        site.endTime,
-        requiredPeople: site.requiredPeople,
-        memo:           site.memo,
-        dateCount:      1,
+        sessionId:       `__nosession_${site.id}`,
+        startDate:       site.date,
+        endDate:         site.date,
+        startTime:       site.startTime,
+        endTime:         site.endTime,
+        requiredPeople:  site.requiredPeople,
+        isUniformPeople: true,
+        dailyPeople:     [{ date: site.date, requiredPeople: site.requiredPeople }],
+        memo:            site.memo,
+        dateCount:       1,
       });
     }
   }
@@ -245,33 +348,45 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
   phase1.sort((a, b) => a.startDate.localeCompare(b.startDate));
 
   // ── Phase 2: 1日セッションを連続結合 ──────────────────────────
-  // 旧 CSV データ（date ごとに個別 sessionId）を連続日 + 同一設定でまとめる。
+  // 旧 CSV データ（date ごとに個別 sessionId）を連続日 + 同一時間帯でまとめる。
+  // requiredPeople が異なっても結合し、日別人数は dailyPeople に保持する。
   // dateCount > 1 の手動作成セッションはそのまま維持する。
   const raw: Proto[] = [];
   if (phase1.length === 0) return [];
 
-  let head = { ...phase1[0] };
-  let merging = head.dateCount === 1; // 1日セッションの連結中フラグ
+  // 結合後に dailyPeople から isUniformPeople / requiredPeople を再計算
+  const recompute = (s: Proto): Proto => {
+    const peoples = s.dailyPeople.map((d) => d.requiredPeople);
+    if (peoples.length === 0) return s;
+    return {
+      ...s,
+      requiredPeople:  Math.max(...peoples),
+      isUniformPeople: peoples.every((p) => p === peoples[0]),
+    };
+  };
+
+  let head    = { ...phase1[0] };
+  let merging = head.dateCount === 1;
 
   for (let i = 1; i < phase1.length; i++) {
     const next = phase1[i];
     const sameSettings =
-      head.startTime      === next.startTime &&
-      head.endTime        === next.endTime   &&
-      head.requiredPeople === next.requiredPeople;
+      head.startTime === next.startTime &&
+      head.endTime   === next.endTime;   // requiredPeople は無視して結合
     const dayDiff = Math.round(
       (parseDateLocal(next.startDate).getTime() - parseDateLocal(head.endDate).getTime()) / 86400000
     );
     if (merging && next.dateCount === 1 && sameSettings && dayDiff === 1) {
-      head.endDate   = next.endDate;
+      head.endDate     = next.endDate;
       head.dateCount++;
+      head.dailyPeople = [...head.dailyPeople, ...next.dailyPeople];
     } else {
-      raw.push(head);
+      raw.push(recompute(head));
       head    = { ...next };
       merging = next.dateCount === 1;
     }
   }
-  raw.push(head);
+  raw.push(recompute(head));
 
   return raw
     .sort((a, b) => a.startDate.localeCompare(b.startDate))
@@ -294,8 +409,14 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   const [successMsg, setSuccessMsg]   = useState('');
 
   // ── 会期エディタ・アコーディオン
-  const [sessionEditor,     setSessionEditor]     = useState<SessionEditorState | null>(null);
-  const [expandedSessions,  setExpandedSessions]  = useState<Set<string>>(new Set());
+  const [sessionEditor,    setSessionEditor]    = useState<SessionEditorState | null>(null);
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
+
+  // ── CSV 取込モーダル
+  const [csvModalOpen,      setCsvModalOpen]      = useState(false);
+  const [csvModalPreview,   setCsvModalPreview]   = useState<(SiteParseResult & { fileName: string }) | null>(null);
+  const [csvModalOverwrite, setCsvModalOverwrite] = useState(false);
+  const csvFileRef = useRef<HTMLInputElement>(null);
 
   // ── 登録プレビュー計算
   const previewCount = useMemo(() =>
@@ -307,6 +428,12 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   [newSessions]);
 
   const isReady = newSiteName.trim() !== '' && previewCount > 0 && !hasDateError;
+
+  // ── CSV モーダルプレビュー件数
+  const csvModalPreviewCounts = useMemo(
+    () => csvModalPreview ? countImportSessions(csvModalPreview.valid) : { sessionCount: 0, venueCount: 0 },
+    [csvModalPreview]
+  );
 
   // ── グループ化
   const { sortedGroups, ungroupedSites } = useMemo(() => {
@@ -476,7 +603,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
     const remaining = sessionEditor.isExistingGroup
       ? workSites.filter((s) => s.groupId !== sessionEditor.groupId)
       : workSites.filter((s) => !sessionEditor.sourceIds.includes(s.id));
-    onChange([...remaining, ...newSites]);
+    onChange([...remaining, newSites].flat());
     setSessionEditor(null);
   }
 
@@ -511,6 +638,36 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   function sessionPreviewCount(): number {
     if (!sessionEditor) return 0;
     return sessionEditor.sessions.reduce((sum, s) => sum + calcDayCount(s.startDate, s.endDate), 0);
+  }
+
+  // ── CSV 取込モーダル ────────────────────────────────────────
+
+  function handleModalFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = (ev.target?.result ?? '') as string;
+      setCsvModalPreview({ ...parseSiteCSV(text), fileName: file.name });
+    };
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  function handleModalImport() {
+    if (!csvModalPreview?.valid.length) return;
+    const groups = buildCsvImportGroups(csvModalPreview.valid);
+    const base = csvModalOverwrite
+      ? workSites.filter((s) => s.source !== 'csv')
+      : workSites;
+    onChange([...base, ...groups]);
+    closeCsvModal();
+  }
+
+  function closeCsvModal() {
+    setCsvModalOpen(false);
+    setCsvModalPreview(null);
+    setCsvModalOverwrite(false);
+    if (csvFileRef.current) csvFileRef.current.value = '';
   }
 
   // ── 会期フォーム共通 JSX（新規登録・編集で共用） ──────────────
@@ -678,7 +835,12 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
       {/* ── 登録済み現場一覧 ─────────────────────────── */}
       <div className="card">
-        <h3>登録済み現場 ({sortedGroups.length + ungroupedSites.length}件)</h3>
+        <div className="site-list-header">
+          <h3>登録済み現場 ({sortedGroups.length + ungroupedSites.length}件)</h3>
+          <button className="btn btn--secondary btn--sm" onClick={() => setCsvModalOpen(true)}>
+            CSV取込
+          </button>
+        </div>
 
         {sortedGroups.length === 0 && ungroupedSites.length === 0 ? (
           <p className="empty-msg">現場が登録されていません</p>
@@ -739,7 +901,9 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                 </span>
                                 <div className="session-summary__meta">
                                   <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
-                                  <span className="session-summary__people">👤 {session.requiredPeople}人</span>
+                                  <span className="session-summary__people">
+                                    👤 {session.isUniformPeople ? `${session.requiredPeople}人` : '日別'}
+                                  </span>
                                 </div>
                               </button>
                               <button
@@ -764,7 +928,15 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                 </div>
                                 <div className="session-detail__row">
                                   <span className="session-detail__label">必要人数</span>
-                                  <span>{session.requiredPeople}人</span>
+                                  {session.isUniformPeople ? (
+                                    <span>{session.requiredPeople}人</span>
+                                  ) : (
+                                    <div className="daily-people-list">
+                                      {compactDailyPeople(session.dailyPeople).map((line, i) => (
+                                        <div key={i} className="daily-people-row">{line}</div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                                 {session.memo && (
                                   <div className="session-detail__row">
@@ -836,6 +1008,91 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
           </div>
         )}
       </div>
+
+      {/* ── CSV 取込モーダル ──────────────────────────── */}
+      {csvModalOpen && (
+        <div className="modal-overlay" onClick={closeCsvModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal__header">
+              <h3>現場CSVを取り込む</h3>
+              <button className="modal__close" onClick={closeCsvModal}>✕</button>
+            </div>
+            <div className="modal__body">
+              <div className="import-upload">
+                <input
+                  type="file"
+                  accept=".csv"
+                  id="ws-modal-csv"
+                  ref={csvFileRef}
+                  className="file-input-hidden"
+                  onChange={handleModalFileChange}
+                />
+                <label htmlFor="ws-modal-csv" className="btn btn--secondary">
+                  CSVファイルを選択
+                </label>
+                {csvModalPreview && (
+                  <span className="import-current">{csvModalPreview.fileName}</span>
+                )}
+              </div>
+
+              <div className="import-overwrite">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={csvModalOverwrite}
+                    onChange={(e) => setCsvModalOverwrite(e.target.checked)}
+                  />
+                  上書きモード（既存CSVデータを置換）
+                </label>
+                {csvModalOverwrite && (
+                  <span className="import-overwrite__note">
+                    既存のCSV取込済み現場をすべて削除してから登録します
+                  </span>
+                )}
+              </div>
+
+              {csvModalPreview && (
+                <div className="import-preview">
+                  {csvModalPreview.errors.length > 0 && (
+                    <div className="import-errors">
+                      <div className="import-errors__title">
+                        エラー {csvModalPreview.errors.length}件（該当行はスキップ）
+                      </div>
+                      {csvModalPreview.errors.map((err, i) => (
+                        <div key={i} className="import-error-row">
+                          {err.row}行目：{err.message}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {csvModalPreview.valid.length > 0 ? (
+                    <div className="import-count">
+                      <span className="import-count__num">{csvModalPreviewCounts.venueCount}</span>
+                      現場・
+                      <span className="import-count__num">{csvModalPreviewCounts.sessionCount}</span>
+                      会期を取り込みます
+                    </div>
+                  ) : (
+                    <p className="import-no-valid">有効なデータがありません</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="modal__footer">
+              <button
+                className="btn btn--primary"
+                disabled={!csvModalPreview?.valid.length}
+                onClick={handleModalImport}
+              >
+                取り込む
+              </button>
+              <button className="btn btn--secondary" onClick={closeCsvModal}>
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
