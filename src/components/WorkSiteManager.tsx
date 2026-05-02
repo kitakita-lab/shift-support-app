@@ -36,12 +36,17 @@ function calcDayCount(startDate: string, endDate: string): number {
   return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
 }
 
+function formatDateShort(dateStr: string): string {
+  const d = parseDateLocal(dateStr);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${mm}/${dd}`;
+}
+
 function formatDateWithDow(dateStr: string): string {
   const d = parseDateLocal(dateStr);
   const dow = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${mm}/${dd}（${dow}）`;
+  return `${formatDateShort(dateStr)}（${dow}）`;
 }
 
 // 連続する同一人数の日をまとめて区間配列に変換する
@@ -410,9 +415,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   const [successMsg, setSuccessMsg]   = useState('');
 
   // ── 会期エディタ・アコーディオン
-  const [sessionEditor,    setSessionEditor]    = useState<SessionEditorState | null>(null);
-  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
-  const [expandedVenues,   setExpandedVenues]   = useState<Set<string>>(new Set());
+  const [sessionEditor,      setSessionEditor]      = useState<SessionEditorState | null>(null);
+  const [expandedSessions,   setExpandedSessions]   = useState<Set<string>>(new Set());
+  const [expandedVenues,     setExpandedVenues]     = useState<Set<string>>(new Set());
+  const [detailedDailyKeys,  setDetailedDailyKeys]  = useState<Set<string>>(new Set());
 
   // ── CSV 取込モーダル
   const [csvModalOpen,      setCsvModalOpen]      = useState(false);
@@ -563,6 +569,14 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
     setExpandedVenues((prev) => {
       const next = new Set(prev);
       next.has(groupId) ? next.delete(groupId) : next.add(groupId);
+      return next;
+    });
+  }
+
+  function toggleDailyDetail(key: string) {
+    setDetailedDailyKeys((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
   }
@@ -937,27 +951,39 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                     削除
                                   </button>
                                 </div>
-                                {isOpen && (
-                                  <div className="session-daily">
-                                    {groupDailyRows(dailyRows).map((group) => {
-                                      const label = group.startDate === group.endDate
-                                        ? formatDateWithDow(group.startDate)
-                                        : `${formatDateWithDow(group.startDate)}〜${formatDateWithDow(group.endDate)}`;
-                                      return (
-                                        <div key={group.startDate} className="daily-row">
-                                          <span className="daily-row__date">{label}</span>
-                                          <span className="daily-row__people">{group.requiredPeople}人</span>
-                                        </div>
-                                      );
-                                    })}
-                                    {session.memo && (
-                                      <div className="daily-row daily-row--memo">
-                                        <span className="daily-row__date">メモ</span>
-                                        <span className="daily-row__people">{session.memo}</span>
+                                {isOpen && (() => {
+                                  const isDetailed = detailedDailyKeys.has(key);
+                                  const fmt = isDetailed ? formatDateWithDow : formatDateShort;
+                                  return (
+                                    <div className="session-daily">
+                                      <div className="session-daily__header">
+                                        <button
+                                          className="daily-toggle"
+                                          onClick={() => toggleDailyDetail(key)}
+                                        >
+                                          {isDetailed ? '曜日を隠す' : '曜日を表示'}
+                                        </button>
                                       </div>
-                                    )}
-                                  </div>
-                                )}
+                                      {groupDailyRows(dailyRows).map((group) => {
+                                        const label = group.startDate === group.endDate
+                                          ? fmt(group.startDate)
+                                          : `${fmt(group.startDate)}〜${fmt(group.endDate)}`;
+                                        return (
+                                          <div key={group.startDate} className="daily-row">
+                                            <span className="daily-row__date">{label}</span>
+                                            <span className="daily-row__people">{group.requiredPeople}人</span>
+                                          </div>
+                                        );
+                                      })}
+                                      {session.memo && (
+                                        <div className="daily-row daily-row--memo">
+                                          <span className="daily-row__date">メモ</span>
+                                          <span className="daily-row__people">{session.memo}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             );
                           })}
