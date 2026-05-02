@@ -376,33 +376,28 @@ body {
   background: #fff5f5 !important;
 }
 
+/* 6列構成（No., 名前, 希望休, メモ, 優先現場, 操作）*/
 .data-table--staff {
-  min-width: 890px;
-  table-layout: fixed;
+  min-width: 0;
 }
 
+/* No. 列 */
 .data-table--staff th:nth-child(1),
-.data-table--staff td:nth-child(1) { width: 72px; }
+.data-table--staff td:nth-child(1) { width: 68px; }
 
-.data-table--staff th:nth-child(2),
-.data-table--staff td:nth-child(2) { width: 140px; }
-
+/* 希望休 列 */
 .data-table--staff th:nth-child(3),
-.data-table--staff td:nth-child(3) { width: 140px; }
+.data-table--staff td:nth-child(3) { width: 130px; white-space: nowrap; }
 
-.data-table--staff th:nth-child(4),
-.data-table--staff td:nth-child(4) { width: 160px; }
+/* 操作 列 */
+.data-table--staff th:nth-child(6),
+.data-table--staff td:nth-child(6) { width: 110px; }
 
-.data-table--staff th:nth-child(5),
-.data-table--staff td:nth-child(5) { width: 80px; }
-
-/* 6列目（メモ）: 残り幅を自動で使う */
-
-.data-table--staff th:nth-child(7),
-.data-table--staff td:nth-child(7) { width: 130px; }
-
-.data-table--staff th:nth-child(8),
-.data-table--staff td:nth-child(8) { width: 110px; }
+/* 優先現場：複数ある場合に自然な折り返しを許容 */
+.preferred-sites-cell {
+  white-space: normal;
+  word-break: break-all;
+}
 
 .name-cell {
   white-space: nowrap;
@@ -576,6 +571,194 @@ h2 {
   .action-cell {
     flex-direction: column;
     gap: 4px;
+  }
+}
+
+/* ===== スタッフ一覧：カード UI（モバイル専用）===== */
+
+/* PC ではカードを非表示 */
+.staff-card-list {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  /* PC テーブルを非表示 */
+  .staff-table-wrapper {
+    display: none;
+  }
+
+  /* カードリスト */
+  .staff-card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* ── カード本体 ── */
+  .staff-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    cursor: pointer;
+  }
+
+  .staff-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+
+  /* ── ヘッダー（名前左・No右）── */
+  .staff-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: #f8f9fb;
+    border-bottom: 1px solid #e9ecef;
+  }
+
+  .staff-card__name {
+    font-weight: 700;
+    font-size: 17px;
+    color: #111827;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .staff-card__no {
+    font-size: 11px;
+    color: #9ca3af;
+    margin-left: 8px;
+    flex-shrink: 0;
+  }
+
+  /* ── 本文 ── */
+  .staff-card__body {
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .staff-card__row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .staff-card__label {
+    font-size: 11px;
+    font-weight: 500;
+    color: #999;
+    min-width: 52px;
+    flex-shrink: 0;
+    padding-top: 3px;
+  }
+
+  .staff-card__value {
+    color: #333;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  /* ── 希望休 ── */
+  .staff-card__daysoff {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .staff-card__daysoff-value {
+    line-height: 1.5;
+  }
+
+  /* 希望休なし */
+  .staff-card__daysoff:not(.staff-card__daysoff--has) .staff-card__daysoff-value {
+    color: #bbb;
+    font-size: 12px;
+  }
+
+  /* 希望休あり → 警告色 */
+  .staff-card__daysoff--has .staff-card__daysoff-value {
+    color: #dc2626;
+    font-weight: 600;
+  }
+
+  /* ── 優先現場（チップ形式）── */
+  .staff-card__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .staff-card__chip {
+    background: #eef;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 12px;
+    color: #3730a3;
+    white-space: nowrap;
+  }
+
+  /* ── メモ（補足扱い）── */
+  .staff-card__row--memo {
+    background: #f7f7f7;
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin: 0 -2px;
+  }
+
+  .staff-card__value--memo {
+    font-size: 12px;
+    opacity: 0.8;
+  }
+
+  /* ── アクション（右寄せ）── */
+  .staff-card__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    padding: 8px 14px;
+    border-top: 1px solid #f0f0f0;
+  }
+
+  .staff-card__actions .btn {
+    font-size: 12px;
+    padding: 5px 12px;
+  }
+
+  /* 編集：グレーアウトライン */
+  .staff-card__actions .btn--secondary {
+    background: transparent;
+    border: 1px solid #d1d5db;
+    color: #6b7280;
+    box-shadow: none;
+  }
+
+  .staff-card__actions .btn--secondary:hover {
+    background: #f9fafb;
+  }
+
+  /* 削除：赤アウトライン・控えめ */
+  .staff-card__actions .btn--danger {
+    background: transparent;
+    border: 1px solid #fca5a5;
+    color: #dc2626;
+    box-shadow: none;
+  }
+
+  .staff-card__actions .btn--danger:hover {
+    background: #fff5f5;
   }
 }
 
@@ -754,6 +937,24 @@ h2 {
   border: 1px solid #e5e7eb;
 }
 
+.session-card__header {
+  display: flex;
+  align-items: stretch;
+}
+
+.session-card__header > .session-summary {
+  flex: 1;
+  width: auto;
+}
+
+.session-card__delete {
+  padding: 8px 10px;
+  border-left: 1px solid #e5e7eb;
+  border-radius: 0;
+  flex-shrink: 0;
+  align-self: center;
+}
+
 .session-summary {
   width: 100%;
   display: flex;
@@ -886,10 +1087,24 @@ h2 {
 }
 
 .session-edit-card__fields {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 10px;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: start;
+}
+
+.session-edit-card__fields .edit-panel__field--memo {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 480px) {
+  .session-edit-card__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .session-edit-card__fields .edit-panel__field--memo {
+    grid-column: 1;
+  }
 }
 
 .session-editor__footer {
@@ -955,6 +1170,17 @@ h2 {
   font-size: 13px;
   color: #888;
   margin-left: 4px;
+}
+
+.import-danger-zone {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: #fff5f5;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
 }
 
 /* フォーマット表示 */
@@ -1206,6 +1432,36 @@ h2 {
   gap: 20px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.checkbox-label input[type="checkbox"] {
+  accent-color: #1a56db;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.import-overwrite {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.import-overwrite__note {
+  font-size: 12px;
+  color: #dc2626;
+  margin-left: 22px;
+  line-height: 1.5;
 }
 
 .radio-label {

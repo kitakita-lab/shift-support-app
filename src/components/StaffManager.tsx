@@ -2,8 +2,6 @@ import { useState, useEffect } from 'react';
 import { Staff, WorkSite } from '../types';
 import { sortStaff, nextStaffNo } from '../utils/staffUtils';
 
-const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日'];
-
 interface Props {
   staff: Staff[];
   workSites: WorkSite[];
@@ -14,7 +12,7 @@ function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
   return {
     staffNo: nextStaffNo(staff),
     name: '',
-    availableWeekdays: [...WEEKDAYS],
+    availableWeekdays: [],
     requestedDaysOff: [],
     maxWorkDays: 20,
     memo: '',
@@ -24,11 +22,7 @@ function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
 
 function formatPreferredSites(sites: string[]): string {
   if (sites.length === 0) return '—';
-  const MAX = 2;
-  const shown = sites.slice(0, MAX);
-  return sites.length <= MAX
-    ? shown.join('、')
-    : `${shown.join('、')} +${sites.length - MAX}件`;
+  return sites.join('、');
 }
 
 function toYearMonth(date: Date): string {
@@ -68,7 +62,9 @@ interface CalendarProps {
 
 function DaysOffCalendar({ yearMonth, onMonthChange, daysOff, onChange }: CalendarProps) {
   const cells = buildCalendarDays(yearMonth);
-  const today = new Date().toISOString().slice(0, 10);
+  const _now  = new Date();
+  const pad   = (n: number) => n.toString().padStart(2, '0');
+  const today = `${_now.getFullYear()}-${pad(_now.getMonth() + 1)}-${pad(_now.getDate())}`;
   const offSet = new Set(daysOff);
 
   function changeMonth(ym: string) {
@@ -171,15 +167,6 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
     if (!editId) setForm((prev) => ({ ...prev, staffNo: nextStaffNo(staff) }));
   }, [staff, editId]);
 
-  function handleWeekdayToggle(day: string) {
-    setForm((prev) => ({
-      ...prev,
-      availableWeekdays: prev.availableWeekdays.includes(day)
-        ? prev.availableWeekdays.filter((d) => d !== day)
-        : [...prev.availableWeekdays, day],
-    }));
-  }
-
   function togglePreferredSite(name: string) {
     setForm((prev) => ({
       ...prev,
@@ -273,34 +260,6 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
           </div>
 
           <div className="form-row">
-            <label className="form-label">勤務可能曜日</label>
-            <div className="weekday-group">
-              {WEEKDAYS.map((day) => (
-                <label key={day} className="weekday-label">
-                  <input
-                    type="checkbox"
-                    checked={form.availableWeekdays.includes(day)}
-                    onChange={() => handleWeekdayToggle(day)}
-                  />
-                  {day}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="form-row">
-            <label className="form-label">最大勤務日数</label>
-            <input
-              className="form-input form-input--short"
-              type="number"
-              min={1}
-              max={31}
-              value={form.maxWorkDays}
-              onChange={(e) => setForm({ ...form, maxWorkDays: Number(e.target.value) })}
-            />
-          </div>
-
-          <div className="form-row">
             <label className="form-label">メモ</label>
             <input
               className="form-input"
@@ -364,15 +323,15 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
         {staff.length === 0 ? (
           <p className="empty-msg">スタッフが登録されていません</p>
         ) : (
-          <div className="table-wrapper">
+          <>
+          {/* PC：テーブル表示 */}
+          <div className="table-wrapper staff-table-wrapper">
             <table className="data-table data-table--staff">
               <thead>
                 <tr>
                   <th>No.</th>
                   <th>名前</th>
-                  <th>勤務可能曜日</th>
                   <th>希望休（{monthLabel}）</th>
-                  <th>最大日数</th>
                   <th>メモ</th>
                   <th>優先現場</th>
                   <th></th>
@@ -395,11 +354,9 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
                       />
                     </td>
                     <td className="name-cell">{s.name}</td>
-                    <td>{s.availableWeekdays.join('・')}</td>
                     <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
-                    <td>{s.maxWorkDays}日</td>
                     <td>{s.memo || '—'}</td>
-                    <td>{formatPreferredSites(s.preferredWorkSites)}</td>
+                    <td className="preferred-sites-cell">{formatPreferredSites(s.preferredWorkSites)}</td>
                     <td className="action-cell">
                       <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
                         編集
@@ -416,6 +373,67 @@ export default function StaffManager({ staff, workSites, onChange }: Props) {
               </tbody>
             </table>
           </div>
+
+          {/* モバイル：カード表示 */}
+          <div className="staff-card-list">
+            {staff.map((s) => {
+              const daysOffText = formatDaysOff(s.requestedDaysOff, currentMonth);
+              const hasDaysOff  = daysOffText !== '—';
+              return (
+                <div key={s.id} className="staff-card">
+                  {/* ── ヘッダー（名前左・No右）── */}
+                  <div className="staff-card__header">
+                    <span className="staff-card__name">{s.name}</span>
+                    <span className="staff-card__no">{s.staffNo || '—'}</span>
+                  </div>
+
+                  {/* ── 本文 ── */}
+                  <div className="staff-card__body">
+                    {/* 希望休：あり→赤、なし→グレー */}
+                    <div className={`staff-card__daysoff${hasDaysOff ? ' staff-card__daysoff--has' : ''}`}>
+                      <span className="staff-card__label">希望休</span>
+                      <span className="staff-card__daysoff-value">
+                        {hasDaysOff ? daysOffText : '希望休なし'}
+                      </span>
+                    </div>
+
+                    {/* 優先現場：チップ形式 */}
+                    <div className="staff-card__row">
+                      <span className="staff-card__label">優先現場</span>
+                      <div className="staff-card__chips">
+                        {s.preferredWorkSites.length === 0 ? (
+                          <span className="staff-card__value">—</span>
+                        ) : (
+                          s.preferredWorkSites.map((site) => (
+                            <span key={site} className="staff-card__chip">{site}</span>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* メモ：空なら非表示 */}
+                    {s.memo && (
+                      <div className="staff-card__row staff-card__row--memo">
+                        <span className="staff-card__label">メモ</span>
+                        <span className="staff-card__value staff-card__value--memo">{s.memo}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ── アクション（右寄せ）── */}
+                  <div className="staff-card__actions">
+                    <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
+                      編集
+                    </button>
+                    <button className="btn btn--sm btn--danger" onClick={() => handleDelete(s.id)}>
+                      削除
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          </>
         )}
       </div>
     </div>
