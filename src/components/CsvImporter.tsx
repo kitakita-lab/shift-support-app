@@ -250,23 +250,28 @@ export default function CsvImporter({
 
   function handleImportSites() {
     if (!sitePreview?.valid.length) return;
-    const groupId = crypto.randomUUID();
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
-    const groupLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    // 集約済みの各 WorkSite に一意の sessionId を付与。
-    // sessionId がないと WorkSiteManager が fallback のギャップ検出を使い
-    // 同一日が別会期として表示されるため必須。
-    const withGroup = sitePreview.valid.map((s) => ({
-      ...s,
-      groupId,
-      groupLabel,
-      sessionId: crypto.randomUUID(),
-    }));
+    const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    // siteName ごとに独立した groupId を割り当てる。
+    // 全行に同じ groupId を使うと WorkSiteManager が1つの会場カードにまとめてしまう。
+    const groupIdBySiteName = new Map<string, string>();
+    const withGroup = sitePreview.valid.map((s) => {
+      if (!groupIdBySiteName.has(s.siteName)) {
+        groupIdBySiteName.set(s.siteName, crypto.randomUUID());
+      }
+      return {
+        ...s,
+        groupId:   groupIdBySiteName.get(s.siteName)!,
+        groupLabel: `${s.siteName}：${importLabel}`,
+        sessionId: crypto.randomUUID(),
+      };
+    });
     const count = withGroup.length;
+    const venueCount = groupIdBySiteName.size;
     onImportSites(withGroup);
     clearSitePreview();
-    setSiteSuccess(`${count}会期の現場を追加しました（合計 ${currentSiteCount + count}件）`);
+    setSiteSuccess(`${venueCount}現場・${count}会期を追加しました（合計 ${currentSiteCount + count}件）`);
     setTimeout(() => setSiteSuccess(''), 5000);
   }
 
