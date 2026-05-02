@@ -21,6 +21,7 @@ export interface WorkSite {
   requiredPeople: number;
   memo: string;
   isPlaceholder?: boolean;
+  source?: 'manual' | 'csv';
 }
 
 export interface ShiftAssignment {

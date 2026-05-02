@@ -85,7 +85,8 @@ export default function App() {
         {activeTab === 'import' && (
           <CsvImporter
             staff={staff}
-            currentSiteCount={workSites.length}
+            currentSiteCount={workSites.filter((s) => !s.isPlaceholder).length}
+            csvSiteCount={workSites.filter((s) => s.source === 'csv').length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
             onImportSites={(imported) => setWorkSites((prev) => [...prev, ...imported])}
             onApplyDaysOff={(updates) =>
@@ -95,6 +96,9 @@ export default function App() {
                   return upd ? { ...s, requestedDaysOff: upd.requestedDaysOff } : s;
                 })
               )
+            }
+            onDeleteCsvSites={() =>
+              setWorkSites((prev) => prev.filter((s) => s.source !== 'csv'))
             }
           />
         )}
