@@ -199,68 +199,79 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
   const active = sites.filter((s) => !s.isPlaceholder);
   if (active.length === 0) return [];
 
-  const raw: Omit<DisplaySession, 'sessionNo'>[] = [];
+  type Proto = Omit<DisplaySession, 'sessionNo'>;
+
+  // ── Phase 1: sessionId ごとにグルーピング ──────────────────────
+  // sessionId なしの場合は 1 サイト = 1 仮セッション
+  const phase1: Proto[] = [];
   const hasSessionIds = active.some((s) => s.sessionId);
 
   if (hasSessionIds) {
     const bySession = new Map<string, WorkSite[]>();
     for (const site of active) {
-      const key = site.sessionId ?? `__nosession_${site.date}`;
+      const key = site.sessionId ?? `__nosession_${site.id}`;
       if (!bySession.has(key)) bySession.set(key, []);
       bySession.get(key)!.push(site);
     }
     for (const [key, group] of bySession) {
       const g = [...group].sort((a, b) => a.date.localeCompare(b.date));
-      raw.push({
+      phase1.push({
         sessionId:      g[0].sessionId ?? key,
         startDate:      g[0].date,
         endDate:        g[g.length - 1].date,
         startTime:      g[0].startTime,
         endTime:        g[0].endTime,
-        requiredPeople: g[0].requiredPeople,
+        requiredPeople: Math.max(...g.map((s) => s.requiredPeople)),
         memo:           g[0].memo,
         dateCount:      g.length,
       });
     }
   } else {
-    // Fallback: gap detection for legacy records without sessionId
     const sorted = [...active].sort((a, b) => a.date.localeCompare(b.date));
-    let current: WorkSite[] = [sorted[0]];
-    const flushCurrent = () => {
-      const g = current;
-      // Synthetic stable key for legacy data: start|end|startTime|endTime
-      const syntheticId = `${g[0].date}|${g[g.length - 1].date}|${g[0].startTime}|${g[0].endTime}`;
-      raw.push({
-        sessionId:      syntheticId,
-        startDate:      g[0].date,
-        endDate:        g[g.length - 1].date,
-        startTime:      g[0].startTime,
-        endTime:        g[0].endTime,
-        requiredPeople: g[0].requiredPeople,
-        memo:           g[0].memo,
-        dateCount:      g.length,
+    for (const site of sorted) {
+      phase1.push({
+        sessionId:      `__nosession_${site.id}`,
+        startDate:      site.date,
+        endDate:        site.date,
+        startTime:      site.startTime,
+        endTime:        site.endTime,
+        requiredPeople: site.requiredPeople,
+        memo:           site.memo,
+        dateCount:      1,
       });
-    };
-    for (let i = 1; i < sorted.length; i++) {
-      const prev = current[current.length - 1];
-      const site = sorted[i];
-      const dayDiff = Math.round(
-        (parseDateLocal(site.date).getTime() - parseDateLocal(prev.date).getTime()) / 86400000
-      );
-      const sameSettings =
-        prev.startTime === site.startTime &&
-        prev.endTime === site.endTime &&
-        prev.requiredPeople === site.requiredPeople &&
-        prev.memo === site.memo;
-      if (sameSettings && dayDiff === 1) {
-        current.push(site);
-      } else {
-        flushCurrent();
-        current = [site];
-      }
     }
-    flushCurrent();
   }
+
+  phase1.sort((a, b) => a.startDate.localeCompare(b.startDate));
+
+  // ── Phase 2: 1日セッションを連続結合 ──────────────────────────
+  // 旧 CSV データ（date ごとに個別 sessionId）を連続日 + 同一設定でまとめる。
+  // dateCount > 1 の手動作成セッションはそのまま維持する。
+  const raw: Proto[] = [];
+  if (phase1.length === 0) return [];
+
+  let head = { ...phase1[0] };
+  let merging = head.dateCount === 1; // 1日セッションの連結中フラグ
+
+  for (let i = 1; i < phase1.length; i++) {
+    const next = phase1[i];
+    const sameSettings =
+      head.startTime      === next.startTime &&
+      head.endTime        === next.endTime   &&
+      head.requiredPeople === next.requiredPeople;
+    const dayDiff = Math.round(
+      (parseDateLocal(next.startDate).getTime() - parseDateLocal(head.endDate).getTime()) / 86400000
+    );
+    if (merging && next.dateCount === 1 && sameSettings && dayDiff === 1) {
+      head.endDate   = next.endDate;
+      head.dateCount++;
+    } else {
+      raw.push(head);
+      head    = { ...next };
+      merging = next.dateCount === 1;
+    }
+  }
+  raw.push(head);
 
   return raw
     .sort((a, b) => a.startDate.localeCompare(b.startDate))
@@ -377,11 +388,16 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   }
 
   function deleteDisplaySession(groupId: string, display: DisplaySession) {
-    // sessionId のみで削除対象を特定する。sessionId がない行は削除しない
+    // 日付範囲 + 時間帯で削除。sessionId が混在する旧 CSV データでも全日分を確実に消す。
     const removed = workSites.filter((s) => {
       if (s.groupId !== groupId) return true;
-      if (!s.sessionId) return true;
-      return s.sessionId !== display.sessionId;
+      if (s.isPlaceholder)       return true;
+      const inRange =
+        s.date >= display.startDate &&
+        s.date <= display.endDate   &&
+        s.startTime === display.startTime &&
+        s.endTime   === display.endTime;
+      return !inRange;
     });
     // 会期が 0 件になっても会場カードは残す
     const groupActive = removed.filter((s) => s.groupId === groupId && !s.isPlaceholder);
