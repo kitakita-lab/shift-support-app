@@ -1434,6 +1434,36 @@ h2 {
   flex-wrap: wrap;
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.checkbox-label input[type="checkbox"] {
+  accent-color: #1a56db;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.import-overwrite {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.import-overwrite__note {
+  font-size: 12px;
+  color: #dc2626;
+  margin-left: 22px;
+  line-height: 1.5;
+}
+
 .radio-label {
   display: flex;
   align-items: center;

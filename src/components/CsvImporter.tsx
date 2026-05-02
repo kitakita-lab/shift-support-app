@@ -52,7 +52,7 @@ interface Props {
   currentSiteCount: number;
   csvSiteCount: number;
   onImportStaff: (imported: Staff[]) => void;
-  onImportSites: (imported: WorkSite[]) => void;
+  onImportSites: (imported: WorkSite[], overwrite: boolean) => void;
   onApplyDaysOff: (updates: { id: string; requestedDaysOff: string[] }[]) => void;
   onDeleteCsvSites: () => void;
 }
@@ -173,6 +173,7 @@ export default function CsvImporter({
 
   const [daysOffTargetMonth, setDaysOffTargetMonth] = useState(() => toYearMonth(new Date()));
   const [daysOffMode,        setDaysOffMode]        = useState<DaysOffMode>('replace');
+  const [overwriteMode,      setOverwriteMode]      = useState(false);
 
   const staffInputRef   = useRef<HTMLInputElement>(null);
   const siteInputRef    = useRef<HTMLInputElement>(null);
@@ -269,9 +270,10 @@ export default function CsvImporter({
     });
     const count = withGroup.length;
     const venueCount = groupIdBySiteName.size;
-    onImportSites(withGroup);
+    onImportSites(withGroup, overwriteMode);
     clearSitePreview();
-    setSiteSuccess(`${venueCount}現場・${count}会期を追加しました（合計 ${currentSiteCount + count}件）`);
+    const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
+    setSiteSuccess(`${venueCount}現場・${count}会期を追加しました${modeLabel}（合計 ${currentSiteCount + count}件）`);
     setTimeout(() => setSiteSuccess(''), 5000);
   }
 
@@ -409,6 +411,24 @@ export default function CsvImporter({
             テンプレートをダウンロード
           </button>
           <span className="import-current">現在 {currentSiteCount}件登録済み</span>
+        </div>
+
+        <div className="import-overwrite">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={overwriteMode}
+              onChange={(e) => setOverwriteMode(e.target.checked)}
+            />
+            上書きモード（CSVデータを置換）
+          </label>
+          {overwriteMode && (
+            <span className="import-overwrite__note">
+              取り込み時に既存のCSV取込済み現場
+              {csvSiteCount > 0 ? `（${csvSiteCount}件）` : ''}
+              をすべて削除してから登録します
+            </span>
+          )}
         </div>
 
         {csvSiteCount > 0 && (
