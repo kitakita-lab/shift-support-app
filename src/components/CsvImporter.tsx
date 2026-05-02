@@ -52,7 +52,7 @@ interface Props {
   currentSiteCount: number;
   csvSiteCount: number;
   onImportStaff: (imported: Staff[]) => void;
-  onImportSites: (imported: WorkSite[]) => void;
+  onImportSites: (imported: WorkSite[], overwrite: boolean) => void;
   onApplyDaysOff: (updates: { id: string; requestedDaysOff: string[] }[]) => void;
   onDeleteCsvSites: () => void;
 }
@@ -173,6 +173,7 @@ export default function CsvImporter({
 
   const [daysOffTargetMonth, setDaysOffTargetMonth] = useState(() => toYearMonth(new Date()));
   const [daysOffMode,        setDaysOffMode]        = useState<DaysOffMode>('replace');
+  const [overwriteMode,      setOverwriteMode]      = useState(false);
 
   const staffInputRef   = useRef<HTMLInputElement>(null);
   const siteInputRef    = useRef<HTMLInputElement>(null);
@@ -250,15 +251,29 @@ export default function CsvImporter({
 
   function handleImportSites() {
     if (!sitePreview?.valid.length) return;
-    const groupId = crypto.randomUUID();
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
-    const groupLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    const withGroup = sitePreview.valid.map((s) => ({ ...s, groupId, groupLabel }));
+    const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    // siteName ごとに独立した groupId を割り当てる。
+    // 全行に同じ groupId を使うと WorkSiteManager が1つの会場カードにまとめてしまう。
+    const groupIdBySiteName = new Map<string, string>();
+    const withGroup = sitePreview.valid.map((s) => {
+      if (!groupIdBySiteName.has(s.siteName)) {
+        groupIdBySiteName.set(s.siteName, crypto.randomUUID());
+      }
+      return {
+        ...s,
+        groupId:   groupIdBySiteName.get(s.siteName)!,
+        groupLabel: `${s.siteName}：${importLabel}`,
+        sessionId: crypto.randomUUID(),
+      };
+    });
     const count = withGroup.length;
-    onImportSites(withGroup);
+    const venueCount = groupIdBySiteName.size;
+    onImportSites(withGroup, overwriteMode);
     clearSitePreview();
-    setSiteSuccess(`${count}件の現場を追加しました（合計 ${currentSiteCount + count}件）`);
+    const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
+    setSiteSuccess(`${venueCount}現場・${count}会期を追加しました${modeLabel}（合計 ${currentSiteCount + count}件）`);
     setTimeout(() => setSiteSuccess(''), 5000);
   }
 
@@ -398,6 +413,24 @@ export default function CsvImporter({
           <span className="import-current">現在 {currentSiteCount}件登録済み</span>
         </div>
 
+        <div className="import-overwrite">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={overwriteMode}
+              onChange={(e) => setOverwriteMode(e.target.checked)}
+            />
+            上書きモード（CSVデータを置換）
+          </label>
+          {overwriteMode && (
+            <span className="import-overwrite__note">
+              取り込み時に既存のCSV取込済み現場
+              {csvSiteCount > 0 ? `（${csvSiteCount}件）` : ''}
+              をすべて削除してから登録します
+            </span>
+          )}
+        </div>
+
         {csvSiteCount > 0 && (
           <div className="import-danger-zone">
             <span className="import-current">CSV取込済み {csvSiteCount}件</span>
@@ -422,7 +455,7 @@ export default function CsvImporter({
             <ErrorList errors={sitePreview.errors} />
             {sitePreview.valid.length > 0 ? (
               <>
-                <ImportCount count={sitePreview.valid.length} />
+                <ImportCount count={sitePreview.valid.length} suffix="会期（集約済み）を取り込みます" />
                 <div className="table-wrapper">
                   <table className="data-table">
                     <thead>
@@ -451,7 +484,7 @@ export default function CsvImporter({
                 </div>
                 <div className="import-actions">
                   <button className="btn btn--primary" onClick={handleImportSites}>
-                    {sitePreview.valid.length}件を追加する
+                    {sitePreview.valid.length}会期を追加する
                   </button>
                   <button className="btn btn--secondary" onClick={clearSitePreview}>
                     キャンセル
