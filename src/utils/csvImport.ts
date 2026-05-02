@@ -206,6 +206,7 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
       endTime,
       requiredPeople,
       memo: memoRaw,
+      source: 'csv',
     });
   }
 

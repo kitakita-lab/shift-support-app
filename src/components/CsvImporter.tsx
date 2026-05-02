@@ -50,9 +50,11 @@ type SitePreview  = SiteParseResult  & { fileName: string };
 interface Props {
   staff: Staff[];
   currentSiteCount: number;
+  csvSiteCount: number;
   onImportStaff: (imported: Staff[]) => void;
   onImportSites: (imported: WorkSite[]) => void;
   onApplyDaysOff: (updates: { id: string; requestedDaysOff: string[] }[]) => void;
+  onDeleteCsvSites: () => void;
 }
 
 // ── Sub-components ────────────────────────────────────────────
@@ -155,9 +157,11 @@ function computeMerged(
 export default function CsvImporter({
   staff,
   currentSiteCount,
+  csvSiteCount,
   onImportStaff,
   onImportSites,
   onApplyDaysOff,
+  onDeleteCsvSites,
 }: Props) {
   const [staffPreview,   setStaffPreview]   = useState<StaffPreview | null>(null);
   const [sitePreview,    setSitePreview]    = useState<SitePreview  | null>(null);
@@ -393,6 +397,24 @@ export default function CsvImporter({
           </button>
           <span className="import-current">現在 {currentSiteCount}件登録済み</span>
         </div>
+
+        {csvSiteCount > 0 && (
+          <div className="import-danger-zone">
+            <span className="import-current">CSV取込済み {csvSiteCount}件</span>
+            <button
+              className="btn btn--danger btn--sm"
+              onClick={() => {
+                if (window.confirm('インポート済み現場をすべて削除します。よろしいですか？')) {
+                  onDeleteCsvSites();
+                  setSiteSuccess(`CSV取込済みの現場 ${csvSiteCount}件を削除しました`);
+                  setTimeout(() => setSiteSuccess(''), 5000);
+                }
+              }}
+            >
+              インポート済み現場を全削除
+            </button>
+          </div>
+        )}
 
         {sitePreview && (
           <div className="import-preview">

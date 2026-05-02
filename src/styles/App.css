@@ -1172,6 +1172,17 @@ h2 {
   margin-left: 4px;
 }
 
+.import-danger-zone {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: #fff5f5;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+}
+
 /* フォーマット表示 */
 .import-format {
   background: #1a1a2e;
