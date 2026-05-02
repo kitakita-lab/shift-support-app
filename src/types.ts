@@ -13,6 +13,7 @@ export interface WorkSite {
   id: string;
   groupId?: string;
   groupLabel?: string;
+  sessionId?: string;
   date: string;
   siteName: string;
   startTime: string;
@@ -20,6 +21,7 @@ export interface WorkSite {
   requiredPeople: number;
   memo: string;
   isPlaceholder?: boolean;
+  source?: 'manual' | 'csv';
 }
 
 export interface ShiftAssignment {

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useMemo } from 'react';
 import { Staff, WorkSite } from '../types';
 import {
   parseStaffCSV,
@@ -50,9 +50,11 @@ type SitePreview  = SiteParseResult  & { fileName: string };
 interface Props {
   staff: Staff[];
   currentSiteCount: number;
+  csvSiteCount: number;
   onImportStaff: (imported: Staff[]) => void;
-  onImportSites: (imported: WorkSite[]) => void;
+  onImportSites: (imported: WorkSite[], overwrite: boolean) => void;
   onApplyDaysOff: (updates: { id: string; requestedDaysOff: string[] }[]) => void;
+  onDeleteCsvSites: () => void;
 }
 
 // ── Sub-components ────────────────────────────────────────────
@@ -83,6 +85,39 @@ function ImportCount({ count, suffix = '件を取り込みます' }: { count: nu
 
 function toYearMonth(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// YYYY-MM-DD をローカル日付として解釈（UTC midnight ずれ回避）
+function parseSiteDate(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+// 連続日 + 同一時間帯でグルーピングしたときの会期数・現場数を返す（プレビュー表示用）
+function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
+  const bySiteName = new Map<string, WorkSite[]>();
+  for (const site of sites) {
+    if (!bySiteName.has(site.siteName)) bySiteName.set(site.siteName, []);
+    bySiteName.get(site.siteName)!.push(site);
+  }
+  let sessionCount = 0;
+  for (const [, group] of bySiteName) {
+    const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
+    sessionCount++;
+    let prev = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+      const cur = sorted[i];
+      const sameSettings =
+        cur.startTime === prev.startTime &&
+        cur.endTime   === prev.endTime;
+      const dayDiff = Math.round(
+        (parseSiteDate(cur.date).getTime() - parseSiteDate(prev.date).getTime()) / 86400000
+      );
+      if (!sameSettings || dayDiff !== 1) sessionCount++;
+      prev = cur;
+    }
+  }
+  return { sessionCount, venueCount: bySiteName.size };
 }
 
 function matchDaysOffRows(
@@ -155,9 +190,11 @@ function computeMerged(
 export default function CsvImporter({
   staff,
   currentSiteCount,
+  csvSiteCount,
   onImportStaff,
   onImportSites,
   onApplyDaysOff,
+  onDeleteCsvSites,
 }: Props) {
   const [staffPreview,   setStaffPreview]   = useState<StaffPreview | null>(null);
   const [sitePreview,    setSitePreview]    = useState<SitePreview  | null>(null);
@@ -169,6 +206,13 @@ export default function CsvImporter({
 
   const [daysOffTargetMonth, setDaysOffTargetMonth] = useState(() => toYearMonth(new Date()));
   const [daysOffMode,        setDaysOffMode]        = useState<DaysOffMode>('replace');
+  const [overwriteMode,      setOverwriteMode]      = useState(false);
+
+  // 連続日結合後の会期数・現場数（プレビュー表示用）
+  const sitePreviewCounts = useMemo(
+    () => sitePreview ? countImportSessions(sitePreview.valid) : { sessionCount: 0, venueCount: 0 },
+    [sitePreview]
+  );
 
   const staffInputRef   = useRef<HTMLInputElement>(null);
   const siteInputRef    = useRef<HTMLInputElement>(null);
@@ -246,15 +290,65 @@ export default function CsvImporter({
 
   function handleImportSites() {
     if (!sitePreview?.valid.length) return;
-    const groupId = crypto.randomUUID();
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
-    const groupLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    const withGroup = sitePreview.valid.map((s) => ({ ...s, groupId, groupLabel }));
-    const count = withGroup.length;
-    onImportSites(withGroup);
+    const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+    // siteName ごとに groupId を管理
+    const groupIdBySiteName = new Map<string, string>();
+    // siteName ごとに分類して日付順に並べる
+    const bySiteName = new Map<string, WorkSite[]>();
+    for (const site of sitePreview.valid) {
+      if (!bySiteName.has(site.siteName)) bySiteName.set(site.siteName, []);
+      bySiteName.get(site.siteName)!.push(site);
+    }
+
+    const withGroup: WorkSite[] = [];
+    let sessionCount = 0;
+
+    for (const [siteName, siteGroup] of bySiteName) {
+      const groupId = crypto.randomUUID();
+      groupIdBySiteName.set(siteName, groupId);
+      const sorted = [...siteGroup].sort((a, b) => a.date.localeCompare(b.date));
+
+      // 連続日 + 同一時間帯 → 同じ sessionId にまとめる（requiredPeople は無視）
+      let currentSessionId = crypto.randomUUID();
+      sessionCount++;
+      let prev = sorted[0];
+      withGroup.push({
+        ...prev,
+        groupId,
+        groupLabel: `${siteName}：${importLabel}`,
+        sessionId: currentSessionId,
+      });
+
+      for (let i = 1; i < sorted.length; i++) {
+        const cur = sorted[i];
+        const sameSettings =
+          cur.startTime === prev.startTime &&
+          cur.endTime   === prev.endTime;
+        const dayDiff = Math.round(
+          (parseSiteDate(cur.date).getTime() - parseSiteDate(prev.date).getTime()) / 86400000
+        );
+        if (!sameSettings || dayDiff !== 1) {
+          currentSessionId = crypto.randomUUID();
+          sessionCount++;
+        }
+        withGroup.push({
+          ...cur,
+          groupId,
+          groupLabel: `${siteName}：${importLabel}`,
+          sessionId: currentSessionId,
+        });
+        prev = cur;
+      }
+    }
+
+    const venueCount = groupIdBySiteName.size;
+    onImportSites(withGroup, overwriteMode);
     clearSitePreview();
-    setSiteSuccess(`${count}件の現場を追加しました（合計 ${currentSiteCount + count}件）`);
+    const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
+    setSiteSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
     setTimeout(() => setSiteSuccess(''), 5000);
   }
 
@@ -394,13 +488,52 @@ export default function CsvImporter({
           <span className="import-current">現在 {currentSiteCount}件登録済み</span>
         </div>
 
+        <div className="import-overwrite">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={overwriteMode}
+              onChange={(e) => setOverwriteMode(e.target.checked)}
+            />
+            上書きモード（CSVデータを置換）
+          </label>
+          {overwriteMode && (
+            <span className="import-overwrite__note">
+              取り込み時に既存のCSV取込済み現場
+              {csvSiteCount > 0 ? `（${csvSiteCount}件）` : ''}
+              をすべて削除してから登録します
+            </span>
+          )}
+        </div>
+
+        {csvSiteCount > 0 && (
+          <div className="import-danger-zone">
+            <span className="import-current">CSV取込済み {csvSiteCount}件</span>
+            <button
+              className="btn btn--danger btn--sm"
+              onClick={() => {
+                if (window.confirm('インポート済み現場をすべて削除します。よろしいですか？')) {
+                  onDeleteCsvSites();
+                  setSiteSuccess(`CSV取込済みの現場 ${csvSiteCount}件を削除しました`);
+                  setTimeout(() => setSiteSuccess(''), 5000);
+                }
+              }}
+            >
+              インポート済み現場を全削除
+            </button>
+          </div>
+        )}
+
         {sitePreview && (
           <div className="import-preview">
             <div className="import-preview__filename">ファイル：{sitePreview.fileName}</div>
             <ErrorList errors={sitePreview.errors} />
             {sitePreview.valid.length > 0 ? (
               <>
-                <ImportCount count={sitePreview.valid.length} />
+                <ImportCount
+                  count={sitePreviewCounts.sessionCount}
+                  suffix={`会期・${sitePreviewCounts.venueCount}現場（連続日結合済み）を取り込みます`}
+                />
                 <div className="table-wrapper">
                   <table className="data-table">
                     <thead>
@@ -429,7 +562,7 @@ export default function CsvImporter({
                 </div>
                 <div className="import-actions">
                   <button className="btn btn--primary" onClick={handleImportSites}>
-                    {sitePreview.valid.length}件を追加する
+                    {sitePreviewCounts.venueCount}現場・{sitePreviewCounts.sessionCount}会期を追加する
                   </button>
                   <button className="btn btn--secondary" onClick={clearSitePreview}>
                     キャンセル

@@ -85,9 +85,15 @@ export default function App() {
         {activeTab === 'import' && (
           <CsvImporter
             staff={staff}
-            currentSiteCount={workSites.length}
+            currentSiteCount={workSites.filter((s) => !s.isPlaceholder).length}
+            csvSiteCount={workSites.filter((s) => s.source === 'csv').length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
-            onImportSites={(imported) => setWorkSites((prev) => [...prev, ...imported])}
+            onImportSites={(imported, overwrite) =>
+              setWorkSites((prev) => {
+                const base = overwrite ? prev.filter((s) => s.source !== 'csv') : prev;
+                return [...base, ...imported];
+              })
+            }
             onApplyDaysOff={(updates) =>
               setStaff((prev) =>
                 prev.map((s) => {
@@ -95,6 +101,9 @@ export default function App() {
                   return upd ? { ...s, requestedDaysOff: upd.requestedDaysOff } : s;
                 })
               )
+            }
+            onDeleteCsvSites={() =>
+              setWorkSites((prev) => prev.filter((s) => s.source !== 'csv'))
             }
           />
         )}
