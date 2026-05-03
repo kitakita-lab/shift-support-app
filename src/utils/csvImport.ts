@@ -402,7 +402,7 @@ function downloadCsv(content: string, filename: string): void {
 
 export function downloadStaffTemplate(): void {
   downloadCsv(
-    `name,availableWeekdays,requestedDaysOff,maxWorkDays,memo\n佐藤太郎,"月,火,水,木,金",,20,リーダー可\n田中花子,"月,水,金","2026-05-03",15,`,
+    `name,availableWeekdays,requestedDaysOff,maxWorkDays,memo\n佐藤太郎,"月,火,水,木,金","2026-05-03,2026-05-10",20,リーダー可\n田中花子,"月,水,金","2026-05-03",15,\n鈴木一郎,"土,日","",8,土日中心`,
     'staff_template.csv'
   );
 }
