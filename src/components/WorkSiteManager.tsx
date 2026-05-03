@@ -36,7 +36,52 @@ function calcDayCount(startDate: string, endDate: string): number {
   return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
 }
 
+function formatDateShort(dateStr: string): string {
+  const d = parseDateLocal(dateStr);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${mm}/${dd}`;
+}
+
+function formatDateWithDow(dateStr: string): string {
+  const d = parseDateLocal(dateStr);
+  const dow = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
+  return `${formatDateShort(dateStr)}（${dow}）`;
+}
+
+// 連続する同一人数の日をまとめて区間配列に変換する
+function groupDailyRows(
+  rows: { date: string; requiredPeople: number }[]
+): { startDate: string; endDate: string; requiredPeople: number }[] {
+  if (rows.length === 0) return [];
+  const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date));
+  const groups: { startDate: string; endDate: string; requiredPeople: number }[] = [];
+  let start = sorted[0];
+  let end   = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    const cur     = sorted[i];
+    const dayDiff = Math.round(
+      (parseDateLocal(cur.date).getTime() - parseDateLocal(end.date).getTime()) / 86400000
+    );
+    if (cur.requiredPeople === start.requiredPeople && dayDiff === 1) {
+      end = cur;
+    } else {
+      groups.push({ startDate: start.date, endDate: end.date, requiredPeople: start.requiredPeople });
+      start = cur;
+      end   = cur;
+    }
+  }
+  groups.push({ startDate: start.date, endDate: end.date, requiredPeople: start.requiredPeople });
+  return groups;
+}
+
 // ─── CSV 取込ヘルパー ─────────────────────────────────────────
+
+function peakColorClass(peak: number, avg: number): 'high' | 'medium' | 'normal' {
+  if (peak >= 6 || avg >= 4) return 'high';
+  if (peak >= 4 || avg >= 3) return 'medium';
+  return 'normal';
+}
 
 // 連続日 + 同一時間帯（requiredPeople は無視）でグルーピングしたときの会期数・現場数を返す
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
@@ -95,39 +140,6 @@ function buildCsvImportGroups(sites: WorkSite[]): WorkSite[] {
       prev = cur;
     }
   }
-  return result;
-}
-
-// 日別必要人数を連続同一人数でまとめてテキスト行の配列にする
-function compactDailyPeople(dailyPeople: { date: string; requiredPeople: number }[]): string[] {
-  if (dailyPeople.length === 0) return [];
-  const sorted = [...dailyPeople].sort((a, b) => a.date.localeCompare(b.date));
-  const fmt = (d: string) => d.slice(5).replace('-', '/');
-  const result: string[] = [];
-  let start = sorted[0];
-  let end   = sorted[0];
-  for (let i = 1; i < sorted.length; i++) {
-    const cur = sorted[i];
-    const dayDiff = Math.round(
-      (parseDateLocal(cur.date).getTime() - parseDateLocal(end.date).getTime()) / 86400000
-    );
-    if (cur.requiredPeople === start.requiredPeople && dayDiff === 1) {
-      end = cur;
-    } else {
-      result.push(
-        start.date === end.date
-          ? `${fmt(start.date)}：${start.requiredPeople}人`
-          : `${fmt(start.date)}〜${fmt(end.date)}：${start.requiredPeople}人`
-      );
-      start = cur;
-      end   = cur;
-    }
-  }
-  result.push(
-    start.date === end.date
-      ? `${fmt(start.date)}：${start.requiredPeople}人`
-      : `${fmt(start.date)}〜${fmt(end.date)}：${start.requiredPeople}人`
-  );
   return result;
 }
 
@@ -409,8 +421,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
   const [successMsg, setSuccessMsg]   = useState('');
 
   // ── 会期エディタ・アコーディオン
-  const [sessionEditor,    setSessionEditor]    = useState<SessionEditorState | null>(null);
-  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
+  const [sessionEditor,      setSessionEditor]      = useState<SessionEditorState | null>(null);
+  const [expandedSessions,   setExpandedSessions]   = useState<Set<string>>(new Set());
+  const [expandedVenues,     setExpandedVenues]     = useState<Set<string>>(new Set());
+  const [detailedDailyKeys,  setDetailedDailyKeys]  = useState<Set<string>>(new Set());
 
   // ── CSV 取込モーダル
   const [csvModalOpen,      setCsvModalOpen]      = useState(false);
@@ -551,6 +565,22 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
   function toggleSession(key: string) {
     setExpandedSessions((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
+
+  function toggleVenue(groupId: string) {
+    setExpandedVenues((prev) => {
+      const next = new Set(prev);
+      next.has(groupId) ? next.delete(groupId) : next.add(groupId);
+      return next;
+    });
+  }
+
+  function toggleDailyDetail(key: string) {
+    setDetailedDailyKeys((prev) => {
       const next = new Set(prev);
       next.has(key) ? next.delete(key) : next.add(key);
       return next;
@@ -852,16 +882,43 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
               const activeSites      = sites.filter((s) => !s.isPlaceholder);
               const displaySessions  = groupSitesIntoDisplaySessions(sites);
               const siteName         = sites[0]?.siteName ?? '';
+              const isVenueOpen      = expandedVenues.has(groupId);
+
+              const venueStats = activeSites.length > 0
+                ? (() => {
+                    const allPeople = displaySessions.flatMap((s) =>
+                      s.dailyPeople.length > 0
+                        ? s.dailyPeople.map((d) => d.requiredPeople)
+                        : Array.from({ length: s.dateCount }, () => s.requiredPeople)
+                    );
+                    if (allPeople.length === 0) return null;
+                    const maxPeople = Math.max(...allPeople);
+                    const avgPeople = Math.round(allPeople.reduce((sum, p) => sum + p, 0) / allPeople.length);
+                    return { maxPeople, avgPeople };
+                  })()
+                : null;
 
               return (
                 <div key={groupId} className="site-card">
                   <div className="site-header">
-                    <div className="site-header__left">
-                      <div className="site-title">{siteName}</div>
-                      <div className="site-meta">
-                        {activeSites.length === 0 ? '会期なし' : `会期${displaySessions.length}件`}
+                    <button className="site-header__main" onClick={() => toggleVenue(groupId)}>
+                      <div className="site-header__info">
+                        <div className="site-title">{siteName}</div>
+                        <div className="site-meta">
+                          {venueStats === null ? (
+                            <span className="site-summary__unregistered">未登録</span>
+                          ) : (
+                            <>
+                              <span className={`site-summary__peak site-summary__peak--${peakColorClass(venueStats.maxPeople, venueStats.avgPeople)}`}>
+                                👥ピーク{venueStats.maxPeople}人
+                              </span>
+                              <span className="site-summary__avg">📊平均{venueStats.avgPeople}人</span>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                      <span className="venue-chevron">{isVenueOpen ? '▲' : '▼'}</span>
+                    </button>
                     <div className="site-actions">
                       <button className="btn btn--sm btn--secondary"
                         onClick={() => isEditingSession
@@ -882,82 +939,99 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                     </div>
                   )}
 
-                  {activeSites.length === 0 ? (
-                    <div className="site-empty">会期なし（まだ登録されていません）</div>
-                  ) : (
-                    <div className="session-list">
-                      {displaySessions.map((session) => {
-                        const key    = `${groupId}-${session.sessionId}`;
-                        const isOpen = expandedSessions.has(key);
-                        return (
-                          <div key={key} className="session-card">
-                            <div className="session-card__header">
-                              <button
-                                className="session-summary"
-                                onClick={() => toggleSession(key)}>
-                                <span className="session-summary__date">
-                                  📅 {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}（{session.dateCount}日）
-                                  <span className="session-chevron">{isOpen ? '▲' : '▼'}</span>
-                                </span>
-                                <div className="session-summary__meta">
-                                  <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
-                                  <span className="session-summary__people">
-                                    👤 {session.isUniformPeople ? `${session.requiredPeople}人` : '日別'}
-                                  </span>
-                                </div>
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn--sm btn--ghost-danger session-card__delete"
-                                onClick={() => {
-                                  if (!confirm('この会期を削除します。よろしいですか？')) return;
-                                  deleteDisplaySession(groupId, session);
-                                }}>
-                                削除
-                              </button>
-                            </div>
-                            {isOpen && (
-                              <div className="session-detail">
-                                <div className="session-detail__row">
-                                  <span className="session-detail__label">期間</span>
-                                  <span>{session.startDate}〜{session.endDate}（{session.dateCount}日）</span>
-                                </div>
-                                <div className="session-detail__row">
-                                  <span className="session-detail__label">時間</span>
-                                  <span>{session.startTime}〜{session.endTime}</span>
-                                </div>
-                                <div className="session-detail__row">
-                                  <span className="session-detail__label">必要人数</span>
-                                  {session.isUniformPeople ? (
-                                    <span>{session.requiredPeople}人</span>
-                                  ) : (
-                                    <div className="daily-people-list">
-                                      {compactDailyPeople(session.dailyPeople).map((line, i) => (
-                                        <div key={i} className="daily-people-row">{line}</div>
-                                      ))}
+                  {isVenueOpen && (
+                    <>
+                      {activeSites.length === 0 ? (
+                        <div className="site-empty">会期なし（まだ登録されていません）</div>
+                      ) : (
+                        <div className="session-list">
+                          {displaySessions.map((session) => {
+                            const key    = `${groupId}-${session.sessionId}`;
+                            const isOpen = expandedSessions.has(key);
+                            const dailyRows = session.dailyPeople.length > 0
+                              ? session.dailyPeople
+                              : calcDateRange(session.startDate, session.endDate).map((date) => ({
+                                  date, requiredPeople: session.requiredPeople,
+                                }));
+                            const sessionVals = session.dailyPeople.length > 0
+                              ? session.dailyPeople.map((d) => d.requiredPeople)
+                              : Array.from({ length: session.dateCount || 1 }, () => session.requiredPeople);
+                            const sessionPeak = Math.max(...sessionVals);
+                            const sessionAvg  = Math.round(sessionVals.reduce((sum, p) => sum + p, 0) / sessionVals.length);
+                            return (
+                              <div key={key} className="session-card">
+                                <div className="session-card__header">
+                                  <button
+                                    className="session-summary"
+                                    onClick={() => toggleSession(key)}>
+                                    <span className="session-summary__date">
+                                      📅 {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}（{session.dateCount}日）
+                                      <span className="session-chevron">{isOpen ? '▲' : '▼'}</span>
+                                    </span>
+                                    <div className="session-summary__meta">
+                                      <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
+                                      <span className={`session-summary__people session-summary__people--${peakColorClass(sessionPeak, sessionAvg)}`}>
+                                        👥ピーク{sessionPeak}人　📊平均{sessionAvg}人
+                                      </span>
                                     </div>
-                                  )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn--sm btn--ghost-danger session-card__delete"
+                                    onClick={() => {
+                                      if (!confirm('この会期を削除します。よろしいですか？')) return;
+                                      deleteDisplaySession(groupId, session);
+                                    }}>
+                                    削除
+                                  </button>
                                 </div>
-                                {session.memo && (
-                                  <div className="session-detail__row">
-                                    <span className="session-detail__label">メモ</span>
-                                    <span>{session.memo}</span>
-                                  </div>
-                                )}
+                                {isOpen && (() => {
+                                  const isDetailed = detailedDailyKeys.has(key);
+                                  const fmt = isDetailed ? formatDateWithDow : formatDateShort;
+                                  return (
+                                    <div className="session-daily">
+                                      <div className="session-daily__header">
+                                        <button
+                                          className="daily-toggle"
+                                          onClick={() => toggleDailyDetail(key)}
+                                        >
+                                          {isDetailed ? '曜日を隠す' : '曜日を表示'}
+                                        </button>
+                                      </div>
+                                      {groupDailyRows(dailyRows).map((group) => {
+                                        const label = group.startDate === group.endDate
+                                          ? fmt(group.startDate)
+                                          : `${fmt(group.startDate)}〜${fmt(group.endDate)}`;
+                                        return (
+                                          <div key={group.startDate} className="daily-row">
+                                            <span className="daily-row__date">{label}</span>
+                                            <span className="daily-row__people">{group.requiredPeople}人</span>
+                                          </div>
+                                        );
+                                      })}
+                                      {session.memo && (
+                                        <div className="daily-row daily-row--memo">
+                                          <span className="daily-row__date">メモ</span>
+                                          <span className="daily-row__people">{session.memo}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                            );
+                          })}
+                        </div>
+                      )}
 
-                  {!isEditingSession && (
-                    <button
-                      className="btn btn--sm btn--secondary site-add-session-btn"
-                      onClick={() => openGroupSessionEditorWithNewSession(groupId, sites)}>
-                      ＋ 会期を追加
-                    </button>
+                      {!isEditingSession && (
+                        <button
+                          className="btn btn--sm btn--secondary site-add-session-btn"
+                          onClick={() => openGroupSessionEditorWithNewSession(groupId, sites)}>
+                          ＋ 会期を追加
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               );
