@@ -1360,11 +1360,39 @@ h2 {
 }
 
 /* アクションボタン行 */
+.import-preview .table-wrapper {
+  max-height: 55vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .import-actions {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 0;
+  padding: 12px 0 0;
+  border-top: 2px solid #e5e7eb;
   flex-wrap: wrap;
+}
+
+.import-actions__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.import-actions__buttons {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ゴーストボタン（テンプレートDL用） */
