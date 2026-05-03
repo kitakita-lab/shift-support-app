@@ -34,18 +34,30 @@ export default function Dashboard({ staff, workSites, assignments }: Props) {
   ).size;
 
   // ③ 必要人数（延べ）：アクティブな現場日程ごとの requiredPeople の合計
-  //    assignments は siteId（WorkSite.id）単位 = 日別単位なので粒度が一致する
   const totalRequired = activeSites.reduce((sum, s) => sum + s.requiredPeople, 0);
 
-  // ④ 割当済み人数（延べ）：日別スロットごとに割り当てられたスタッフ数の合計
-  const totalAssigned = assignments.reduce((sum, a) => sum + a.assignedStaffIds.length, 0);
+  // 防衛的フィルタリング：存在しない siteId / staffId を持つ孤立 assignment を除外する
+  // App.tsx で削除時にクリーンアップしているが、旧データや異常系への二重保護として維持する
+  const validSiteIds  = new Set(activeSites.map((s) => s.id));
+  const validStaffIds = new Set(staff.map((s) => s.id));
+  const cleanAssignments = assignments
+    .filter((a) => validSiteIds.has(a.siteId))
+    .map((a) => ({
+      ...a,
+      assignedStaffIds: a.assignedStaffIds.filter((id) => validStaffIds.has(id)),
+    }));
+
+  // ④ 割当済み人数（延べ）
+  const totalAssigned = cleanAssignments.reduce((sum, a) => sum + a.assignedStaffIds.length, 0);
 
   // ⑤ 不足人数（延べ）：必要人数 − 割当済み人数
-  //    assignments が生成されていないスロットの分も正確に計上できる
   const totalShortage = Math.max(0, totalRequired - totalAssigned);
 
-  // 不足が生じている日別スロット数
-  const warningCount = assignments.filter((a) => a.shortage > 0).length;
+  // 不足が生じている日別スロット数（requiredPeople > 割当数 のスロット）
+  const requiredBySite = new Map(activeSites.map((s) => [s.id, s.requiredPeople]));
+  const warningCount = cleanAssignments.filter(
+    (a) => a.assignedStaffIds.length < (requiredBySite.get(a.siteId) ?? 0)
+  ).length;
 
   return (
     <div className="dashboard">
