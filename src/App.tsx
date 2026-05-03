@@ -111,14 +111,10 @@ export default function App() {
             csvSiteCount={workSites.filter((s) => s.source === 'csv').length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
             onImportSites={(imported, overwrite) => {
-              // 上書きモード時：削除される CSV 現場の assignment を先にクリーンアップする
+              // 上書きモード時：全 assignment を削除してから workSites を置き換える
+              // CSV更新後は必ずシフト再生成が必要なため、中途半端な割当を残さない
               if (overwrite) {
-                const csvIds = new Set(
-                  workSites.filter((s) => s.source === 'csv').map((s) => s.id)
-                );
-                if (csvIds.size > 0) {
-                  setAssignments((prev) => prev.filter((a) => !csvIds.has(a.siteId)));
-                }
+                setAssignments([]);
               }
               setWorkSites((prev) => {
                 const base = overwrite ? prev.filter((s) => s.source !== 'csv') : prev;
