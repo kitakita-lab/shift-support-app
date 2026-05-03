@@ -28,7 +28,10 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
 .app-header h1 {
@@ -48,9 +51,13 @@ body {
 .tab-nav {
   background: white;
   border-bottom: 1px solid #dde1e8;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.07);
   display: flex;
   overflow-x: auto;
   scrollbar-width: none;
+  position: sticky;
+  top: 56px;
+  z-index: 99;
 }
 
 .tab-nav::-webkit-scrollbar {
