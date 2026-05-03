@@ -1036,6 +1036,10 @@ h2 {
   color: #4b5563;
 }
 
+.session-summary__people--high   { color: #dc2626; font-weight: 600; }
+.session-summary__people--medium { color: #ea580c; font-weight: 600; }
+.session-summary__people--normal { color: #4b5563; }
+
 .session-chevron {
   font-size: 11px;
   color: #9ca3af;

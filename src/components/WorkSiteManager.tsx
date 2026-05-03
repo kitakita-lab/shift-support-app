@@ -77,6 +77,12 @@ function groupDailyRows(
 
 // ─── CSV 取込ヘルパー ─────────────────────────────────────────
 
+function peakColorClass(peak: number, avg: number): 'high' | 'medium' | 'normal' {
+  if (peak >= 6 || avg >= 4) return 'high';
+  if (peak >= 4 || avg >= 3) return 'medium';
+  return 'normal';
+}
+
 // 連続日 + 同一時間帯（requiredPeople は無視）でグルーピングしたときの会期数・現場数を返す
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteName = new Map<string, WorkSite[]>();
@@ -903,7 +909,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                             <span className="site-summary__unregistered">未登録</span>
                           ) : (
                             <>
-                              <span className={`site-summary__peak site-summary__peak--${venueStats.maxPeople >= 4 ? 'high' : venueStats.maxPeople >= 3 ? 'medium' : 'normal'}`}>
+                              <span className={`site-summary__peak site-summary__peak--${peakColorClass(venueStats.maxPeople, venueStats.avgPeople)}`}>
                                 👥ピーク{venueStats.maxPeople}人
                               </span>
                               <span className="site-summary__avg">📊平均{venueStats.avgPeople}人</span>
@@ -964,7 +970,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                     </span>
                                     <div className="session-summary__meta">
                                       <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
-                                      <span className="session-summary__people">
+                                      <span className={`session-summary__people session-summary__people--${peakColorClass(sessionPeak, sessionAvg)}`}>
                                         👥ピーク{sessionPeak}人　📊平均{sessionAvg}人
                                       </span>
                                     </div>
