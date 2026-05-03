@@ -915,18 +915,18 @@ h2 {
   flex-wrap: wrap;
 }
 
-.site-summary__max {
+.site-summary__peak {
   font-weight: 700;
   font-size: 12px;
 }
 
-.site-summary__max--high   { color: #dc2626; }
-.site-summary__max--medium { color: #ea580c; }
-.site-summary__max--normal { color: #6b7280; }
+.site-summary__peak--high   { color: #dc2626; }
+.site-summary__peak--medium { color: #ea580c; }
+.site-summary__peak--normal { color: #6b7280; }
 
-.site-summary__sub {
-  font-size: 11px;
-  color: #9ca3af;
+.site-summary__avg {
+  font-size: 12px;
+  color: #6b7280;
 }
 
 .site-summary__unregistered {

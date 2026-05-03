@@ -880,13 +880,15 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
 
               const venueStats = activeSites.length > 0
                 ? (() => {
-                    const totalDays = displaySessions.reduce((sum, s) => sum + s.dateCount, 0);
-                    const maxPeople = Math.max(...displaySessions.map((s) =>
+                    const allPeople = displaySessions.flatMap((s) =>
                       s.dailyPeople.length > 0
-                        ? Math.max(...s.dailyPeople.map((d) => d.requiredPeople))
-                        : s.requiredPeople
-                    ));
-                    return { totalDays, maxPeople, sessionCount: displaySessions.length };
+                        ? s.dailyPeople.map((d) => d.requiredPeople)
+                        : Array.from({ length: s.dateCount }, () => s.requiredPeople)
+                    );
+                    if (allPeople.length === 0) return null;
+                    const maxPeople = Math.max(...allPeople);
+                    const avgPeople = Math.round(allPeople.reduce((sum, p) => sum + p, 0) / allPeople.length);
+                    return { maxPeople, avgPeople };
                   })()
                 : null;
 
@@ -901,10 +903,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                             <span className="site-summary__unregistered">未登録</span>
                           ) : (
                             <>
-                              <span className={`site-summary__max site-summary__max--${venueStats.maxPeople >= 4 ? 'high' : venueStats.maxPeople >= 3 ? 'medium' : 'normal'}`}>
-                                最大{venueStats.maxPeople}人
+                              <span className={`site-summary__peak site-summary__peak--${venueStats.maxPeople >= 4 ? 'high' : venueStats.maxPeople >= 3 ? 'medium' : 'normal'}`}>
+                                👥ピーク{venueStats.maxPeople}人
                               </span>
-                              <span className="site-summary__sub">（{venueStats.totalDays}日 / {venueStats.sessionCount}件）</span>
+                              <span className="site-summary__avg">📊平均{venueStats.avgPeople}人</span>
                             </>
                           )}
                         </div>
@@ -945,6 +947,11 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                               : calcDateRange(session.startDate, session.endDate).map((date) => ({
                                   date, requiredPeople: session.requiredPeople,
                                 }));
+                            const sessionVals = session.dailyPeople.length > 0
+                              ? session.dailyPeople.map((d) => d.requiredPeople)
+                              : Array.from({ length: session.dateCount || 1 }, () => session.requiredPeople);
+                            const sessionPeak = Math.max(...sessionVals);
+                            const sessionAvg  = Math.round(sessionVals.reduce((sum, p) => sum + p, 0) / sessionVals.length);
                             return (
                               <div key={key} className="session-card">
                                 <div className="session-card__header">
@@ -958,7 +965,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                                     <div className="session-summary__meta">
                                       <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
                                       <span className="session-summary__people">
-                                        👤 {session.isUniformPeople ? `${session.requiredPeople}人` : '日別'}
+                                        👥ピーク{sessionPeak}人　📊平均{sessionAvg}人
                                       </span>
                                     </div>
                                   </button>
