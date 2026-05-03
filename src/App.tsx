@@ -37,6 +37,28 @@ export default function App() {
     setAssignments([]);
   }
 
+  // スタッフが削除された場合、該当 staffId を assignedStaffIds から除去し shortage を補正する
+  function handleStaffChange(newStaff: Staff[]) {
+    const newIds = new Set(newStaff.map((s) => s.id));
+    setAssignments((prev) =>
+      prev.map((a) => {
+        const validStaff   = a.assignedStaffIds.filter((id) => newIds.has(id));
+        const removedCount = a.assignedStaffIds.length - validStaff.length;
+        return removedCount === 0
+          ? a
+          : { ...a, assignedStaffIds: validStaff, shortage: a.shortage + removedCount };
+      })
+    );
+    setStaff(newStaff);
+  }
+
+  // 現場が削除された場合、該当 siteId の assignment を削除する
+  function handleWorkSiteChange(newSites: WorkSite[]) {
+    const newIds = new Set(newSites.map((s) => s.id));
+    setAssignments((prev) => prev.filter((a) => newIds.has(a.siteId)));
+    setWorkSites(newSites);
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -61,10 +83,10 @@ export default function App() {
           <Dashboard staff={staff} workSites={workSites} assignments={assignments} />
         )}
         {activeTab === 'staff' && (
-          <StaffManager staff={staff} workSites={workSites} onChange={setStaff} />
+          <StaffManager staff={staff} workSites={workSites} onChange={handleStaffChange} />
         )}
         {activeTab === 'worksite' && (
-          <WorkSiteManager workSites={workSites} onChange={setWorkSites} />
+          <WorkSiteManager workSites={workSites} onChange={handleWorkSiteChange} />
         )}
         {activeTab === 'shift' && (
           <ShiftBuilder
@@ -88,12 +110,17 @@ export default function App() {
             currentSiteCount={workSites.filter((s) => !s.isPlaceholder).length}
             csvSiteCount={workSites.filter((s) => s.source === 'csv').length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
-            onImportSites={(imported, overwrite) =>
+            onImportSites={(imported, overwrite) => {
+              // 上書きモード時：全 assignment を削除してから workSites を置き換える
+              // CSV更新後は必ずシフト再生成が必要なため、中途半端な割当を残さない
+              if (overwrite) {
+                setAssignments([]);
+              }
               setWorkSites((prev) => {
                 const base = overwrite ? prev.filter((s) => s.source !== 'csv') : prev;
                 return [...base, ...imported];
-              })
-            }
+              });
+            }}
             onApplyDaysOff={(updates) =>
               setStaff((prev) =>
                 prev.map((s) => {
@@ -102,13 +129,19 @@ export default function App() {
                 })
               )
             }
-            onDeleteCsvSites={() =>
-              setWorkSites((prev) => prev.filter((s) => s.source !== 'csv'))
-            }
+            onDeleteCsvSites={() => {
+              // CSV 現場を削除する前に関連 assignment をクリーンアップする
+              const csvIds = new Set(
+                workSites.filter((s) => s.source === 'csv').map((s) => s.id)
+              );
+              if (csvIds.size > 0) {
+                setAssignments((prev) => prev.filter((a) => !csvIds.has(a.siteId)));
+              }
+              setWorkSites((prev) => prev.filter((s) => s.source !== 'csv'));
+            }}
           />
         )}
       </main>
     </div>
   );
 }
-
