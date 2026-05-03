@@ -22,9 +22,29 @@ function StatCard({ label, value, alert }: StatCardProps) {
 }
 
 export default function Dashboard({ staff, workSites, assignments }: Props) {
-  const totalRequired = workSites.reduce((sum, s) => sum + s.requiredPeople, 0);
+  // isPlaceholder（会期なし会場の仮レコード）を除いたアクティブな現場日程
+  const activeSites = workSites.filter((s) => !s.isPlaceholder);
+
+  // ① 登録現場数：ユニーク会場名（siteName）の数
+  const venueCount = new Set(activeSites.map((s) => s.siteName)).size;
+
+  // ② 登録会期数：ユニーク sessionId の数（sessionId がない旧データは id で代替）
+  const sessionCount = new Set(
+    activeSites.map((s) => s.sessionId ?? s.id)
+  ).size;
+
+  // ③ 必要人数（延べ）：アクティブな現場日程ごとの requiredPeople の合計
+  //    assignments は siteId（WorkSite.id）単位 = 日別単位なので粒度が一致する
+  const totalRequired = activeSites.reduce((sum, s) => sum + s.requiredPeople, 0);
+
+  // ④ 割当済み人数（延べ）：日別スロットごとに割り当てられたスタッフ数の合計
   const totalAssigned = assignments.reduce((sum, a) => sum + a.assignedStaffIds.length, 0);
-  const totalShortage = assignments.reduce((sum, a) => sum + a.shortage, 0);
+
+  // ⑤ 不足人数（延べ）：必要人数 − 割当済み人数
+  //    assignments が生成されていないスロットの分も正確に計上できる
+  const totalShortage = Math.max(0, totalRequired - totalAssigned);
+
+  // 不足が生じている日別スロット数
   const warningCount = assignments.filter((a) => a.shortage > 0).length;
 
   return (
@@ -37,11 +57,12 @@ export default function Dashboard({ staff, workSites, assignments }: Props) {
       )}
       <div className="stat-grid">
         <StatCard label="登録スタッフ数" value={staff.length} />
-        <StatCard label="登録現場数" value={workSites.length} />
-        <StatCard label="必要総人数" value={totalRequired} />
-        <StatCard label="割当済み人数" value={totalAssigned} />
-        <StatCard label="不足人数" value={totalShortage} alert={totalShortage > 0} />
-        <StatCard label="不足現場数" value={warningCount} alert={warningCount > 0} />
+        <StatCard label="登録現場数" value={venueCount} />
+        <StatCard label="登録会期数" value={sessionCount} />
+        <StatCard label="必要人数（延べ）" value={totalRequired} />
+        <StatCard label="割当済み人数（延べ）" value={totalAssigned} />
+        <StatCard label="不足人数（延べ）" value={totalShortage} alert={totalShortage > 0} />
+        <StatCard label="不足スロット数" value={warningCount} alert={warningCount > 0} />
       </div>
     </div>
   );
