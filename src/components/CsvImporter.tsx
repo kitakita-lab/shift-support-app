@@ -73,14 +73,6 @@ function ErrorList({ errors }: { errors: ParseError[] }) {
   );
 }
 
-function ImportCount({ count, suffix = '件を取り込みます' }: { count: number; suffix?: string }) {
-  return (
-    <div className="import-count">
-      <span className="import-count__num">{count}</span>{suffix}
-    </div>
-  );
-}
-
 // ── Helpers ───────────────────────────────────────────────────
 
 function toYearMonth(d: Date): string {
@@ -412,7 +404,6 @@ export default function CsvImporter({
             <ErrorList errors={staffPreview.errors} />
             {staffPreview.valid.length > 0 ? (
               <>
-                <ImportCount count={staffPreview.valid.length} />
                 <div className="table-wrapper">
                   <table className="data-table">
                     <thead>
@@ -438,12 +429,13 @@ export default function CsvImporter({
                   </table>
                 </div>
                 <div className="import-actions">
-                  <button className="btn btn--primary" onClick={handleImportStaff}>
-                    {staffPreview.valid.length}件を追加する
-                  </button>
-                  <button className="btn btn--secondary" onClick={clearStaffPreview}>
-                    キャンセル
-                  </button>
+                  <span className="import-actions__label">
+                    {staffPreview.valid.length}件のスタッフ
+                  </span>
+                  <div className="import-actions__buttons">
+                    <button className="btn btn--primary" onClick={handleImportStaff}>追加する</button>
+                    <button className="btn btn--secondary" onClick={clearStaffPreview}>キャンセル</button>
+                  </div>
                 </div>
               </>
             ) : (
@@ -530,10 +522,6 @@ export default function CsvImporter({
             <ErrorList errors={sitePreview.errors} />
             {sitePreview.valid.length > 0 ? (
               <>
-                <ImportCount
-                  count={sitePreviewCounts.sessionCount}
-                  suffix={`会期・${sitePreviewCounts.venueCount}現場（連続日結合済み）を取り込みます`}
-                />
                 <div className="table-wrapper">
                   <table className="data-table">
                     <thead>
@@ -561,12 +549,13 @@ export default function CsvImporter({
                   </table>
                 </div>
                 <div className="import-actions">
-                  <button className="btn btn--primary" onClick={handleImportSites}>
-                    {sitePreviewCounts.venueCount}現場・{sitePreviewCounts.sessionCount}会期を追加する
-                  </button>
-                  <button className="btn btn--secondary" onClick={clearSitePreview}>
-                    キャンセル
-                  </button>
+                  <span className="import-actions__label">
+                    {sitePreviewCounts.venueCount}現場・{sitePreviewCounts.sessionCount}会期
+                  </span>
+                  <div className="import-actions__buttons">
+                    <button className="btn btn--primary" onClick={handleImportSites}>追加する</button>
+                    <button className="btn btn--secondary" onClick={clearSitePreview}>キャンセル</button>
+                  </div>
                 </div>
               </>
             ) : (
@@ -678,28 +667,6 @@ export default function CsvImporter({
 
             {daysOffPreview.matched.length > 0 ? (
               <>
-                {(() => {
-                  const totalDates = daysOffPreview.matched.reduce((sum, m) => {
-                    const dates =
-                      daysOffMode === 'replace'
-                        ? m.csvDaysOff.filter((d) => d.startsWith(daysOffTargetMonth))
-                        : m.csvDaysOff;
-                    return sum + dates.length;
-                  }, 0);
-                  return (
-                    <div className="import-count">
-                      <span className="import-count__num">{daysOffPreview.matched.length}</span>
-                      名・
-                      <span className="import-count__num">{totalDates}</span>
-                      件の希望休を反映します
-                      <span className="days-off-mode-badge">
-                        {daysOffMode === 'replace'
-                          ? `${daysOffTargetMonth} を置き換え`
-                          : '既存に追加'}
-                      </span>
-                    </div>
-                  );
-                })()}
                 <div className="table-wrapper">
                   <table className="data-table">
                     <thead>
@@ -750,12 +717,22 @@ export default function CsvImporter({
                   </table>
                 </div>
                 <div className="import-actions">
-                  <button className="btn btn--primary" onClick={handleApplyDaysOff}>
-                    {daysOffPreview.matched.length}件に反映する
-                  </button>
-                  <button className="btn btn--secondary" onClick={clearDaysOffPreview}>
-                    キャンセル
-                  </button>
+                  <span className="import-actions__label">
+                    {daysOffPreview.matched.length}名・
+                    {daysOffPreview.matched.reduce((sum, m) => {
+                      const dates = daysOffMode === 'replace'
+                        ? m.csvDaysOff.filter((d) => d.startsWith(daysOffTargetMonth))
+                        : m.csvDaysOff;
+                      return sum + dates.length;
+                    }, 0)}件の希望休
+                    <span className="days-off-mode-badge">
+                      {daysOffMode === 'replace' ? `${daysOffTargetMonth} を置き換え` : '既存に追加'}
+                    </span>
+                  </span>
+                  <div className="import-actions__buttons">
+                    <button className="btn btn--primary" onClick={handleApplyDaysOff}>反映する</button>
+                    <button className="btn btn--secondary" onClick={clearDaysOffPreview}>キャンセル</button>
+                  </div>
                 </div>
               </>
             ) : (

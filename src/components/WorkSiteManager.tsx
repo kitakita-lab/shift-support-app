@@ -867,7 +867,7 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
       <div className="card">
         <div className="site-list-header">
           <h3>登録済み現場 ({sortedGroups.length + ungroupedSites.length}件)</h3>
-          <button className="btn btn--primary btn--sm" onClick={() => setCsvModalOpen(true)}>
+          <button className="btn btn--secondary btn--sm" onClick={() => setCsvModalOpen(true)}>
             CSV取込
           </button>
         </div>
