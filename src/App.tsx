@@ -62,6 +62,11 @@ export default function App() {
     return assignments.filter((a) => siteIds.has(a.siteId));
   }, [monthlyWorkSites, assignments]);
 
+  const hasSites = useMemo(
+    () => workSites.some((s) => !s.isPlaceholder),
+    [workSites]
+  );
+
   function handleClearAll() {
     storage.clearAll();
     setStaff([]);
@@ -142,6 +147,7 @@ export default function App() {
             assignments={monthlyAssignments}
             selectedMonth={selectedMonth}
             onNavigate={(tab) => setActiveTab(tab as Tab)}
+            hasSites={hasSites}
           />
         )}
         {activeTab === 'staff' && (
