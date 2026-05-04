@@ -470,11 +470,6 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
     };
   }, [workSites]);
 
-  const displayGroups = sortedGroups.filter(({ sites }) =>
-    sites.some((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth))
-  );
-  const displayUngrouped = ungroupedSites.filter((s) => s.date.startsWith(selectedMonth));
-
   // ── 新規現場登録 ────────────────────────────────────────────
 
   function addNewSession() {
@@ -872,23 +867,25 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
       {/* ── 登録済み現場一覧 ─────────────────────────── */}
       <div className="card">
         <div className="site-list-header">
-          <h3>登録済み現場 ({displayGroups.length + displayUngrouped.length}件)</h3>
+          <h3>登録済み現場 ({sortedGroups.length + ungroupedSites.length}件)</h3>
           <button className="btn btn--secondary btn--sm" onClick={() => setCsvModalOpen(true)}>
             CSV取込
           </button>
         </div>
 
-        {displayGroups.length === 0 && displayUngrouped.length === 0 ? (
+        {sortedGroups.length === 0 && ungroupedSites.length === 0 ? (
           <p className="empty-msg">現場が登録されていません</p>
         ) : (
           <div className="site-list">
 
-            {displayGroups.map(({ groupId, sites }) => {
-              const isEditingSession = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
-              const activeSites      = sites.filter((s) => !s.isPlaceholder);
-              const displaySessions  = groupSitesIntoDisplaySessions(sites);
-              const siteName         = sites[0]?.siteName ?? '';
-              const isVenueOpen      = expandedVenues.has(groupId);
+            {sortedGroups.map(({ groupId, sites }) => {
+              const isEditingSession    = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
+              const activeSites         = sites.filter((s) => !s.isPlaceholder);
+              const monthActiveSites    = activeSites.filter((s) => s.date.startsWith(selectedMonth));
+              const displaySessions     = groupSitesIntoDisplaySessions(sites);
+              const monthDisplaySessions = groupSitesIntoDisplaySessions(monthActiveSites);
+              const siteName            = sites[0]?.siteName ?? '';
+              const isVenueOpen         = expandedVenues.has(groupId);
 
               const venueStats = activeSites.length > 0
                 ? (() => {
@@ -949,9 +946,11 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
                     <>
                       {activeSites.length === 0 ? (
                         <div className="site-empty">会期なし（まだ登録されていません）</div>
+                      ) : monthActiveSites.length === 0 ? (
+                        <div className="site-empty">この月の会期はありません</div>
                       ) : (
                         <div className="session-list">
-                          {displaySessions.map((session) => {
+                          {monthDisplaySessions.map((session) => {
                             const key    = `${groupId}-${session.sessionId}`;
                             const isOpen = expandedSessions.has(key);
                             const dailyRows = session.dailyPeople.length > 0
@@ -1043,10 +1042,10 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
               );
             })}
 
-            {displayUngrouped.length > 0 && (
+            {ungroupedSites.length > 0 && (
               <div className="site-ungrouped-section">
-                <p className="site-ungrouped-label">グループなし（{displayUngrouped.length}件）</p>
-                {displayUngrouped.map((site) => {
+                <p className="site-ungrouped-label">グループなし（{ungroupedSites.length}件）</p>
+                {ungroupedSites.map((site) => {
                   const isConvertingThis =
                     !sessionEditor?.isExistingGroup &&
                     (sessionEditor?.sourceIds.includes(site.id) ?? false);
