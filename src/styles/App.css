@@ -1360,6 +1360,11 @@ h2 {
   border-bottom: none;
 }
 
+.import-error-row--more {
+  color: #9ca3af;
+  font-style: italic;
+}
+
 /* 件数表示 */
 .import-count {
   display: flex;

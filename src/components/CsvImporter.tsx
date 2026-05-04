@@ -59,16 +59,23 @@ interface Props {
 
 // ── Sub-components ────────────────────────────────────────────
 
+const ERROR_DISPLAY_LIMIT = 10;
+
 function ErrorList({ errors }: { errors: ParseError[] }) {
   if (errors.length === 0) return null;
+  const shown = errors.slice(0, ERROR_DISPLAY_LIMIT);
+  const remaining = errors.length - shown.length;
   return (
     <div className="import-errors">
       <div className="import-errors__title">エラー {errors.length}件（該当行はスキップされます）</div>
-      {errors.map((err, i) => (
+      {shown.map((err, i) => (
         <div key={i} className="import-error-row">
           {err.row}行目：{err.message}
         </div>
       ))}
+      {remaining > 0 && (
+        <div className="import-error-row import-error-row--more">他 {remaining}件…</div>
+      )}
     </div>
   );
 }
@@ -240,7 +247,7 @@ export default function CsvImporter({
     const file = e.target.files?.[0];
     if (!file) return;
     readFile(file, (text, fileName) => {
-      const parsed = parseDaysOffCSV(text);
+      const parsed = parseDaysOffCSV(text, daysOffTargetMonth);
       const { matched, matchErrors } = matchDaysOffRows(parsed.rows, staff);
       setDaysOffPreview({ fileName, matched, parseErrors: parsed.errors, matchErrors });
       setDaysOffSuccess('');
@@ -683,18 +690,25 @@ export default function CsvImporter({
 
             <ErrorList errors={daysOffPreview.parseErrors} />
 
-            {daysOffPreview.matchErrors.length > 0 && (
-              <div className="import-errors">
-                <div className="import-errors__title">
-                  照合エラー {daysOffPreview.matchErrors.length}件（該当行はスキップされます）
-                </div>
-                {daysOffPreview.matchErrors.map((err, i) => (
-                  <div key={i} className="import-error-row">
-                    {err.rowNum}行目：{err.message}
+            {daysOffPreview.matchErrors.length > 0 && (() => {
+              const shown = daysOffPreview.matchErrors.slice(0, ERROR_DISPLAY_LIMIT);
+              const remaining = daysOffPreview.matchErrors.length - shown.length;
+              return (
+                <div className="import-errors">
+                  <div className="import-errors__title">
+                    照合エラー {daysOffPreview.matchErrors.length}件（該当行はスキップされます）
                   </div>
-                ))}
-              </div>
-            )}
+                  {shown.map((err, i) => (
+                    <div key={i} className="import-error-row">
+                      {err.rowNum}行目：{err.message}
+                    </div>
+                  ))}
+                  {remaining > 0 && (
+                    <div className="import-error-row import-error-row--more">他 {remaining}件…</div>
+                  )}
+                </div>
+              );
+            })()}
 
             {daysOffPreview.matched.length > 0 ? (
               <>

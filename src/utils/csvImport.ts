@@ -55,9 +55,9 @@ function isValidTime(s: string): boolean {
   return /^\d{2}:\d{2}$/.test(s);
 }
 
-// requestedDaysOff の正規化：YYYY/MM/DD → YYYY-MM-DD、M/D → 当年補完
-// スペースはトリム済みの値を受け取る。変換不能な場合は null を返す
-function normalizeDayOffDate(raw: string): string | null {
+// requestedDaysOff の正規化：YYYY/MM/DD → YYYY-MM-DD、M/D → refYear補完
+// refYear を省略すると当年を使用。変換不能な場合は null を返す
+function normalizeDayOffDate(raw: string, refYear?: number): string | null {
   const s = raw.trim();
   if (!s) return null;
 
@@ -73,7 +73,7 @@ function normalizeDayOffDate(raw: string): string | null {
 
   const mShort = s.match(/^(\d{1,2})\/(\d{1,2})$/);
   if (mShort) {
-    const year = new Date().getFullYear();
+    const year = refYear ?? new Date().getFullYear();
     const n = `${year}-${mShort[1].padStart(2, '0')}-${mShort[2].padStart(2, '0')}`;
     return isValidDate(n) ? n : null;
   }
@@ -282,7 +282,7 @@ export interface DaysOffParseResult {
   errors: ParseError[];
 }
 
-export function parseDaysOffCSV(rawText: string): DaysOffParseResult {
+export function parseDaysOffCSV(rawText: string, targetMonth?: string): DaysOffParseResult {
   const lines = stripBom(rawText)
     .split(/\r?\n/)
     .filter((l) => l.trim() !== '');
@@ -291,6 +291,9 @@ export function parseDaysOffCSV(rawText: string): DaysOffParseResult {
   const errors: ParseError[] = [];
 
   if (lines.length === 0) return { rows, errors };
+
+  // targetMonth（例："2026-05"）から refYear を抽出して M/D 正規化に使用
+  const refYear = targetMonth ? parseInt(targetMonth.slice(0, 4), 10) : undefined;
 
   // ── フォーマット自動検出 ─────────────────────────────────
   const firstFields = parseCSVLine(lines[0]);
@@ -354,9 +357,13 @@ export function parseDaysOffCSV(rawText: string): DaysOffParseResult {
         errors.push({ row: rowNum, message: 'スタッフNoと名前が両方空です' });
         continue;
       }
-      const normalizedDate = normalizeDayOffDate(dateStr);
+      const normalizedDate = normalizeDayOffDate(dateStr, refYear);
       if (!normalizedDate) {
         errors.push({ row: rowNum, message: `不正な日付: "${dateStr}"` });
+        continue;
+      }
+      if (targetMonth && !normalizedDate.startsWith(targetMonth)) {
+        errors.push({ row: rowNum, message: `対象月（${targetMonth}）外の日付です: "${dateStr}"` });
         continue;
       }
 
@@ -407,13 +414,23 @@ export function parseDaysOffCSV(rawText: string): DaysOffParseResult {
 
     const requestedDaysOff: string[] = [];
     const invalidDates: string[] = [];
+    const outOfMonthDates: string[] = [];
     for (const raw of rawDates) {
-      const n = normalizeDayOffDate(raw);
-      if (n !== null) { requestedDaysOff.push(n); } else { invalidDates.push(raw); }
+      const n = normalizeDayOffDate(raw, refYear);
+      if (n === null) {
+        invalidDates.push(raw);
+      } else if (targetMonth && !n.startsWith(targetMonth)) {
+        outOfMonthDates.push(raw);
+      } else {
+        requestedDaysOff.push(n);
+      }
     }
     if (invalidDates.length > 0) {
       errors.push({ row: rowNum, message: `不正な日付: ${invalidDates.join(', ')}` });
       continue;
+    }
+    if (outOfMonthDates.length > 0) {
+      errors.push({ row: rowNum, message: `対象月（${targetMonth}）外のためスキップ: ${outOfMonthDates.join(', ')}` });
     }
 
     rows.push({ rowNum, staffNo, name, requestedDaysOff });
