@@ -59,16 +59,23 @@ interface Props {
 
 // ── Sub-components ────────────────────────────────────────────
 
+const ERROR_DISPLAY_LIMIT = 10;
+
 function ErrorList({ errors }: { errors: ParseError[] }) {
   if (errors.length === 0) return null;
+  const shown = errors.slice(0, ERROR_DISPLAY_LIMIT);
+  const remaining = errors.length - shown.length;
   return (
     <div className="import-errors">
       <div className="import-errors__title">エラー {errors.length}件（該当行はスキップされます）</div>
-      {errors.map((err, i) => (
+      {shown.map((err, i) => (
         <div key={i} className="import-error-row">
           {err.row}行目：{err.message}
         </div>
       ))}
+      {remaining > 0 && (
+        <div className="import-error-row import-error-row--more">他 {remaining}件…</div>
+      )}
     </div>
   );
 }
@@ -240,7 +247,7 @@ export default function CsvImporter({
     const file = e.target.files?.[0];
     if (!file) return;
     readFile(file, (text, fileName) => {
-      const parsed = parseDaysOffCSV(text);
+      const parsed = parseDaysOffCSV(text, daysOffTargetMonth);
       const { matched, matchErrors } = matchDaysOffRows(parsed.rows, staff);
       setDaysOffPreview({ fileName, matched, parseErrors: parsed.errors, matchErrors });
       setDaysOffSuccess('');
@@ -370,14 +377,23 @@ export default function CsvImporter({
       <div className="card">
         <h3>スタッフCSVのインポート</h3>
         <p className="section-desc">
-          スタッフ情報をCSVファイルから一括で取り込めます。既存のスタッフは消えずに追加されます。
+          スタッフ情報をCSVから一括登録します。勤務可能曜日・希望休・最大勤務日数を取り込み、シフト自動作成時の条件として使用します。
         </p>
 
+        <div className="import-field-list">
+          <div className="import-field-row"><span className="import-field-name">name</span>スタッフ名。必須</div>
+          <div className="import-field-row"><span className="import-field-name">availableWeekdays</span>勤務可能曜日。例：月,火,水,木,金</div>
+          <div className="import-field-row"><span className="import-field-name">requestedDaysOff</span>希望休（YYYY-MM-DD形式）。例：2026-05-03,2026-05-10</div>
+          <div className="import-field-row"><span className="import-field-name">maxWorkDays</span>対象月の最大勤務日数</div>
+          <div className="import-field-row"><span className="import-field-name">memo</span>任意メモ</div>
+        </div>
+
         <div className="import-format">
-          <div className="import-format__title">CSVフォーマット（文字コード：UTF-8）</div>
+          <div className="import-format__title">入力例（UTF-8）</div>
           <pre className="import-format__code">{`name,availableWeekdays,requestedDaysOff,maxWorkDays,memo
 佐藤太郎,"月,火,水,木,金","2026-05-03,2026-05-10",20,リーダー可
-田中花子,"月,水,金",,15,`}</pre>
+田中花子,"月,水,金","2026-05-03",15,
+鈴木一郎,"土,日","",8,土日中心`}</pre>
         </div>
 
         <div className="import-upload">
@@ -401,6 +417,12 @@ export default function CsvImporter({
         {staffPreview && (
           <div className="import-preview">
             <div className="import-preview__filename">ファイル：{staffPreview.fileName}</div>
+            <div className="import-summary">
+              <span className="import-summary__ok">取込可能：{staffPreview.valid.length}件</span>
+              {staffPreview.errors.length > 0 && (
+                <span className="import-summary__err">エラー：{staffPreview.errors.length}行スキップ</span>
+              )}
+            </div>
             <ErrorList errors={staffPreview.errors} />
             {staffPreview.valid.length > 0 ? (
               <>
@@ -451,12 +473,19 @@ export default function CsvImporter({
       <div className="card">
         <h3>現場CSVのインポート</h3>
         <p className="section-desc">
-          現場情報をCSVファイルから一括で取り込めます。既存の現場は消えずに追加されます。
-          取り込んだ現場はグループなしで個別登録されます。
+          現場の日程・必要人数をCSVから一括登録します。1行1日付で入力し、連続日は自動的に1会期にまとめられます。
         </p>
 
+        <div className="import-field-list">
+          <div className="import-field-row"><span className="import-field-name">date</span>開催日（YYYY-MM-DD）。必須</div>
+          <div className="import-field-row"><span className="import-field-name">siteName</span>現場名。必須</div>
+          <div className="import-field-row"><span className="import-field-name">startTime / endTime</span>開始・終了時間（HH:MM）</div>
+          <div className="import-field-row"><span className="import-field-name">requiredPeople</span>その日の必要人数</div>
+          <div className="import-field-row"><span className="import-field-name">memo</span>任意メモ</div>
+        </div>
+
         <div className="import-format">
-          <div className="import-format__title">CSVフォーマット（文字コード：UTF-8）</div>
+          <div className="import-format__title">入力例（UTF-8）</div>
           <pre className="import-format__code">{`date,siteName,startTime,endTime,requiredPeople,memo
 2026-05-01,アリオ札幌,10:00,18:00,3,通常
 2026-05-02,南郷7丁目,09:00,17:00,2,`}</pre>
@@ -519,6 +548,12 @@ export default function CsvImporter({
         {sitePreview && (
           <div className="import-preview">
             <div className="import-preview__filename">ファイル：{sitePreview.fileName}</div>
+            <div className="import-summary">
+              <span className="import-summary__ok">取込可能：{sitePreview.valid.length}行</span>
+              {sitePreview.errors.length > 0 && (
+                <span className="import-summary__err">エラー：{sitePreview.errors.length}行スキップ</span>
+              )}
+            </div>
             <ErrorList errors={sitePreview.errors} />
             {sitePreview.valid.length > 0 ? (
               <>
@@ -571,21 +606,16 @@ export default function CsvImporter({
       <div className="card">
         <h3>希望休CSVのインポート</h3>
         <p className="section-desc">
-          スタッフが申請した希望休をCSVから取り込み、各スタッフのシフト除外日に反映します。
-          スタッフNoを優先キーとして照合し、空の場合は名前で照合します。
+          スタッフの希望休をCSVから取り込み、シフト自動作成の除外日に反映します。スタッフNoまたは名前で照合します。
         </p>
 
         <div className="import-format">
-          <div className="import-format__title">対応CSVフォーマット（文字コード：UTF-8 / ヘッダーは省略可）</div>
-          <div className="import-format__subtitle">① 1スタッフ1行（一括形式）</div>
+          <div className="import-format__subtitle">形式①：1スタッフ1行（一括）</div>
           <pre className="import-format__code">{`staffNo,name,requestedDaysOff
-001,セトケンスケ,"2026-05-03,2026-05-10,2026-05-18"
-002,マツハシマミ,"2026-05-01,2026-05-07"`}</pre>
-          <div className="import-format__subtitle">② 1希望休1行（Bubble等の外部フォーム出力）</div>
+001,セトケンスケ,"2026-05-03,2026-05-10,2026-05-18"`}</pre>
+          <div className="import-format__subtitle">形式②：1希望休1行（Bubble等の外部フォーム）</div>
           <pre className="import-format__code">{`staffNo,name,date
-001,セトケンスケ,2026-05-03
-001,セトケンスケ,2026-05-10
-002,マツハシマミ,2026-05-01`}</pre>
+001,セトケンスケ,2026-05-03`}</pre>
           <div className="import-format__note">staffNo列がない場合は name,date の2列でも可。同一スタッフの行は自動集約されます。</div>
         </div>
 
@@ -649,21 +679,36 @@ export default function CsvImporter({
         {daysOffPreview && (
           <div className="import-preview">
             <div className="import-preview__filename">ファイル：{daysOffPreview.fileName}</div>
+            <div className="import-summary">
+              <span className="import-summary__ok">照合成功：{daysOffPreview.matched.length}名</span>
+              {(daysOffPreview.parseErrors.length + daysOffPreview.matchErrors.length) > 0 && (
+                <span className="import-summary__err">
+                  エラー：{daysOffPreview.parseErrors.length + daysOffPreview.matchErrors.length}件
+                </span>
+              )}
+            </div>
 
             <ErrorList errors={daysOffPreview.parseErrors} />
 
-            {daysOffPreview.matchErrors.length > 0 && (
-              <div className="import-errors">
-                <div className="import-errors__title">
-                  照合エラー {daysOffPreview.matchErrors.length}件（該当行はスキップされます）
-                </div>
-                {daysOffPreview.matchErrors.map((err, i) => (
-                  <div key={i} className="import-error-row">
-                    {err.rowNum}行目：{err.message}
+            {daysOffPreview.matchErrors.length > 0 && (() => {
+              const shown = daysOffPreview.matchErrors.slice(0, ERROR_DISPLAY_LIMIT);
+              const remaining = daysOffPreview.matchErrors.length - shown.length;
+              return (
+                <div className="import-errors">
+                  <div className="import-errors__title">
+                    照合エラー {daysOffPreview.matchErrors.length}件（該当行はスキップされます）
                   </div>
-                ))}
-              </div>
-            )}
+                  {shown.map((err, i) => (
+                    <div key={i} className="import-error-row">
+                      {err.rowNum}行目：{err.message}
+                    </div>
+                  ))}
+                  {remaining > 0 && (
+                    <div className="import-error-row import-error-row--more">他 {remaining}件…</div>
+                  )}
+                </div>
+              );
+            })()}
 
             {daysOffPreview.matched.length > 0 ? (
               <>

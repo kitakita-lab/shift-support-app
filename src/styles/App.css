@@ -1302,6 +1302,24 @@ h2 {
   line-height: 1.7;
 }
 
+/* 取込件数サマリー */
+.import-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.import-summary__ok {
+  color: #16a34a;
+}
+
+.import-summary__err {
+  color: #dc2626;
+}
+
 /* プレビュー */
 .import-preview {
   border-top: 1px solid #e5e7eb;
@@ -1342,6 +1360,11 @@ h2 {
   border-bottom: none;
 }
 
+.import-error-row--more {
+  color: #9ca3af;
+  font-style: italic;
+}
+
 /* 件数表示 */
 .import-count {
   display: flex;
@@ -1364,6 +1387,38 @@ h2 {
   color: #aaa;
   font-size: 14px;
   padding: 8px 0;
+}
+
+/* フィールド説明リスト */
+.import-field-list {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.import-field-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid #f0f2f5;
+  color: #555;
+}
+
+.import-field-row:last-child {
+  border-bottom: none;
+}
+
+.import-field-name {
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 12px;
+  color: #1e40af;
+  background: #eff6ff;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* アクションボタン行 */
