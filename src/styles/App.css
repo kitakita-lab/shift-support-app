@@ -596,6 +596,85 @@ body {
   border-color: #1e40af;
 }
 
+/* 選択済みチップ（×ボタン付き） */
+.site-chip--selected {
+  align-items: center;
+  background: #1a56db;
+  border: 1px solid #1a56db;
+  border-radius: 16px;
+  color: white;
+  display: inline-flex;
+  font-size: 13px;
+  gap: 2px;
+  padding: 4px 6px 4px 12px;
+}
+
+.site-chip__name {
+  line-height: 1.3;
+}
+
+.site-chip__remove {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.65;
+  padding: 0 2px;
+  transition: opacity 0.1s;
+}
+
+.site-chip__remove:hover {
+  opacity: 1;
+}
+
+/* 優先現場エディタ */
+.preferred-editor {
+  width: 100%;
+}
+
+.preferred-selected {
+  min-height: 32px;
+}
+
+.preferred-none {
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.preferred-add {
+  margin-top: 8px;
+}
+
+.preferred-add__toggle {
+  align-items: center;
+  background: none;
+  border: 1px dashed #d1d5db;
+  border-radius: 6px;
+  color: #6b7280;
+  cursor: pointer;
+  display: inline-flex;
+  font-family: inherit;
+  font-size: 13px;
+  gap: 6px;
+  padding: 4px 12px;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.preferred-add__toggle:hover {
+  border-color: #1a56db;
+  color: #1a56db;
+}
+
+.preferred-add__chevron {
+  font-size: 10px;
+}
+
+.preferred-add__chips {
+  margin-top: 8px;
+}
+
 .empty-chips {
   font-size: 13px;
   color: #9ca3af;
