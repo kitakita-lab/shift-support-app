@@ -818,7 +818,12 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
 
       {/* ── 新規現場登録フォーム ───────────────────────── */}
       <div className="card">
-        <h3>現場を登録</h3>
+        <div className="site-list-header">
+          <h3>現場を登録</h3>
+          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setCsvModalOpen(true)}>
+            CSVから一括登録
+          </button>
+        </div>
         <p className="section-desc">
           現場名と会期（期間・時間・人数）を入力してください。会期は複数追加できます。
         </p>
@@ -874,7 +879,15 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
         </div>
 
         {sortedGroups.length === 0 && ungroupedSites.length === 0 ? (
-          <p className="empty-msg">現場が登録されていません</p>
+          <div className="empty-state">
+            <p className="empty-state__title">現場がまだ登録されていません</p>
+            <p className="empty-state__desc">手動で登録するか、CSVから一括登録できます</p>
+            <div className="empty-state__actions">
+              <button className="btn btn--primary" onClick={() => setCsvModalOpen(true)}>
+                CSVから一括登録
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="site-list">
 

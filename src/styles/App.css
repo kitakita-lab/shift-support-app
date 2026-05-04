@@ -136,9 +136,37 @@ body {
   background: #fff;
 }
 
+.month-bar__label {
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.month-bar__today {
+  background: none;
+  border: 1px solid #1a56db;
+  border-radius: 6px;
+  color: #1a56db;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 10px;
+  transition: background 0.12s;
+}
+
+.month-bar__today:hover {
+  background: #eff6ff;
+}
+
 @media (max-width: 600px) {
   .month-bar {
     top: calc(56px + 46px);
+  }
+  .month-bar__label {
+    display: none;
   }
 }
 
@@ -170,6 +198,43 @@ body {
 
 .card--danger {
   border: 1px solid #fca5a5;
+}
+
+/* ===== 空状態 ===== */
+.empty-state {
+  background: #f8f9fb;
+  border: 1px dashed #d1d5db;
+  border-radius: 12px;
+  padding: 40px 24px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.empty-state__title {
+  color: #374151;
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.empty-state__desc {
+  color: #6b7280;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.empty-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.empty-state__note {
+  color: #9ca3af;
+  font-size: 13px;
+  margin-top: 16px;
+  margin-bottom: 0;
 }
 
 /* ===== ダッシュボード ===== */

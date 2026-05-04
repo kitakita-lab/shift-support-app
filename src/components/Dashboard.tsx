@@ -5,6 +5,8 @@ interface Props {
   workSites: WorkSite[];
   assignments: ShiftAssignment[];
   selectedMonth: string;
+  onNavigate: (tab: string) => void;
+  hasSites: boolean;
 }
 
 interface StatCardProps {
@@ -27,7 +29,7 @@ function formatMonthLabel(yearMonth: string): string {
   return `${y}年${parseInt(m)}月`;
 }
 
-export default function Dashboard({ staff, workSites, assignments, selectedMonth }: Props) {
+export default function Dashboard({ staff, workSites, assignments, selectedMonth, onNavigate, hasSites }: Props) {
   const monthLabel = formatMonthLabel(selectedMonth);
 
   // isPlaceholder（会期なし会場の仮レコード）を除いたアクティブな現場日程
@@ -67,24 +69,57 @@ export default function Dashboard({ staff, workSites, assignments, selectedMonth
     (a) => a.assignedStaffIds.length < (requiredBySite.get(a.siteId) ?? 0)
   ).length;
 
+  // ① 現場未登録  ② この月に会期なし  ③ 通常
+  const emptyVariant = !hasSites ? 'no-sites' : activeSites.length === 0 ? 'no-month' : 'normal';
+
   return (
     <div className="dashboard">
       <h2>ダッシュボード</h2>
       <p className="dashboard__month-label">対象月：{monthLabel}</p>
-      {assignments.length === 0 && (
-        <p className="dashboard__hint">
-          スタッフと現場を登録してシフトを自動作成すると、ここに集計が表示されます。
-        </p>
+
+      {emptyVariant === 'no-sites' && (
+        <div className="empty-state">
+          <p className="empty-state__title">現場がまだ登録されていません</p>
+          <p className="empty-state__desc">現場を登録するか、CSVインポートから取り込んでください</p>
+          <div className="empty-state__actions">
+            <button className="btn btn--primary" onClick={() => onNavigate('worksite')}>
+              現場管理へ
+            </button>
+            <button className="btn btn--secondary" onClick={() => onNavigate('import')}>
+              CSVインポートへ
+            </button>
+          </div>
+          {staff.length > 0 && (
+            <p className="empty-state__note">登録スタッフ数：{staff.length}人</p>
+          )}
+        </div>
       )}
-      <div className="stat-grid">
-        <StatCard label="登録スタッフ数" value={staff.length} />
-        <StatCard label="登録現場数" value={venueCount} />
-        <StatCard label="登録会期数" value={sessionCount} />
-        <StatCard label="必要人数（延べ）" value={totalRequired} />
-        <StatCard label="割当済み人数（延べ）" value={totalAssigned} />
-        <StatCard label="不足人数（延べ）" value={totalShortage} alert={totalShortage > 0} />
-        <StatCard label="不足スロット数" value={warningCount} alert={warningCount > 0} />
-      </div>
+
+      {emptyVariant === 'no-month' && (
+        <div className="empty-state">
+          <p className="empty-state__title">{monthLabel}には会期がありません</p>
+          <p className="empty-state__desc">
+            月選択を変えるか、この月の会期を現場管理から追加してください
+          </p>
+          <div className="empty-state__actions">
+            <button className="btn btn--secondary" onClick={() => onNavigate('worksite')}>
+              現場管理へ
+            </button>
+          </div>
+        </div>
+      )}
+
+      {emptyVariant === 'normal' && (
+        <div className="stat-grid">
+          <StatCard label="登録スタッフ数" value={staff.length} />
+          <StatCard label="登録現場数" value={venueCount} />
+          <StatCard label="登録会期数" value={sessionCount} />
+          <StatCard label="必要人数（延べ）" value={totalRequired} />
+          <StatCard label="割当済み人数（延べ）" value={totalAssigned} />
+          <StatCard label="不足人数（延べ）" value={totalShortage} alert={totalShortage > 0} />
+          <StatCard label="不足スロット数" value={warningCount} alert={warningCount > 0} />
+        </div>
+      )}
     </div>
   );
 }
