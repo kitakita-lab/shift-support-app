@@ -377,24 +377,8 @@ export default function CsvImporter({
       <div className="card">
         <h3>スタッフCSVのインポート</h3>
         <p className="section-desc">
-          スタッフ情報をCSVから一括登録します。勤務可能曜日・希望休・最大勤務日数を取り込み、シフト自動作成時の条件として使用します。
+          テンプレートをダウンロードしてスタッフ情報を入力後、CSVファイルを選択してください。
         </p>
-
-        <div className="import-field-list">
-          <div className="import-field-row"><span className="import-field-name">name</span>スタッフ名。必須</div>
-          <div className="import-field-row"><span className="import-field-name">availableWeekdays</span>勤務可能曜日。例：月,火,水,木,金</div>
-          <div className="import-field-row"><span className="import-field-name">requestedDaysOff</span>希望休（YYYY-MM-DD形式）。例：2026-05-03,2026-05-10</div>
-          <div className="import-field-row"><span className="import-field-name">maxWorkDays</span>対象月の最大勤務日数</div>
-          <div className="import-field-row"><span className="import-field-name">memo</span>任意メモ</div>
-        </div>
-
-        <div className="import-format">
-          <div className="import-format__title">入力例（UTF-8）</div>
-          <pre className="import-format__code">{`name,availableWeekdays,requestedDaysOff,maxWorkDays,memo
-佐藤太郎,"月,火,水,木,金","2026-05-03,2026-05-10",20,リーダー可
-田中花子,"月,水,金","2026-05-03",15,
-鈴木一郎,"土,日","",8,土日中心`}</pre>
-        </div>
 
         <div className="import-upload">
           <input
@@ -473,23 +457,8 @@ export default function CsvImporter({
       <div className="card">
         <h3>現場CSVのインポート</h3>
         <p className="section-desc">
-          現場の日程・必要人数をCSVから一括登録します。1行1日付で入力し、連続日は自動的に1会期にまとめられます。
+          テンプレートをダウンロードして現場・会期・必要人数を入力後、CSVファイルを選択してください。
         </p>
-
-        <div className="import-field-list">
-          <div className="import-field-row"><span className="import-field-name">date</span>開催日（YYYY-MM-DD）。必須</div>
-          <div className="import-field-row"><span className="import-field-name">siteName</span>現場名。必須</div>
-          <div className="import-field-row"><span className="import-field-name">startTime / endTime</span>開始・終了時間（HH:MM）</div>
-          <div className="import-field-row"><span className="import-field-name">requiredPeople</span>その日の必要人数</div>
-          <div className="import-field-row"><span className="import-field-name">memo</span>任意メモ</div>
-        </div>
-
-        <div className="import-format">
-          <div className="import-format__title">入力例（UTF-8）</div>
-          <pre className="import-format__code">{`date,siteName,startTime,endTime,requiredPeople,memo
-2026-05-01,アリオ札幌,10:00,18:00,3,通常
-2026-05-02,南郷7丁目,09:00,17:00,2,`}</pre>
-        </div>
 
         <div className="import-upload">
           <input
@@ -606,18 +575,8 @@ export default function CsvImporter({
       <div className="card">
         <h3>希望休CSVのインポート</h3>
         <p className="section-desc">
-          スタッフの希望休をCSVから取り込み、シフト自動作成の除外日に反映します。スタッフNoまたは名前で照合します。
+          テンプレートをダウンロードして希望休を入力後、CSVファイルを選択してください。
         </p>
-
-        <div className="import-format">
-          <div className="import-format__subtitle">形式①：1スタッフ1行（一括）</div>
-          <pre className="import-format__code">{`staffNo,name,requestedDaysOff
-001,セトケンスケ,"2026-05-03,2026-05-10,2026-05-18"`}</pre>
-          <div className="import-format__subtitle">形式②：1希望休1行（Bubble等の外部フォーム）</div>
-          <pre className="import-format__code">{`staffNo,name,date
-001,セトケンスケ,2026-05-03`}</pre>
-          <div className="import-format__note">staffNo列がない場合は name,date の2列でも可。同一スタッフの行は自動集約されます。</div>
-        </div>
 
         <div className="days-off-options">
           <div className="form-row">
