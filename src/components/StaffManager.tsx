@@ -163,6 +163,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   const [editId, setEditId] = useState<string | null>(null);
   const [currentMonth, setCurrentMonth] = useState(() => selectedMonth);
   const [editingNos, setEditingNos] = useState<Record<string, string>>({});
+  const [addSiteOpen, setAddSiteOpen] = useState(false);
 
   useEffect(() => {
     if (!editId) setForm((prev) => ({ ...prev, staffNo: nextStaffNo(staff) }));
@@ -182,6 +183,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   }
 
   const uniqueSiteNames = [...new Set(workSites.map((w) => w.siteName))].sort();
+  const unselectedSites = uniqueSiteNames.filter((n) => !form.preferredWorkSites.includes(n));
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -193,6 +195,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
       onChange(sortStaff([...staff, { ...form, id: crypto.randomUUID() }]));
     }
     setForm(emptyForm(staff));
+    setAddSiteOpen(false);
   }
 
   function handleEdit(s: Staff) {
@@ -215,6 +218,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   function handleCancel() {
     setEditId(null);
     setForm(emptyForm(staff));
+    setAddSiteOpen(false);
   }
 
   function handleStaffNoChange(id: string, value: string) {
@@ -277,24 +281,62 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
 
           <div className="form-row form-row--top">
             <label className="form-label">優先現場</label>
-            <div>
+            <div className="preferred-editor">
               {uniqueSiteNames.length === 0 ? (
                 <span className="empty-chips">現場が登録されていません</span>
               ) : (
-                <div className="site-chips">
-                  {uniqueSiteNames.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      className={`site-chip${form.preferredWorkSites.includes(name) ? ' site-chip--active' : ''}`}
-                      onClick={() => togglePreferredSite(name)}
-                    >
-                      {name}
-                    </button>
-                  ))}
-                </div>
+                <>
+                  {/* 上段：選択済み */}
+                  <div className="preferred-selected">
+                    {form.preferredWorkSites.length === 0 ? (
+                      <span className="preferred-none">なし</span>
+                    ) : (
+                      <div className="site-chips">
+                        {form.preferredWorkSites.map((name) => (
+                          <span key={name} className="site-chip site-chip--selected">
+                            <span className="site-chip__name">{name}</span>
+                            <button
+                              type="button"
+                              className="site-chip__remove"
+                              onClick={() => togglePreferredSite(name)}
+                              aria-label={`${name}を外す`}
+                            >×</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 下段：未選択（トグル） */}
+                  {unselectedSites.length > 0 && (
+                    <div className="preferred-add">
+                      <button
+                        type="button"
+                        className="preferred-add__toggle"
+                        onClick={() => setAddSiteOpen((v) => !v)}
+                      >
+                        ＋ 現場を追加
+                        <span className="preferred-add__chevron">{addSiteOpen ? '▲' : '▼'}</span>
+                      </button>
+                      {addSiteOpen && (
+                        <div className="site-chips preferred-add__chips">
+                          {unselectedSites.map((name) => (
+                            <button
+                              key={name}
+                              type="button"
+                              className="site-chip"
+                              onClick={() => togglePreferredSite(name)}
+                            >
+                              {name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
-              <p className="section-desc" style={{ marginTop: '4px' }}>
+              <p className="section-desc" style={{ marginTop: '6px' }}>
                 シフト自動作成時、同条件なら優先的に割り当てます
               </p>
             </div>
