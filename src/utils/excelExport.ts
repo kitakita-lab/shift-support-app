@@ -146,7 +146,8 @@ function buildStaffSheet(
 export async function exportExcel(
   workSites: WorkSite[],
   assignments: ShiftAssignment[],
-  staff: Staff[]
+  staff: Staff[],
+  filename?: string
 ): Promise<void> {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'シフト作成サポート';
@@ -177,7 +178,7 @@ export async function exportExcel(
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
   a.href     = url;
-  a.download = `shift_schedule_${today}.xlsx`;
+  a.download = filename ?? `shift_schedule_${today}.xlsx`;
   a.click();
   URL.revokeObjectURL(url);
 }

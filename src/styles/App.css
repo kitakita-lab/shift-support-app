@@ -87,6 +87,61 @@ body {
   font-weight: 600;
 }
 
+/* ===== 月選択バー ===== */
+.month-bar {
+  background: #fff;
+  border-bottom: 1px solid #dde1e8;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 7px 16px;
+  position: sticky;
+  top: calc(56px + 50px);
+  z-index: 98;
+}
+
+.month-bar__btn {
+  background: none;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  color: #374151;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 3px 10px;
+  transition: background 0.12s;
+}
+
+.month-bar__btn:hover {
+  background: #f3f4f6;
+}
+
+.month-bar__input {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px 8px;
+  color: #1a1a2e;
+  background: #f8f9fb;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.month-bar__input:focus {
+  outline: none;
+  border-color: #1a56db;
+  background: #fff;
+}
+
+@media (max-width: 600px) {
+  .month-bar {
+    top: calc(56px + 46px);
+  }
+}
+
 /* ===== メインコンテンツ ===== */
 .main-content {
   flex: 1;
@@ -126,6 +181,12 @@ body {
 .dashboard__hint {
   color: #888;
   margin-bottom: 16px;
+}
+
+.dashboard__month-label {
+  color: #555;
+  font-size: 14px;
+  margin-bottom: 12px;
 }
 
 .stat-grid {

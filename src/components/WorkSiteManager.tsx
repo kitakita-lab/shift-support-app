@@ -410,11 +410,12 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
 interface Props {
   workSites: WorkSite[];
   onChange: (workSites: WorkSite[]) => void;
+  selectedMonth: string;
 }
 
 // ─── component ─────────────────────────────────────────────
 
-export default function WorkSiteManager({ workSites, onChange }: Props) {
+export default function WorkSiteManager({ workSites, onChange, selectedMonth }: Props) {
   // ── 新規現場登録フォーム
   const [newSiteName, setNewSiteName] = useState('');
   const [newSessions, setNewSessions] = useState<SessionForm[]>([emptySession()]);
@@ -468,6 +469,11 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
       ungroupedSites: [...ungrouped].sort((a, b) => a.date.localeCompare(b.date)),
     };
   }, [workSites]);
+
+  const displayGroups = sortedGroups.filter(({ sites }) =>
+    sites.some((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth))
+  );
+  const displayUngrouped = ungroupedSites.filter((s) => s.date.startsWith(selectedMonth));
 
   // ── 新規現場登録 ────────────────────────────────────────────
 
@@ -866,18 +872,18 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
       {/* ── 登録済み現場一覧 ─────────────────────────── */}
       <div className="card">
         <div className="site-list-header">
-          <h3>登録済み現場 ({sortedGroups.length + ungroupedSites.length}件)</h3>
+          <h3>登録済み現場 ({displayGroups.length + displayUngrouped.length}件)</h3>
           <button className="btn btn--secondary btn--sm" onClick={() => setCsvModalOpen(true)}>
             CSV取込
           </button>
         </div>
 
-        {sortedGroups.length === 0 && ungroupedSites.length === 0 ? (
+        {displayGroups.length === 0 && displayUngrouped.length === 0 ? (
           <p className="empty-msg">現場が登録されていません</p>
         ) : (
           <div className="site-list">
 
-            {sortedGroups.map(({ groupId, sites }) => {
+            {displayGroups.map(({ groupId, sites }) => {
               const isEditingSession = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
               const activeSites      = sites.filter((s) => !s.isPlaceholder);
               const displaySessions  = groupSitesIntoDisplaySessions(sites);
@@ -1037,10 +1043,10 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
               );
             })}
 
-            {ungroupedSites.length > 0 && (
+            {displayUngrouped.length > 0 && (
               <div className="site-ungrouped-section">
-                <p className="site-ungrouped-label">グループなし（{ungroupedSites.length}件）</p>
-                {ungroupedSites.map((site) => {
+                <p className="site-ungrouped-label">グループなし（{displayUngrouped.length}件）</p>
+                {displayUngrouped.map((site) => {
                   const isConvertingThis =
                     !sessionEditor?.isExistingGroup &&
                     (sessionEditor?.sourceIds.includes(site.id) ?? false);
