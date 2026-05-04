@@ -9,6 +9,18 @@ function escape(value: string | number): string {
   return str;
 }
 
+function download(csv: string, filename: string): void {
+  const bom = '﻿';
+  const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// 現場別CSV（1行 = 1現場、複数スタッフはセル内で結合）
 export function exportCsv(
   workSites: WorkSite[],
   assignments: ShiftAssignment[],
@@ -46,13 +58,45 @@ export function exportCsv(
     ].map(escape).join(',');
   });
 
-  const csv = [headers.join(','), ...rows].join('\n');
-  const bom = '﻿';
-  const blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+  download([headers.join(','), ...rows].join('\n'), filename);
+}
+
+// スタッフ別CSV（1行 = 1スタッフ）
+export function exportStaffCsv(
+  workSites: WorkSite[],
+  assignments: ShiftAssignment[],
+  staffList: Staff[],
+  filename = 'shift_by_staff.csv'
+): void {
+  const staffMap: Record<string, string> = {};
+  const staffIndex: Record<string, Staff> = {};
+  staffList.forEach((s) => {
+    staffMap[s.id] = s.name;
+    staffIndex[s.id] = s;
+  });
+
+  const assignMap: Record<string, ShiftAssignment> = {};
+  assignments.forEach((a) => (assignMap[a.siteId] = a));
+
+  const headers = ['日付', '現場名', '開始時間', '終了時間', 'スタッフ名'];
+
+  const sorted = [...workSites.filter((s) => !s.isPlaceholder)].sort((a, b) => a.date.localeCompare(b.date));
+
+  const rows: string[] = [];
+  for (const site of sorted) {
+    const asgn = assignMap[site.id];
+    const staffIds = asgn && asgn.assignedStaffIds.length > 0
+      ? sortedByStaffNo(asgn.assignedStaffIds, staffIndex)
+      : [];
+
+    if (staffIds.length === 0) {
+      rows.push([site.date, site.siteName, site.startTime, site.endTime, ''].map(escape).join(','));
+    } else {
+      for (const id of staffIds) {
+        rows.push([site.date, site.siteName, site.startTime, site.endTime, staffMap[id] ?? id].map(escape).join(','));
+      }
+    }
+  }
+
+  download([headers.join(','), ...rows].join('\n'), filename);
 }

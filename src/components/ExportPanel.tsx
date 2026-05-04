@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Staff, WorkSite, ShiftAssignment } from '../types';
-import { exportCsv } from '../utils/csvExport';
+import { exportCsv, exportStaffCsv } from '../utils/csvExport';
 
 interface Props {
   staff: Staff[];
@@ -19,6 +19,14 @@ export default function ExportPanel({ staff, workSites, assignments, onClearAll,
       return;
     }
     exportCsv(workSites, assignments, staff, `shift_${selectedMonth}.csv`);
+  }
+
+  function handleExportStaffCsv() {
+    if (workSites.length === 0) {
+      alert('出力するデータがありません');
+      return;
+    }
+    exportStaffCsv(workSites, assignments, staff, `shift_staff_${selectedMonth}.csv`);
   }
 
   async function handleExportExcel() {
@@ -58,26 +66,40 @@ export default function ExportPanel({ staff, workSites, assignments, onClearAll,
       <div className="card">
         <h3>エクスポート</h3>
         <p className="section-desc">
-          シフト表をダウンロードします。Excelは書式付きで出力され、不足行は赤色で強調されます。
+          シフト表をダウンロードします。Excelは2シート構成（現場別・スタッフ別）で書式付き出力されます。
         </p>
         <div className="export-buttons">
-          <button className="btn btn--primary btn--large" onClick={handleExportCsv}>
-            CSVダウンロード
-          </button>
-          <button
-            className="btn btn--excel btn--large"
-            onClick={handleExportExcel}
-            disabled={isExporting}
-          >
-            {isExporting ? 'Excelを生成中…' : 'Excelダウンロード (.xlsx)'}
-          </button>
+          <div className="export-group">
+            <p className="export-group__label">CSV</p>
+            <button className="btn btn--primary" onClick={handleExportCsv}>
+              現場別CSV
+            </button>
+            <button className="btn btn--secondary" onClick={handleExportStaffCsv}>
+              スタッフ別CSV
+            </button>
+          </div>
+          <div className="export-group">
+            <p className="export-group__label">Excel</p>
+            <button
+              className="btn btn--excel btn--large"
+              onClick={handleExportExcel}
+              disabled={isExporting}
+            >
+              {isExporting ? 'Excelを生成中…' : 'Excelダウンロード (.xlsx)'}
+            </button>
+          </div>
+        </div>
+        <div className="export-format-notes">
+          <span className="export-format-note">現場別CSV：1行 = 1現場（スタッフ複数は「/」区切り）</span>
+          <span className="export-format-note">スタッフ別CSV：1行 = 1スタッフ（加工・集計向け）</span>
+          <span className="export-format-note">Excel：現場別・スタッフ別の2シートを同時出力</span>
         </div>
       </div>
 
       {/* ── 出力プレビュー ───────────────────────────────── */}
       {sorted.length > 0 && (
         <div className="card">
-          <h3>出力プレビュー</h3>
+          <h3>出力プレビュー（現場別）</h3>
           <div className="table-wrapper">
             <table className="data-table">
               <thead>
