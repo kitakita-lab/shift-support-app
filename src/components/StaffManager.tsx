@@ -6,6 +6,7 @@ interface Props {
   staff: Staff[];
   workSites: WorkSite[];
   onChange: (staff: Staff[]) => void;
+  selectedMonth: string;
 }
 
 function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
@@ -157,15 +158,19 @@ function DaysOffCalendar({ yearMonth, onMonthChange, daysOff, onChange }: Calend
   );
 }
 
-export default function StaffManager({ staff, workSites, onChange }: Props) {
+export default function StaffManager({ staff, workSites, onChange, selectedMonth }: Props) {
   const [form, setForm] = useState<Omit<Staff, 'id'>>(() => emptyForm(staff));
   const [editId, setEditId] = useState<string | null>(null);
-  const [currentMonth, setCurrentMonth] = useState(() => toYearMonth(new Date()));
+  const [currentMonth, setCurrentMonth] = useState(() => selectedMonth);
   const [editingNos, setEditingNos] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!editId) setForm((prev) => ({ ...prev, staffNo: nextStaffNo(staff) }));
   }, [staff, editId]);
+
+  useEffect(() => {
+    setCurrentMonth(selectedMonth);
+  }, [selectedMonth]);
 
   function togglePreferredSite(name: string) {
     setForm((prev) => ({

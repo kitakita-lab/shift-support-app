@@ -4,6 +4,7 @@ interface Props {
   staff: Staff[];
   workSites: WorkSite[];
   assignments: ShiftAssignment[];
+  selectedMonth: string;
 }
 
 interface StatCardProps {
@@ -21,8 +22,16 @@ function StatCard({ label, value, alert }: StatCardProps) {
   );
 }
 
-export default function Dashboard({ staff, workSites, assignments }: Props) {
+function formatMonthLabel(yearMonth: string): string {
+  const [y, m] = yearMonth.split('-');
+  return `${y}年${parseInt(m)}月`;
+}
+
+export default function Dashboard({ staff, workSites, assignments, selectedMonth }: Props) {
+  const monthLabel = formatMonthLabel(selectedMonth);
+
   // isPlaceholder（会期なし会場の仮レコード）を除いたアクティブな現場日程
+  // workSites は App.tsx 側で selectedMonth でフィルタ済み
   const activeSites = workSites.filter((s) => !s.isPlaceholder);
 
   // ① 登録現場数：ユニーク会場名（siteName）の数
@@ -37,7 +46,6 @@ export default function Dashboard({ staff, workSites, assignments }: Props) {
   const totalRequired = activeSites.reduce((sum, s) => sum + s.requiredPeople, 0);
 
   // 防衛的フィルタリング：存在しない siteId / staffId を持つ孤立 assignment を除外する
-  // App.tsx で削除時にクリーンアップしているが、旧データや異常系への二重保護として維持する
   const validSiteIds  = new Set(activeSites.map((s) => s.id));
   const validStaffIds = new Set(staff.map((s) => s.id));
   const cleanAssignments = assignments
@@ -62,6 +70,7 @@ export default function Dashboard({ staff, workSites, assignments }: Props) {
   return (
     <div className="dashboard">
       <h2>ダッシュボード</h2>
+      <p className="dashboard__month-label">対象月：{monthLabel}</p>
       {assignments.length === 0 && (
         <p className="dashboard__hint">
           スタッフと現場を登録してシフトを自動作成すると、ここに集計が表示されます。

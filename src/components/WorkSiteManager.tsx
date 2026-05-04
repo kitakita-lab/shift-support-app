@@ -410,11 +410,12 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
 interface Props {
   workSites: WorkSite[];
   onChange: (workSites: WorkSite[]) => void;
+  selectedMonth: string;
 }
 
 // ─── component ─────────────────────────────────────────────
 
-export default function WorkSiteManager({ workSites, onChange }: Props) {
+export default function WorkSiteManager({ workSites, onChange, selectedMonth }: Props) {
   // ── 新規現場登録フォーム
   const [newSiteName, setNewSiteName] = useState('');
   const [newSessions, setNewSessions] = useState<SessionForm[]>([emptySession()]);
@@ -878,11 +879,13 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
           <div className="site-list">
 
             {sortedGroups.map(({ groupId, sites }) => {
-              const isEditingSession = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
-              const activeSites      = sites.filter((s) => !s.isPlaceholder);
-              const displaySessions  = groupSitesIntoDisplaySessions(sites);
-              const siteName         = sites[0]?.siteName ?? '';
-              const isVenueOpen      = expandedVenues.has(groupId);
+              const isEditingSession    = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
+              const activeSites         = sites.filter((s) => !s.isPlaceholder);
+              const monthActiveSites    = activeSites.filter((s) => s.date.startsWith(selectedMonth));
+              const displaySessions     = groupSitesIntoDisplaySessions(sites);
+              const monthDisplaySessions = groupSitesIntoDisplaySessions(monthActiveSites);
+              const siteName            = sites[0]?.siteName ?? '';
+              const isVenueOpen         = expandedVenues.has(groupId);
 
               const venueStats = activeSites.length > 0
                 ? (() => {
@@ -943,9 +946,11 @@ export default function WorkSiteManager({ workSites, onChange }: Props) {
                     <>
                       {activeSites.length === 0 ? (
                         <div className="site-empty">会期なし（まだ登録されていません）</div>
+                      ) : monthActiveSites.length === 0 ? (
+                        <div className="site-empty">この月の会期はありません</div>
                       ) : (
                         <div className="session-list">
-                          {displaySessions.map((session) => {
+                          {monthDisplaySessions.map((session) => {
                             const key    = `${groupId}-${session.sessionId}`;
                             const isOpen = expandedSessions.has(key);
                             const dailyRows = session.dailyPeople.length > 0

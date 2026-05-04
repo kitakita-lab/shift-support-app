@@ -1,4 +1,4 @@
-import { useRef, useState, useMemo } from 'react';
+import { useRef, useState, useMemo, useEffect } from 'react';
 import { Staff, WorkSite } from '../types';
 import {
   parseStaffCSV,
@@ -55,6 +55,7 @@ interface Props {
   onImportSites: (imported: WorkSite[], overwrite: boolean) => void;
   onApplyDaysOff: (updates: { id: string; requestedDaysOff: string[] }[]) => void;
   onDeleteCsvSites: () => void;
+  selectedMonth: string;
 }
 
 // ── Sub-components ────────────────────────────────────────────
@@ -81,10 +82,6 @@ function ErrorList({ errors }: { errors: ParseError[] }) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────
-
-function toYearMonth(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
 
 // YYYY-MM-DD をローカル日付として解釈（UTC midnight ずれ回避）
 function parseSiteDate(s: string): Date {
@@ -194,6 +191,7 @@ export default function CsvImporter({
   onImportSites,
   onApplyDaysOff,
   onDeleteCsvSites,
+  selectedMonth,
 }: Props) {
   const [staffPreview,   setStaffPreview]   = useState<StaffPreview | null>(null);
   const [sitePreview,    setSitePreview]    = useState<SitePreview  | null>(null);
@@ -203,9 +201,13 @@ export default function CsvImporter({
   const [siteSuccess,    setSiteSuccess]    = useState('');
   const [daysOffSuccess, setDaysOffSuccess] = useState('');
 
-  const [daysOffTargetMonth, setDaysOffTargetMonth] = useState(() => toYearMonth(new Date()));
+  const [daysOffTargetMonth, setDaysOffTargetMonth] = useState(() => selectedMonth);
   const [daysOffMode,        setDaysOffMode]        = useState<DaysOffMode>('replace');
   const [overwriteMode,      setOverwriteMode]      = useState(false);
+
+  useEffect(() => {
+    setDaysOffTargetMonth(selectedMonth);
+  }, [selectedMonth]);
 
   // 連続日結合後の会期数・現場数（プレビュー表示用）
   const sitePreviewCounts = useMemo(

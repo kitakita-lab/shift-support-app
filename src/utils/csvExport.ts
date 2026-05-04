@@ -12,7 +12,8 @@ function escape(value: string | number): string {
 export function exportCsv(
   workSites: WorkSite[],
   assignments: ShiftAssignment[],
-  staffList: Staff[]
+  staffList: Staff[],
+  filename = 'shift.csv'
 ): void {
   const staffMap: Record<string, string> = {};
   const staffIndex: Record<string, Staff> = {};
@@ -51,7 +52,7 @@ export function exportCsv(
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'shift.csv';
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
 }

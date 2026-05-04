@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Staff, WorkSite, ShiftAssignment } from './types';
 import { storage } from './utils/storage';
 import Dashboard from './components/Dashboard';
@@ -20,15 +20,47 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'import',    label: 'CSVインポート' },
 ];
 
+function toYearMonth(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function prevMonth(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  return toYearMonth(new Date(y, m - 2, 1));
+}
+
+function nextMonth(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  return toYearMonth(new Date(y, m, 1));
+}
+
 export default function App() {
   const [activeTab,   setActiveTab]   = useState<Tab>('dashboard');
   const [staff,       setStaff]       = useState<Staff[]>(() => storage.loadStaff());
   const [workSites,   setWorkSites]   = useState<WorkSite[]>(() => storage.loadWorkSites());
   const [assignments, setAssignments] = useState<ShiftAssignment[]>(() => storage.loadAssignments());
 
-  useEffect(() => { storage.saveStaff(staff); },       [staff]);
-  useEffect(() => { storage.saveWorkSites(workSites); }, [workSites]);
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const sites = storage.loadWorkSites().filter((s) => !s.isPlaceholder && s.date);
+    if (sites.length > 0) {
+      return sites.map((s) => s.date.slice(0, 7)).sort().reverse()[0];
+    }
+    return toYearMonth(new Date());
+  });
+
+  useEffect(() => { storage.saveStaff(staff); },         [staff]);
+  useEffect(() => { storage.saveWorkSites(workSites); },  [workSites]);
   useEffect(() => { storage.saveAssignments(assignments); }, [assignments]);
+
+  const monthlyWorkSites = useMemo(
+    () => workSites.filter((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth)),
+    [workSites, selectedMonth]
+  );
+
+  const monthlyAssignments = useMemo(() => {
+    const siteIds = new Set(monthlyWorkSites.map((s) => s.id));
+    return assignments.filter((a) => siteIds.has(a.siteId));
+  }, [monthlyWorkSites, assignments]);
 
   function handleClearAll() {
     storage.clearAll();
@@ -37,7 +69,6 @@ export default function App() {
     setAssignments([]);
   }
 
-  // スタッフが削除された場合、該当 staffId を assignedStaffIds から除去し shortage を補正する
   function handleStaffChange(newStaff: Staff[]) {
     const newIds = new Set(newStaff.map((s) => s.id));
     setAssignments((prev) =>
@@ -52,11 +83,19 @@ export default function App() {
     setStaff(newStaff);
   }
 
-  // 現場が削除された場合、該当 siteId の assignment を削除する
   function handleWorkSiteChange(newSites: WorkSite[]) {
     const newIds = new Set(newSites.map((s) => s.id));
     setAssignments((prev) => prev.filter((a) => newIds.has(a.siteId)));
     setWorkSites(newSites);
+  }
+
+  // 当月分だけ再生成し、他月の assignment は保持する
+  function handleGenerateShifts(newMonthlyAssignments: ShiftAssignment[]) {
+    const monthSiteIds = new Set(monthlyWorkSites.map((s) => s.id));
+    setAssignments((prev) => [
+      ...prev.filter((a) => !monthSiteIds.has(a.siteId)),
+      ...newMonthlyAssignments,
+    ]);
   }
 
   return (
@@ -78,30 +117,56 @@ export default function App() {
         ))}
       </nav>
 
+      <div className="month-bar">
+        <button className="month-bar__btn" onClick={() => setSelectedMonth(prevMonth(selectedMonth))}>◀</button>
+        <input
+          className="month-bar__input"
+          type="month"
+          value={selectedMonth}
+          onChange={(e) => { if (e.target.value) setSelectedMonth(e.target.value); }}
+        />
+        <button className="month-bar__btn" onClick={() => setSelectedMonth(nextMonth(selectedMonth))}>▶</button>
+      </div>
+
       <main className="main-content">
         {activeTab === 'dashboard' && (
-          <Dashboard staff={staff} workSites={workSites} assignments={assignments} />
+          <Dashboard
+            staff={staff}
+            workSites={monthlyWorkSites}
+            assignments={monthlyAssignments}
+            selectedMonth={selectedMonth}
+          />
         )}
         {activeTab === 'staff' && (
-          <StaffManager staff={staff} workSites={workSites} onChange={handleStaffChange} />
+          <StaffManager
+            staff={staff}
+            workSites={workSites}
+            onChange={handleStaffChange}
+            selectedMonth={selectedMonth}
+          />
         )}
         {activeTab === 'worksite' && (
-          <WorkSiteManager workSites={workSites} onChange={handleWorkSiteChange} />
+          <WorkSiteManager
+            workSites={workSites}
+            onChange={handleWorkSiteChange}
+            selectedMonth={selectedMonth}
+          />
         )}
         {activeTab === 'shift' && (
           <ShiftBuilder
             staff={staff}
-            workSites={workSites}
-            assignments={assignments}
-            onGenerate={setAssignments}
+            workSites={monthlyWorkSites}
+            assignments={monthlyAssignments}
+            onGenerate={handleGenerateShifts}
           />
         )}
         {activeTab === 'export' && (
           <ExportPanel
             staff={staff}
-            workSites={workSites}
-            assignments={assignments}
+            workSites={monthlyWorkSites}
+            assignments={monthlyAssignments}
             onClearAll={handleClearAll}
+            selectedMonth={selectedMonth}
           />
         )}
         {activeTab === 'import' && (
@@ -111,8 +176,6 @@ export default function App() {
             csvSiteCount={workSites.filter((s) => s.source === 'csv').length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
             onImportSites={(imported, overwrite) => {
-              // 上書きモード時：全 assignment を削除してから workSites を置き換える
-              // CSV更新後は必ずシフト再生成が必要なため、中途半端な割当を残さない
               if (overwrite) {
                 setAssignments([]);
               }
@@ -130,7 +193,6 @@ export default function App() {
               )
             }
             onDeleteCsvSites={() => {
-              // CSV 現場を削除する前に関連 assignment をクリーンアップする
               const csvIds = new Set(
                 workSites.filter((s) => s.source === 'csv').map((s) => s.id)
               );
@@ -139,6 +201,7 @@ export default function App() {
               }
               setWorkSites((prev) => prev.filter((s) => s.source !== 'csv'));
             }}
+            selectedMonth={selectedMonth}
           />
         )}
       </main>

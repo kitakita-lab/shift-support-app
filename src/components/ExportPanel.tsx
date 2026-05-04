@@ -7,9 +7,10 @@ interface Props {
   workSites: WorkSite[];
   assignments: ShiftAssignment[];
   onClearAll: () => void;
+  selectedMonth: string;
 }
 
-export default function ExportPanel({ staff, workSites, assignments, onClearAll }: Props) {
+export default function ExportPanel({ staff, workSites, assignments, onClearAll, selectedMonth }: Props) {
   const [isExporting, setIsExporting] = useState(false);
 
   function handleExportCsv() {
@@ -17,7 +18,7 @@ export default function ExportPanel({ staff, workSites, assignments, onClearAll 
       alert('出力するデータがありません');
       return;
     }
-    exportCsv(workSites, assignments, staff);
+    exportCsv(workSites, assignments, staff, `shift_${selectedMonth}.csv`);
   }
 
   async function handleExportExcel() {
@@ -29,7 +30,7 @@ export default function ExportPanel({ staff, workSites, assignments, onClearAll 
     try {
       // exceljs は重いため、クリック時に動的インポートして分割チャンクとして読み込む
       const { exportExcel } = await import('../utils/excelExport');
-      await exportExcel(workSites, assignments, staff);
+      await exportExcel(workSites, assignments, staff, `shift_schedule_${selectedMonth}.xlsx`);
     } finally {
       setIsExporting(false);
     }
