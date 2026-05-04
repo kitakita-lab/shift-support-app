@@ -118,6 +118,7 @@ export default function App() {
       </nav>
 
       <div className="month-bar">
+        <span className="month-bar__label">対象月</span>
         <button className="month-bar__btn" onClick={() => setSelectedMonth(prevMonth(selectedMonth))}>◀</button>
         <input
           className="month-bar__input"
@@ -126,6 +127,11 @@ export default function App() {
           onChange={(e) => { if (e.target.value) setSelectedMonth(e.target.value); }}
         />
         <button className="month-bar__btn" onClick={() => setSelectedMonth(nextMonth(selectedMonth))}>▶</button>
+        {selectedMonth !== toYearMonth(new Date()) && (
+          <button className="month-bar__today" onClick={() => setSelectedMonth(toYearMonth(new Date()))}>
+            今月
+          </button>
+        )}
       </div>
 
       <main className="main-content">
@@ -135,6 +141,7 @@ export default function App() {
             workSites={monthlyWorkSites}
             assignments={monthlyAssignments}
             selectedMonth={selectedMonth}
+            onNavigate={(tab) => setActiveTab(tab as Tab)}
           />
         )}
         {activeTab === 'staff' && (
