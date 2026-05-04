@@ -410,6 +410,12 @@ export default function CsvImporter({
         {staffPreview && (
           <div className="import-preview">
             <div className="import-preview__filename">ファイル：{staffPreview.fileName}</div>
+            <div className="import-summary">
+              <span className="import-summary__ok">取込可能：{staffPreview.valid.length}件</span>
+              {staffPreview.errors.length > 0 && (
+                <span className="import-summary__err">エラー：{staffPreview.errors.length}行スキップ</span>
+              )}
+            </div>
             <ErrorList errors={staffPreview.errors} />
             {staffPreview.valid.length > 0 ? (
               <>
@@ -535,6 +541,12 @@ export default function CsvImporter({
         {sitePreview && (
           <div className="import-preview">
             <div className="import-preview__filename">ファイル：{sitePreview.fileName}</div>
+            <div className="import-summary">
+              <span className="import-summary__ok">取込可能：{sitePreview.valid.length}行</span>
+              {sitePreview.errors.length > 0 && (
+                <span className="import-summary__err">エラー：{sitePreview.errors.length}行スキップ</span>
+              )}
+            </div>
             <ErrorList errors={sitePreview.errors} />
             {sitePreview.valid.length > 0 ? (
               <>
@@ -660,6 +672,14 @@ export default function CsvImporter({
         {daysOffPreview && (
           <div className="import-preview">
             <div className="import-preview__filename">ファイル：{daysOffPreview.fileName}</div>
+            <div className="import-summary">
+              <span className="import-summary__ok">照合成功：{daysOffPreview.matched.length}名</span>
+              {(daysOffPreview.parseErrors.length + daysOffPreview.matchErrors.length) > 0 && (
+                <span className="import-summary__err">
+                  エラー：{daysOffPreview.parseErrors.length + daysOffPreview.matchErrors.length}件
+                </span>
+              )}
+            </div>
 
             <ErrorList errors={daysOffPreview.parseErrors} />
 

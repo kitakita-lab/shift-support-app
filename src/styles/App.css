@@ -1302,6 +1302,24 @@ h2 {
   line-height: 1.7;
 }
 
+/* 取込件数サマリー */
+.import-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.import-summary__ok {
+  color: #16a34a;
+}
+
+.import-summary__err {
+  color: #dc2626;
+}
+
 /* プレビュー */
 .import-preview {
   border-top: 1px solid #e5e7eb;

@@ -55,6 +55,32 @@ function isValidTime(s: string): boolean {
   return /^\d{2}:\d{2}$/.test(s);
 }
 
+// requestedDaysOff の正規化：YYYY/MM/DD → YYYY-MM-DD、M/D → 当年補完
+// スペースはトリム済みの値を受け取る。変換不能な場合は null を返す
+function normalizeDayOffDate(raw: string): string | null {
+  const s = raw.trim();
+  if (!s) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return isValidDate(s) ? s : null;
+  }
+
+  const mFull = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (mFull) {
+    const n = `${mFull[1]}-${mFull[2].padStart(2, '0')}-${mFull[3].padStart(2, '0')}`;
+    return isValidDate(n) ? n : null;
+  }
+
+  const mShort = s.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (mShort) {
+    const year = new Date().getFullYear();
+    const n = `${year}-${mShort[1].padStart(2, '0')}-${mShort[2].padStart(2, '0')}`;
+    return isValidDate(n) ? n : null;
+  }
+
+  return null;
+}
+
 // ── スタッフCSV ──────────────────────────────────────────
 
 export function parseStaffCSV(rawText: string): StaffParseResult {
@@ -96,11 +122,16 @@ export function parseStaffCSV(rawText: string): StaffParseResult {
       continue;
     }
 
-    const requestedDaysOff = daysOffRaw
+    const rawDaysOff = daysOffRaw
       ? daysOffRaw.split(',').map((d) => d.trim()).filter((d) => d !== '')
       : [];
 
-    const invalidDates = requestedDaysOff.filter((d) => !isValidDate(d));
+    const requestedDaysOff: string[] = [];
+    const invalidDates: string[] = [];
+    for (const raw of rawDaysOff) {
+      const n = normalizeDayOffDate(raw);
+      if (n !== null) { requestedDaysOff.push(n); } else { invalidDates.push(raw); }
+    }
     if (invalidDates.length > 0) {
       errors.push({ row: rowNum, message: `不正な日付: ${invalidDates.join(', ')}` });
       continue;
@@ -323,11 +354,9 @@ export function parseDaysOffCSV(rawText: string): DaysOffParseResult {
         errors.push({ row: rowNum, message: 'スタッフNoと名前が両方空です' });
         continue;
       }
-      if (!isValidDate(dateStr)) {
-        errors.push({
-          row: rowNum,
-          message: `不正な日付: "${dateStr}"（YYYY-MM-DD形式）`,
-        });
+      const normalizedDate = normalizeDayOffDate(dateStr);
+      if (!normalizedDate) {
+        errors.push({ row: rowNum, message: `不正な日付: "${dateStr}"` });
         continue;
       }
 
@@ -339,7 +368,7 @@ export function parseDaysOffCSV(rawText: string): DaysOffParseResult {
         if (staffNo && !entry.staffNo) entry.staffNo = staffNo;
         if (name   && !entry.name)    entry.name    = name;
       }
-      acc.get(key)!.dates.add(dateStr);
+      acc.get(key)!.dates.add(normalizedDate);
     }
 
     for (const [, entry] of acc) {
@@ -372,11 +401,16 @@ export function parseDaysOffCSV(rawText: string): DaysOffParseResult {
       continue;
     }
 
-    const requestedDaysOff = daysOffRaw
+    const rawDates = daysOffRaw
       ? daysOffRaw.split(',').map((d) => d.trim()).filter((d) => d !== '')
       : [];
 
-    const invalidDates = requestedDaysOff.filter((d) => !isValidDate(d));
+    const requestedDaysOff: string[] = [];
+    const invalidDates: string[] = [];
+    for (const raw of rawDates) {
+      const n = normalizeDayOffDate(raw);
+      if (n !== null) { requestedDaysOff.push(n); } else { invalidDates.push(raw); }
+    }
     if (invalidDates.length > 0) {
       errors.push({ row: rowNum, message: `不正な日付: ${invalidDates.join(', ')}` });
       continue;
