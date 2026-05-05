@@ -125,7 +125,7 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
                   return (
                     <tr key={site.id} className={hasShortage ? 'row--alert' : ''}>
                       <td>{site.date}</td>
-                      <td>{site.siteName}</td>
+                      <td>{site.clientName ? `${site.siteName}（${site.clientName}）` : site.siteName}</td>
                       <td>
                         {site.startTime}〜{site.endTime}
                       </td>

@@ -157,6 +157,7 @@ interface SessionForm {
 
 interface SessionEditorState {
   groupId: string;
+  clientName: string;
   siteName: string;
   sessions: SessionForm[];
   isExistingGroup: boolean;
@@ -254,7 +255,7 @@ function computeGroupLabel(siteName: string, sessions: SessionForm[]): string {
 }
 
 function buildSessionSites(state: SessionEditorState): WorkSite[] {
-  const { groupId, siteName, sessions } = state;
+  const { groupId, clientName, siteName, sessions } = state;
   const groupLabel = computeGroupLabel(siteName, sessions);
   const sites: WorkSite[] = [];
   for (const session of sessions) {
@@ -267,6 +268,7 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
         groupLabel,
         sessionId,
         date,
+        clientName,
         siteName,
         startTime:      session.startTime,
         endTime:        session.endTime,
@@ -417,9 +419,10 @@ interface Props {
 
 export default function WorkSiteManager({ workSites, onChange, selectedMonth }: Props) {
   // ── 新規現場登録フォーム
-  const [newSiteName, setNewSiteName] = useState('');
-  const [newSessions, setNewSessions] = useState<SessionForm[]>([emptySession()]);
-  const [successMsg, setSuccessMsg]   = useState('');
+  const [newClientName, setNewClientName] = useState('');
+  const [newSiteName, setNewSiteName]     = useState('');
+  const [newSessions, setNewSessions]     = useState<SessionForm[]>([emptySession()]);
+  const [successMsg, setSuccessMsg]       = useState('');
 
   // ── 会期エディタ・アコーディオン
   const [sessionEditor,      setSessionEditor]      = useState<SessionEditorState | null>(null);
@@ -502,6 +505,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
           groupLabel,
           sessionId,
           date,
+          clientName:     newClientName,
           siteName:       newSiteName,
           startTime:      session.startTime,
           endTime:        session.endTime,
@@ -512,6 +516,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
     }
     onChange([...workSites, ...newSites]);
     setSuccessMsg(`${newSites.length}件の現場を登録しました`);
+    setNewClientName('');
     setNewSiteName('');
     setNewSessions([emptySession()]);
     setTimeout(() => setSuccessMsg(''), 4000);
@@ -545,13 +550,14 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
     const groupActive = removed.filter((s) => s.groupId === groupId && !s.isPlaceholder);
     if (groupActive.length === 0) {
       const orig = workSites.find((s) => s.groupId === groupId);
-      const siteName = orig?.siteName ?? '';
+      const siteName   = orig?.siteName   ?? '';
+      const clientName = orig?.clientName ?? '';
       onChange([
         ...removed.filter((s) => s.groupId !== groupId),
         {
           id: createId(), groupId,
           groupLabel: `${siteName}：会期なし`,
-          date: '', siteName,
+          date: '', clientName, siteName,
           startTime: '', endTime: '',
           requiredPeople: 0, memo: '',
           isPlaceholder: true,
@@ -593,6 +599,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
   function openGroupSessionEditor(groupId: string, sites: WorkSite[]) {
     setSessionEditor({
       groupId,
+      clientName: sites[0]?.clientName ?? '',
       siteName: sites[0]?.siteName ?? '',
       sessions: deriveSessionsFromSites(sites),
       isExistingGroup: true,
@@ -603,6 +610,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
   function openGroupSessionEditorWithNewSession(groupId: string, sites: WorkSite[]) {
     setSessionEditor({
       groupId,
+      clientName: sites[0]?.clientName ?? '',
       siteName: sites[0]?.siteName ?? '',
       sessions: [...deriveSessionsFromSites(sites), emptySession()],
       isExistingGroup: true,
@@ -613,6 +621,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
   function openSiteSessionEditor(site: WorkSite) {
     setSessionEditor({
       groupId:  createId(),
+      clientName: site.clientName ?? '',
       siteName: site.siteName,
       sessions: [{
         id:             createId(),
@@ -781,6 +790,15 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
     <>
       <div className="session-editor__sitename">
         <label className="edit-panel__field edit-panel__field--wide">
+          クライアント名
+          <input type="text" className="form-input"
+            value={sessionEditor.clientName}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSessionEditor((prev) => prev ? { ...prev, clientName: v } : prev);
+            }} />
+        </label>
+        <label className="edit-panel__field edit-panel__field--wide">
           現場名
           <input type="text" className="form-input"
             value={sessionEditor.siteName}
@@ -829,6 +847,13 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
         </p>
 
         <form onSubmit={handleNewSiteSubmit} className="form">
+          <div className="form-row">
+            <label className="form-label">クライアント名</label>
+            <input className="form-input" type="text" value={newClientName}
+              onChange={(e) => setNewClientName(e.target.value)}
+              placeholder="△△株式会社" />
+          </div>
+
           <div className="form-row">
             <label className="form-label">現場名 *</label>
             <input className="form-input" type="text" value={newSiteName}
@@ -898,6 +923,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
               const displaySessions     = groupSitesIntoDisplaySessions(sites);
               const monthDisplaySessions = groupSitesIntoDisplaySessions(monthActiveSites);
               const siteName            = sites[0]?.siteName ?? '';
+              const clientName          = sites[0]?.clientName ?? '';
               const isVenueOpen         = expandedVenues.has(groupId);
 
               const venueStats = activeSites.length > 0
@@ -919,7 +945,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
                   <div className="site-header">
                     <button className="site-header__main" onClick={() => toggleVenue(groupId)}>
                       <div className="site-header__info">
-                        <div className="site-title">{siteName}</div>
+                        <div className="site-title">{clientName ? `${siteName}（${clientName}）` : siteName}</div>
                         <div className="site-meta">
                           {venueStats === null ? (
                             <span className="site-summary__unregistered">未登録</span>
@@ -1066,7 +1092,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
                     <div key={site.id} className="site-card site-card--ungrouped">
                       <div className="site-header">
                         <div className="site-header__left">
-                          <div className="site-title">{site.siteName}</div>
+                          <div className="site-title">{site.clientName ? `${site.siteName}（${site.clientName}）` : site.siteName}</div>
                           <div className="site-meta">{site.date}</div>
                         </div>
                         <div className="site-actions">
