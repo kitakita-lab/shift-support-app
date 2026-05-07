@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Staff, WorkSite } from '../types';
 import { sortStaff, nextStaffNo } from '../utils/staffUtils';
 
@@ -164,6 +164,18 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   const [currentMonth, setCurrentMonth] = useState(() => selectedMonth);
   const [editingNos, setEditingNos] = useState<Record<string, string>>({});
   const [addSiteOpen, setAddSiteOpen] = useState(false);
+  const [siteSearch, setSiteSearch] = useState('');
+
+  // siteName → clientNames[] のルックアップ（検索フィルタ用）
+  const siteClientMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    workSites.forEach((w) => {
+      if (!map.has(w.siteName)) map.set(w.siteName, []);
+      const c = w.clientName?.trim();
+      if (c && !map.get(w.siteName)!.includes(c)) map.get(w.siteName)!.push(c);
+    });
+    return map;
+  }, [workSites]);
 
   useEffect(() => {
     if (!editId) setForm((prev) => ({ ...prev, staffNo: nextStaffNo(staff) }));
@@ -185,6 +197,15 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   const uniqueSiteNames = [...new Set(workSites.map((w) => w.siteName))].sort();
   const unselectedSites = uniqueSiteNames.filter((n) => !form.preferredWorkSites.includes(n));
 
+  // 検索クエリで siteName・clientName の両方を照合して絞り込む
+  const filteredUnselectedSites = siteSearch.trim()
+    ? unselectedSites.filter((name) => {
+        const q = siteSearch.trim().toLowerCase();
+        if (name.toLowerCase().includes(q)) return true;
+        return siteClientMap.get(name)?.some((c) => c.toLowerCase().includes(q)) ?? false;
+      })
+    : unselectedSites;
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return;
@@ -196,6 +217,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     }
     setForm(emptyForm(staff));
     setAddSiteOpen(false);
+    setSiteSearch('');
   }
 
   function handleEdit(s: Staff) {
@@ -219,6 +241,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     setEditId(null);
     setForm(emptyForm(staff));
     setAddSiteOpen(false);
+    setSiteSearch('');
   }
 
   function handleStaffNoChange(id: string, value: string) {
@@ -313,23 +336,43 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                       <button
                         type="button"
                         className="preferred-add__toggle"
-                        onClick={() => setAddSiteOpen((v) => !v)}
+                        onClick={() => {
+                          setAddSiteOpen((v) => {
+                            if (v) setSiteSearch('');
+                            return !v;
+                          });
+                        }}
                       >
                         ＋ 現場を追加
                         <span className="preferred-add__chevron">{addSiteOpen ? '▲' : '▼'}</span>
                       </button>
                       {addSiteOpen && (
-                        <div className="site-chips preferred-add__chips">
-                          {unselectedSites.map((name) => (
-                            <button
-                              key={name}
-                              type="button"
-                              className="site-chip"
-                              onClick={() => togglePreferredSite(name)}
-                            >
-                              {name}
-                            </button>
-                          ))}
+                        <div className="preferred-add__panel">
+                          <input
+                            type="text"
+                            className="preferred-add__search"
+                            placeholder="現場名・クライアント名で絞り込み"
+                            value={siteSearch}
+                            onChange={(e) => setSiteSearch(e.target.value)}
+                          />
+                          <div className="site-chips preferred-add__chips">
+                            {filteredUnselectedSites.length > 0 ? (
+                              filteredUnselectedSites.map((name) => (
+                                <button
+                                  key={name}
+                                  type="button"
+                                  className="site-chip"
+                                  onClick={() => togglePreferredSite(name)}
+                                >
+                                  {name}
+                                </button>
+                              ))
+                            ) : (
+                              <span className="preferred-none">
+                                {siteSearch.trim() ? '該当なし' : '追加できる現場がありません'}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>

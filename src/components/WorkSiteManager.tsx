@@ -1,7 +1,7 @@
 import { useRef, useState, useMemo } from 'react';
 import { WorkSite } from '../types';
 import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
-import { formatSiteLabel } from '../utils/siteUtils';
+import { formatSiteLabel, siteCompositeKey } from '../utils/siteUtils';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
@@ -88,7 +88,7 @@ function peakColorClass(peak: number, avg: number): 'high' | 'medium' | 'normal'
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = `${site.clientName ?? ''}\0${site.siteName}`;
+    const key = siteCompositeKey(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -119,7 +119,7 @@ function buildCsvImportGroups(sites: WorkSite[]): WorkSite[] {
   // clientName + siteName の複合キーでグループ化（同名現場でもクライアント違いは別グループ）
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = `${site.clientName ?? ''}\0${site.siteName}`;
+    const key = siteCompositeKey(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }

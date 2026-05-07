@@ -12,6 +12,7 @@ interface Props {
 
 export default function ExportPanel({ staff, workSites, assignments, onClearAll, selectedMonth }: Props) {
   const [isExporting, setIsExporting] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   function handleExportCsv() {
     if (workSites.length === 0) {
@@ -99,8 +100,13 @@ export default function ExportPanel({ staff, workSites, assignments, onClearAll,
       {/* ── 出力プレビュー ───────────────────────────────── */}
       {sorted.length > 0 && (
         <div className="card">
-          <h3>出力プレビュー（現場別）</h3>
-          <div className="table-wrapper">
+          <div className="preview-header">
+            <h3>出力プレビュー（現場別）</h3>
+            <button className="btn btn--ghost btn--sm" onClick={() => setPreviewOpen((v) => !v)}>
+              {previewOpen ? '▲ 非表示' : '▼ 表示'}
+            </button>
+          </div>
+          {previewOpen && <div className="table-wrapper" style={{ marginTop: '12px' }}>
             <table className="data-table">
               <thead>
                 <tr>
@@ -141,7 +147,7 @@ export default function ExportPanel({ staff, workSites, assignments, onClearAll,
                 })}
               </tbody>
             </table>
-          </div>
+          </div>}
         </div>
       )}
 

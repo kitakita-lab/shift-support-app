@@ -43,12 +43,13 @@ function styleHeader(row: ExcelJS.Row): void {
   });
 }
 
+// スタッフ別明細シート用：単一スタッフ列を左寄せ
 function styleDataRow(
   row: ExcelJS.Row,
   hasShortage: boolean,
   isAlt: boolean,
-  staffCol: number,   // テキスト左寄せにする列番号
-  shortageCol: number // 不足強調する列番号
+  staffCol: number,
+  shortageCol: number
 ): void {
   row.height = 20;
   row.eachCell({ includeEmpty: true }, (cell, colNum) => {
@@ -60,7 +61,28 @@ function styleDataRow(
   if (hasShortage) row.getCell(shortageCol).font = SHORTAGE_FONT;
 }
 
-// ── シート①：現場別シフト表（1現場1行・確認用）────────────
+// 現場別シフト表シート用：スタッフ列が範囲になる横持ち形式
+function styleSiteSheetRow(
+  row: ExcelJS.Row,
+  hasShortage: boolean,
+  isAlt: boolean,
+  staffStartCol: number,
+  staffEndCol: number,
+  shortageCol: number
+): void {
+  row.height = 20;
+  row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+    cell.border    = thinBorder();
+    cell.alignment = (colNum >= staffStartCol && colNum <= staffEndCol) ? MIDDLE : CENTER;
+    if (hasShortage)    cell.fill = SHORTAGE_FILL;
+    else if (isAlt)     cell.fill = ALT_FILL;
+  });
+  if (hasShortage) row.getCell(shortageCol).font = SHORTAGE_FONT;
+}
+
+// ── シート①：現場別シフト表（横持ち・スタッフ列分割）────────
+
+const STAFF_COL_COUNT = 10;
 
 function buildSiteSheet(
   wb: ExcelJS.Workbook,
@@ -71,30 +93,49 @@ function buildSiteSheet(
 ): void {
   const ws = wb.addWorksheet('現場別シフト表');
 
-  // 列幅：日付, 現場名, クライアント名, 時間, 必要人数, 割当スタッフ, 不足人数
-  ws.columns = [14, 22, 20, 16, 10, 48, 10].map((width) => ({ width }));
+  // 列幅：日付, 現場名, クライアント名, 開始, 終了, 必要人数, スタッフ×10, 不足人数, メモ
+  ws.columns = [
+    14, 22, 20, 10, 10, 10,
+    ...Array(STAFF_COL_COUNT).fill(14),
+    10, 22,
+  ].map((width) => ({ width }));
 
-  styleHeader(ws.addRow(['日付', '現場名', 'クライアント名', '時間', '必要人数', '割当スタッフ', '不足人数']));
+  const staffHeaders = Array.from({ length: STAFF_COL_COUNT }, (_, i) => `スタッフ${i + 1}`);
+  styleHeader(ws.addRow([
+    '日付', '現場名', 'クライアント名', '開始時間', '終了時間', '必要人数',
+    ...staffHeaders,
+    '不足人数', 'メモ',
+  ]));
+
+  // スタッフ列：7列目〜(6+STAFF_COL_COUNT)列目（1-based）
+  const STAFF_START  = 7;
+  const STAFF_END    = 6 + STAFF_COL_COUNT;
+  const SHORTAGE_COL = STAFF_END + 1;
 
   sorted.forEach((site, idx) => {
-    const asgn      = assignMap[site.id];
-    const shortage  = asgn ? asgn.shortage : site.requiredPeople;
-    const staffNames = asgn && asgn.assignedStaffIds.length > 0
-      ? sortedByStaffNo(asgn.assignedStaffIds, staffIndex).map((id) => staffMap[id] ?? id).join('、')
-      : '';
+    const asgn     = assignMap[site.id];
+    const shortage = asgn ? asgn.shortage : site.requiredPeople;
+    const staffIds = asgn && asgn.assignedStaffIds.length > 0
+      ? sortedByStaffNo(asgn.assignedStaffIds, staffIndex)
+      : [];
+
+    const staffCells = Array.from({ length: STAFF_COL_COUNT }, (_, i) =>
+      staffIds[i] ? (staffMap[staffIds[i]] ?? staffIds[i]) : ''
+    );
 
     const row = ws.addRow([
       site.date,
       site.siteName,
       site.clientName ?? '',
-      `${site.startTime}〜${site.endTime}`,
+      site.startTime,
+      site.endTime,
       site.requiredPeople,
-      staffNames,
+      ...staffCells,
       shortage,
+      site.memo ?? '',
     ]);
 
-    // 6列目=割当スタッフ（左寄せ）、7列目=不足人数
-    styleDataRow(row, shortage > 0, idx % 2 === 1, 6, 7);
+    styleSiteSheetRow(row, shortage > 0, idx % 2 === 1, STAFF_START, STAFF_END, SHORTAGE_COL);
   });
 }
 
