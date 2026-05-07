@@ -2,6 +2,7 @@ import { Fragment } from 'react';
 import { Staff, WorkSite, ShiftAssignment } from '../types';
 import { generateShifts } from '../utils/shiftGenerator';
 import { sortedByStaffNo, sortStaff } from '../utils/staffUtils';
+import { formatSiteLabel } from '../utils/siteUtils';
 
 interface Props {
   staff: Staff[];
@@ -125,7 +126,7 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
                   return (
                     <tr key={site.id} className={hasShortage ? 'row--alert' : ''}>
                       <td>{site.date}</td>
-                      <td>{site.clientName ? `${site.siteName}（${site.clientName}）` : site.siteName}</td>
+                      <td>{formatSiteLabel(site.siteName, site.clientName)}</td>
                       <td>
                         {site.startTime}〜{site.endTime}
                       </td>

@@ -178,9 +178,11 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
     return i >= 0 ? i : fallback;
   };
 
+  // フォールバック順は新テンプレート列順：date,siteName,clientName,startTime,endTime,requiredPeople,memo
+  // ヘッダーがある場合は名前で解決するため、旧テンプレート（date,clientName,siteName,...）も互換
   const dateIdx        = colIdx('date',           0);
-  const clientNameIdx  = colIdx('clientname',     1);
-  const siteNameIdx    = colIdx('sitename',       2);
+  const siteNameIdx    = colIdx('sitename',       1);
+  const clientNameIdx  = colIdx('clientname',     2);
   const startTimeIdx   = colIdx('starttime',      3);
   const endTimeIdx     = colIdx('endtime',        4);
   const reqIdx         = colIdx('requiredpeople', 5);
@@ -463,7 +465,7 @@ export function downloadStaffTemplate(): void {
 
 export function downloadSiteTemplate(): void {
   downloadCsv(
-    `date,clientName,siteName,startTime,endTime,requiredPeople,memo\n2026-05-01,△△株式会社,WB小樽,10:00,18:00,3,通常\n2026-05-02,○○物流,南郷7丁目,09:00,17:00,2,`,
+    `date,siteName,clientName,startTime,endTime,requiredPeople,memo\n2026-05-01,WB小樽,△△株式会社,10:00,18:00,3,通常\n2026-05-02,南郷7丁目,○○物流,09:00,17:00,2,`,
     'site_template.csv'
   );
 }
