@@ -99,25 +99,29 @@ function styleSiteSheetRow(
 
 // ── シート①：現場別シフト表（現場大ブロック + 会期小ブロック形式）──────────────
 //
-// [Excel再取込の設計メモ]
-// 出力したExcelを将来再取込する際の照合キー（一時的な照合用、永続化しない）:
+// [Excel再取込 照合キー設計メモ — 実装は将来]
+// 照合キー候補（一時的・永続化しない）:
 //   対象月 + 現場名 + クライアント名 + 日付 + 開始時間 + 終了時間
-// → この組み合わせで ShiftAssignment.siteId を特定し、assignedStaffIds のみ上書きする
-// → スタッフ名は staffMap で名前→ID 逆引き。不一致はエラー扱い（自動変換しない）
-// → スタッフマスタ・現場マスタ（WorkSite）は再取込で変更しない
-// → groupId / siteId / sessionId 等の永続キーはExcelに書き出さず、照合にも使わない
+// 設計方針:
+//   - requiredPeople は照合キーに含めない（担当者が事前に変更する場合があるため）
+//   - groupId / siteId / sessionId はExcel出力に含めない（内部キーはアプリ内に留める）
+//   - Excelは人間が編集する前提のため、照合時は trim() で空白差異を吸収する
+//   - 再取込の更新対象は ShiftAssignment のみ。スタッフマスタ・現場マスタは変更しない
+//   - スタッフ名→IDの逆引きは staffMap を使用し、不一致は自動変換せずエラー扱いにする
 
 interface SiteBlock {
-  venueLabel:    string;
-  siteName:      string;
-  clientName?:   string;
-  startDate:     string;
-  endDate:       string;
-  startTime:     string;
-  endTime:       string;
-  maxRequired:   number;   // このセッション内の必要人数最大値
-  staffColCount: number;   // max(maxRequired, maxAssigned, 1)
-  sites:         WorkSite[];
+  venueLabel:       string;
+  siteName:         string;
+  clientName?:      string;
+  startDate:        string;
+  endDate:          string;
+  startTime:        string;
+  endTime:          string;
+  maxRequired:      number;   // このセッション内の必要人数最大値
+  maxAssignedCount: number;   // このセッション内で最も多く配置された人数
+  maxShortage:      number;   // このセッション内の不足人数最大値
+  staffColCount:    number;   // max(maxRequired, maxAssignedCount, 1)
+  sites:            WorkSite[];
 }
 
 interface VenueGroup {
@@ -145,22 +149,29 @@ function buildBlocks(
   for (const [, sites] of sessionMap) {
     const s = [...sites].sort((a, b) => a.date.localeCompare(b.date));
     const maxRequired = Math.max(...s.map((x) => x.requiredPeople));
-    const maxAssigned = s.reduce(
+    const maxAssignedCount = s.reduce(
       (acc, x) => Math.max(acc, assignMap[x.id]?.assignedStaffIds.length ?? 0),
       0
     );
+    // 日別の shortage を集計して会期内最大値を求める
+    const maxShortage = s.reduce((acc, x) => {
+      const asgn = assignMap[x.id];
+      return Math.max(acc, asgn ? asgn.shortage : x.requiredPeople);
+    }, 0);
     const first = s[0];
     blocks.push({
-      venueLabel:    formatSiteLabel(first.siteName, first.clientName),
-      siteName:      first.siteName,
-      clientName:    first.clientName,
-      startDate:     first.date,
-      endDate:       s[s.length - 1].date,
-      startTime:     first.startTime,
-      endTime:       first.endTime,
+      venueLabel:       formatSiteLabel(first.siteName, first.clientName),
+      siteName:         first.siteName,
+      clientName:       first.clientName,
+      startDate:        first.date,
+      endDate:          s[s.length - 1].date,
+      startTime:        first.startTime,
+      endTime:          first.endTime,
       maxRequired,
-      staffColCount: Math.max(maxRequired, maxAssigned, 1),
-      sites:         s,
+      maxAssignedCount,
+      maxShortage,
+      staffColCount:    Math.max(maxRequired, maxAssignedCount, 1),
+      sites:            s,
     });
   }
 
@@ -213,6 +224,12 @@ function buildSiteSheet(
   const venueGroups = buildVenueGroups(sorted, assignMap);
   if (venueGroups.length === 0) return;
 
+  // スタッフ名の最大文字数からスタッフ列幅を決定（名前が切れないよう調整）
+  const maxNameChars = Object.values(staffMap).reduce(
+    (max, name) => Math.max(max, name.length), 0
+  );
+  const staffColWidth = Math.min(20, Math.max(10, maxNameChars + 6));
+
   // シート全体の最大スタッフ列数（全現場・全会期横断）
   const globalMaxN   = Math.max(...venueGroups.flatMap((g) => g.sessions.map((b) => b.staffColCount)));
   // 列構成：日付(1) | スタッフ1..N(2..1+N) | 不足人数(2+N) | メモ(3+N)
@@ -222,10 +239,10 @@ function buildSiteSheet(
   const SHORTAGE_COL = STAFF_END + 1;
 
   ws.columns = [
-    14,                             // 日付
-    ...Array(globalMaxN).fill(13),  // スタッフ1〜N
-    10,                             // 不足人数
-    22,                             // メモ
+    14,                                // 日付（固定）
+    ...Array(globalMaxN).fill(staffColWidth),  // スタッフ1〜N（名前長に応じて可変）
+    10,                                // 不足人数
+    22,                                // メモ
   ].map((width) => ({ width }));
 
   venueGroups.forEach((venue, venueIdx) => {
@@ -243,23 +260,32 @@ function buildSiteSheet(
     venueTitleCell.border    = thinBorder('FFBFDBFE');
 
     venue.sessions.forEach((block, sessionIdx) => {
-      // 同一現場内の会期間スペーサー（先頭会期は会場タイトル直後なので不要）
-      if (sessionIdx > 0) ws.addRow([]);
-
-      // ── 会期情報行（期間・時刻・必要人数）──────────────────────
+      // ── 会期情報行（期間・時刻・人数サマリー）──────────────────────
       const dateLabel = block.startDate === block.endDate
         ? block.startDate
         : `${block.startDate} 〜 ${block.endDate}`;
-      const infoRow = ws.addRow([
-        `会期：${dateLabel}　　開始：${block.startTime}　終了：${block.endTime}　　必要人数：${block.maxRequired}人`,
-      ]);
+      const baseText = `会期：${dateLabel}　　開始：${block.startTime}　終了：${block.endTime}　　必要人数：${block.maxRequired}人　割当最大：${block.maxAssignedCount}人　`;
+
+      const infoRow = ws.addRow(['']);
       infoRow.height = 18;
       ws.mergeCells(infoRow.number, 1, infoRow.number, TOTAL_COLS);
       const infoCell     = infoRow.getCell(1);
-      infoCell.font      = BLOCK_INFO_FONT;
       infoCell.fill      = BLOCK_INFO_FILL;
       infoCell.alignment = { vertical: 'middle', indent: 2 };
       infoCell.border    = thinBorder('FFE2E8F0');
+
+      // 不足あり → 不足人数部分を赤字のrichTextで表示
+      if (block.maxShortage > 0) {
+        infoCell.value = {
+          richText: [
+            { text: baseText,                              font: { size: 10, color: { argb: 'FF475569' } } },
+            { text: `不足最大：${block.maxShortage}人`,   font: { size: 10, bold: true, color: { argb: 'FFDC2626' } } },
+          ],
+        };
+      } else {
+        infoCell.value = baseText + '不足なし';
+        infoCell.font  = BLOCK_INFO_FONT;
+      }
 
       // ── 列ヘッダー行（このブロックのスタッフ数まで名前を出す）──
       const staffHeaders = Array.from({ length: globalMaxN }, (_, i) =>
@@ -275,6 +301,7 @@ function buildSiteSheet(
       });
 
       // ── データ行（1現場1日 = 1行）────────────────────────────
+      // スタッフ未配置セルは完全空白（「-」や「未設定」は入れない）
       block.sites.forEach((site, siteIdx) => {
         const asgn     = assignMap[site.id];
         const shortage = asgn ? asgn.shortage : site.requiredPeople;
@@ -294,6 +321,17 @@ function buildSiteSheet(
 
         styleSiteSheetRow(row, shortage > 0, siteIdx % 2 === 1, STAFF_START, STAFF_END, SHORTAGE_COL);
       });
+
+      // ── 会期間セパレータ（同一現場内の会期境界を視覚化・最終会期の後は不要）──
+      if (sessionIdx < venue.sessions.length - 1) {
+        const sepRow = ws.addRow([]);
+        sepRow.height = 8;
+        for (let c = 1; c <= TOTAL_COLS; c++) {
+          sepRow.getCell(c).fill = {
+            type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' },
+          };
+        }
+      }
     });
   });
 }
