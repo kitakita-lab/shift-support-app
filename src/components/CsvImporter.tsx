@@ -14,7 +14,7 @@ import {
   DaysOffRow,
 } from '../utils/csvImport';
 import { nextStaffNo } from '../utils/staffUtils';
-import { formatSiteLabel } from '../utils/siteUtils';
+import { formatSiteLabel, siteCompositeKey } from '../utils/siteUtils';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ function parseSiteDate(s: string): Date {
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = `${site.clientName ?? ''}\0${site.siteName}`;
+    const key = siteCompositeKey(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -300,7 +300,7 @@ export default function CsvImporter({
     // clientName + siteName の複合キーでグループ化（同名現場でもクライアント違いは別グループ）
     const bySiteKey = new Map<string, WorkSite[]>();
     for (const site of sitePreview.valid) {
-      const key = `${site.clientName ?? ''}\0${site.siteName}`;
+      const key = siteCompositeKey(site.siteName, site.clientName);
       if (!bySiteKey.has(key)) bySiteKey.set(key, []);
       bySiteKey.get(key)!.push(site);
     }

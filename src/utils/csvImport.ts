@@ -250,7 +250,7 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
   // requiredPeople を加算、memo は非空・重複なしでカンマ結合
   const aggregateMap = new Map<string, WorkSite>();
   for (const row of rawRows) {
-    const key = `${row.date}_${row.clientName ?? ''}_${row.siteName}_${row.startTime}_${row.endTime}`;
+    const key = `${row.date}_${(row.clientName ?? '').trim()}_${row.siteName.trim()}_${row.startTime}_${row.endTime}`;
     const hit = aggregateMap.get(key);
     if (hit) {
       hit.requiredPeople += row.requiredPeople;
