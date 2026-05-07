@@ -14,6 +14,7 @@ import {
   DaysOffRow,
 } from '../utils/csvImport';
 import { nextStaffNo } from '../utils/staffUtils';
+import { formatSiteLabel } from '../utils/siteUtils';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -91,13 +92,14 @@ function parseSiteDate(s: string): Date {
 
 // 連続日 + 同一時間帯でグルーピングしたときの会期数・現場数を返す（プレビュー表示用）
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
-  const bySiteName = new Map<string, WorkSite[]>();
+  const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    if (!bySiteName.has(site.siteName)) bySiteName.set(site.siteName, []);
-    bySiteName.get(site.siteName)!.push(site);
+    const key = `${site.clientName ?? ''}\0${site.siteName}`;
+    if (!bySiteKey.has(key)) bySiteKey.set(key, []);
+    bySiteKey.get(key)!.push(site);
   }
   let sessionCount = 0;
-  for (const [, group] of bySiteName) {
+  for (const [, group] of bySiteKey) {
     const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
     sessionCount++;
     let prev = sorted[0];
@@ -113,7 +115,7 @@ function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCo
       prev = cur;
     }
   }
-  return { sessionCount, venueCount: bySiteName.size };
+  return { sessionCount, venueCount: bySiteKey.size };
 }
 
 function matchDaysOffRows(
@@ -295,21 +297,21 @@ export default function CsvImporter({
     const pad = (n: number) => String(n).padStart(2, '0');
     const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-    // siteName ごとに groupId を管理
-    const groupIdBySiteName = new Map<string, string>();
-    // siteName ごとに分類して日付順に並べる
-    const bySiteName = new Map<string, WorkSite[]>();
+    // clientName + siteName の複合キーでグループ化（同名現場でもクライアント違いは別グループ）
+    const bySiteKey = new Map<string, WorkSite[]>();
     for (const site of sitePreview.valid) {
-      if (!bySiteName.has(site.siteName)) bySiteName.set(site.siteName, []);
-      bySiteName.get(site.siteName)!.push(site);
+      const key = `${site.clientName ?? ''}\0${site.siteName}`;
+      if (!bySiteKey.has(key)) bySiteKey.set(key, []);
+      bySiteKey.get(key)!.push(site);
     }
 
     const withGroup: WorkSite[] = [];
     let sessionCount = 0;
 
-    for (const [siteName, siteGroup] of bySiteName) {
+    for (const [, siteGroup] of bySiteKey) {
       const groupId = crypto.randomUUID();
-      groupIdBySiteName.set(siteName, groupId);
+      const { siteName, clientName } = siteGroup[0];
+      const venueLabel = formatSiteLabel(siteName, clientName);
       const sorted = [...siteGroup].sort((a, b) => a.date.localeCompare(b.date));
 
       // 連続日 + 同一時間帯 → 同じ sessionId にまとめる（requiredPeople は無視）
@@ -319,7 +321,7 @@ export default function CsvImporter({
       withGroup.push({
         ...prev,
         groupId,
-        groupLabel: `${siteName}：${importLabel}`,
+        groupLabel: `${venueLabel}：${importLabel}`,
         sessionId: currentSessionId,
       });
 
@@ -338,14 +340,14 @@ export default function CsvImporter({
         withGroup.push({
           ...cur,
           groupId,
-          groupLabel: `${siteName}：${importLabel}`,
+          groupLabel: `${venueLabel}：${importLabel}`,
           sessionId: currentSessionId,
         });
         prev = cur;
       }
     }
 
-    const venueCount = groupIdBySiteName.size;
+    const venueCount = bySiteKey.size;
     onImportSites(withGroup, overwriteMode);
     clearSitePreview();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';

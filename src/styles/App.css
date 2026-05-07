@@ -675,6 +675,38 @@ body {
   margin-top: 8px;
 }
 
+.preferred-add__panel {
+  margin-top: 8px;
+}
+
+.preferred-add__search {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fafafa;
+  margin-bottom: 6px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.preferred-add__search:focus {
+  border-color: #1a56db;
+  background: #fff;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.preview-header h3 {
+  margin: 0;
+}
+
 .empty-chips {
   font-size: 13px;
   color: #9ca3af;
