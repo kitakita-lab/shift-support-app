@@ -1,7 +1,7 @@
 import { Staff, WorkSite, ShiftAssignment } from '../types';
 import { compareStaffNo } from './staffUtils';
 
-const MAX_CONSECUTIVE_WORK_DAYS = 5;
+const DEFAULT_MAX_CONSECUTIVE_DAYS = 5;
 const DEFAULT_MAX_WORK_DAYS = 20;
 
 // 曜日インデックス（getDay()）→ Staff.availableWeekdays の文字列
@@ -17,8 +17,9 @@ function formatDate(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-// targetDate を追加したときの連勤数が MAX_CONSECUTIVE_WORK_DAYS を超えるか判定
-function wouldExceedConsecutive(assignedDates: Set<string>, targetDate: string): boolean {
+// targetDate を追加したときの連勤数が limit を超えるか判定
+// limit は Staff.maxConsecutiveDays ?? DEFAULT_MAX_CONSECUTIVE_DAYS を渡す
+function wouldExceedConsecutive(assignedDates: Set<string>, targetDate: string, limit: number): boolean {
   let count = 1;
   const back = parseDateLocal(targetDate);
   back.setDate(back.getDate() - 1);
@@ -32,7 +33,7 @@ function wouldExceedConsecutive(assignedDates: Set<string>, targetDate: string):
     count++;
     fwd.setDate(fwd.getDate() + 1);
   }
-  return count > MAX_CONSECUTIVE_WORK_DAYS;
+  return count > limit;
 }
 
 // スタッフがその曜日に勤務可能か判定
@@ -67,12 +68,13 @@ export function generateShifts(
     // ── 絶対条件フィルタ ──────────────────────────────────────────
     // 以下のいずれかに該当するスタッフは候補から除外する
     //   1. 希望休（requestedDaysOff）
-    //   2. 最大連勤超過（MAX_CONSECUTIVE_WORK_DAYS）
+    //   2. 最大連勤超過（maxConsecutiveDays、未設定時は DEFAULT_MAX_CONSECUTIVE_DAYS）
     //   3. 勤務不可曜日（availableWeekdays）
     //   4. 月間最大勤務日数超過（maxWorkDays）
     const candidates = staff.filter((s) => {
+      const consecutiveLimit  = s.maxConsecutiveDays ?? DEFAULT_MAX_CONSECUTIVE_DAYS;
       const notOnHoliday      = !s.requestedDaysOff.includes(site.date);
-      const withinConsecutive = !wouldExceedConsecutive(assignedDates[s.id], site.date);
+      const withinConsecutive = !wouldExceedConsecutive(assignedDates[s.id], site.date, consecutiveLimit);
       const availableWeekday  = isAvailableOnDate(s, site.date);
       const withinMaxDays     = isWithinMaxWorkDays(s, assignedDates[s.id]);
       return notOnHoliday && withinConsecutive && availableWeekday && withinMaxDays;
