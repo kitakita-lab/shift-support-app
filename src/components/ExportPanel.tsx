@@ -106,6 +106,7 @@ export default function ExportPanel({ staff, workSites, assignments, onClearAll,
                 <tr>
                   <th>日付</th>
                   <th>現場名</th>
+                  <th>クライアント名</th>
                   <th>開始</th>
                   <th>終了</th>
                   <th>必要人数</th>
@@ -125,6 +126,7 @@ export default function ExportPanel({ staff, workSites, assignments, onClearAll,
                     <tr key={site.id} className={hasShortage ? 'row--alert' : ''}>
                       <td>{site.date}</td>
                       <td>{site.siteName}</td>
+                      <td>{site.clientName?.trim() || '—'}</td>
                       <td>{site.startTime}</td>
                       <td>{site.endTime}</td>
                       <td>{site.requiredPeople}</td>

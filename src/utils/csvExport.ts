@@ -37,7 +37,7 @@ export function exportCsv(
   const assignMap: Record<string, ShiftAssignment> = {};
   assignments.forEach((a) => (assignMap[a.siteId] = a));
 
-  const headers = ['日付', '現場名', '開始時間', '終了時間', '必要人数', '割当スタッフ', '不足人数'];
+  const headers = ['日付', '現場名', 'クライアント名', '開始時間', '終了時間', '必要人数', '割当スタッフ', '不足人数'];
 
   const sorted = [...workSites.filter((s) => !s.isPlaceholder)].sort((a, b) => a.date.localeCompare(b.date));
 
@@ -50,6 +50,7 @@ export function exportCsv(
     return [
       site.date,
       site.siteName,
+      site.clientName ?? '',
       site.startTime,
       site.endTime,
       site.requiredPeople,
@@ -78,7 +79,7 @@ export function exportStaffCsv(
   const assignMap: Record<string, ShiftAssignment> = {};
   assignments.forEach((a) => (assignMap[a.siteId] = a));
 
-  const headers = ['日付', '現場名', '開始時間', '終了時間', 'スタッフ名'];
+  const headers = ['日付', '現場名', 'クライアント名', '開始時間', '終了時間', 'スタッフ名'];
 
   const sorted = [...workSites.filter((s) => !s.isPlaceholder)].sort((a, b) => a.date.localeCompare(b.date));
 
@@ -88,12 +89,13 @@ export function exportStaffCsv(
     const staffIds = asgn && asgn.assignedStaffIds.length > 0
       ? sortedByStaffNo(asgn.assignedStaffIds, staffIndex)
       : [];
+    const clientName = site.clientName ?? '';
 
     if (staffIds.length === 0) {
-      rows.push([site.date, site.siteName, site.startTime, site.endTime, ''].map(escape).join(','));
+      rows.push([site.date, site.siteName, clientName, site.startTime, site.endTime, ''].map(escape).join(','));
     } else {
       for (const id of staffIds) {
-        rows.push([site.date, site.siteName, site.startTime, site.endTime, staffMap[id] ?? id].map(escape).join(','));
+        rows.push([site.date, site.siteName, clientName, site.startTime, site.endTime, staffMap[id] ?? id].map(escape).join(','));
       }
     }
   }

@@ -71,10 +71,10 @@ function buildSiteSheet(
 ): void {
   const ws = wb.addWorksheet('現場別シフト表');
 
-  // 列幅：日付, 現場名, 時間, 必要人数, 割当スタッフ, 不足人数
-  ws.columns = [14, 22, 16, 10, 48, 10].map((width) => ({ width }));
+  // 列幅：日付, 現場名, クライアント名, 時間, 必要人数, 割当スタッフ, 不足人数
+  ws.columns = [14, 22, 20, 16, 10, 48, 10].map((width) => ({ width }));
 
-  styleHeader(ws.addRow(['日付', '現場名', '時間', '必要人数', '割当スタッフ', '不足人数']));
+  styleHeader(ws.addRow(['日付', '現場名', 'クライアント名', '時間', '必要人数', '割当スタッフ', '不足人数']));
 
   sorted.forEach((site, idx) => {
     const asgn      = assignMap[site.id];
@@ -86,14 +86,15 @@ function buildSiteSheet(
     const row = ws.addRow([
       site.date,
       site.siteName,
+      site.clientName ?? '',
       `${site.startTime}〜${site.endTime}`,
       site.requiredPeople,
       staffNames,
       shortage,
     ]);
 
-    // 5列目=割当スタッフ（左寄せ）、6列目=不足人数
-    styleDataRow(row, shortage > 0, idx % 2 === 1, 5, 6);
+    // 6列目=割当スタッフ（左寄せ）、7列目=不足人数
+    styleDataRow(row, shortage > 0, idx % 2 === 1, 6, 7);
   });
 }
 
@@ -108,10 +109,10 @@ function buildStaffSheet(
 ): void {
   const ws = wb.addWorksheet('スタッフ別明細');
 
-  // 列幅：日付, 現場名, 開始時間, 終了時間, 必要人数, スタッフ名, 不足人数
-  ws.columns = [14, 22, 10, 10, 10, 30, 10].map((width) => ({ width }));
+  // 列幅：日付, 現場名, クライアント名, 開始時間, 終了時間, 必要人数, スタッフ名, 不足人数
+  ws.columns = [14, 22, 20, 10, 10, 10, 30, 10].map((width) => ({ width }));
 
-  styleHeader(ws.addRow(['日付', '現場名', '開始時間', '終了時間', '必要人数', 'スタッフ名', '不足人数']));
+  styleHeader(ws.addRow(['日付', '現場名', 'クライアント名', '開始時間', '終了時間', '必要人数', 'スタッフ名', '不足人数']));
 
   sorted.forEach((site, idx) => {
     const asgn       = assignMap[site.id];
@@ -128,6 +129,7 @@ function buildStaffSheet(
       const row = ws.addRow([
         site.date,
         site.siteName,
+        site.clientName ?? '',
         site.startTime,
         site.endTime,
         site.requiredPeople,
@@ -135,8 +137,8 @@ function buildStaffSheet(
         shortage,
       ]);
 
-      // 6列目=スタッフ名（左寄せ）、7列目=不足人数
-      styleDataRow(row, hasShortage, isAlt, 6, 7);
+      // 7列目=スタッフ名（左寄せ）、8列目=不足人数
+      styleDataRow(row, hasShortage, isAlt, 7, 8);
     });
   });
 }

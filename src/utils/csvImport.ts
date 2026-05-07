@@ -178,12 +178,15 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
     return i >= 0 ? i : fallback;
   };
 
-  const dateIdx      = colIdx('date',           0);
-  const siteNameIdx  = colIdx('sitename',        1);
-  const startTimeIdx = colIdx('starttime',       2);
-  const endTimeIdx   = colIdx('endtime',         3);
-  const reqIdx       = colIdx('requiredpeople',  4);
-  const memoIdx      = colIdx('memo',            5);
+  // フォールバック順は新テンプレート列順：date,siteName,clientName,startTime,endTime,requiredPeople,memo
+  // ヘッダーがある場合は名前で解決するため、旧テンプレート（date,clientName,siteName,...）も互換
+  const dateIdx        = colIdx('date',           0);
+  const siteNameIdx    = colIdx('sitename',       1);
+  const clientNameIdx  = colIdx('clientname',     2);
+  const startTimeIdx   = colIdx('starttime',      3);
+  const endTimeIdx     = colIdx('endtime',        4);
+  const reqIdx         = colIdx('requiredpeople', 5);
+  const memoIdx        = colIdx('memo',           6);
 
   const start = hasHeader ? 1 : 0;
 
@@ -199,12 +202,13 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
       continue;
     }
 
-    const date      = (fields[dateIdx]      ?? '').trim();
-    const siteName  = (fields[siteNameIdx]  ?? '').trim();
-    const startTime = (fields[startTimeIdx] ?? '').trim();
-    const endTime   = (fields[endTimeIdx]   ?? '').trim();
-    const reqRaw    = (fields[reqIdx]       ?? '').trim();
-    const memoRaw   = (fields[memoIdx]      ?? '').trim();
+    const date        = (fields[dateIdx]        ?? '').trim();
+    const clientName  = (fields[clientNameIdx]  ?? '').trim();
+    const siteName    = (fields[siteNameIdx]    ?? '').trim();
+    const startTime   = (fields[startTimeIdx]   ?? '').trim();
+    const endTime     = (fields[endTimeIdx]     ?? '').trim();
+    const reqRaw      = (fields[reqIdx]         ?? '').trim();
+    const memoRaw     = (fields[memoIdx]        ?? '').trim();
 
     if (!isValidDate(date)) {
       errors.push({ row: rowNum, message: `日付が不正: "${date}"（YYYY-MM-DD形式）` });
@@ -232,6 +236,7 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
     rawRows.push({
       id: crypto.randomUUID(),
       date,
+      clientName,
       siteName,
       startTime,
       endTime,
@@ -245,7 +250,7 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
   // requiredPeople を加算、memo は非空・重複なしでカンマ結合
   const aggregateMap = new Map<string, WorkSite>();
   for (const row of rawRows) {
-    const key = `${row.date}_${row.siteName}_${row.startTime}_${row.endTime}`;
+    const key = `${row.date}_${row.clientName ?? ''}_${row.siteName}_${row.startTime}_${row.endTime}`;
     const hit = aggregateMap.get(key);
     if (hit) {
       hit.requiredPeople += row.requiredPeople;
@@ -460,7 +465,7 @@ export function downloadStaffTemplate(): void {
 
 export function downloadSiteTemplate(): void {
   downloadCsv(
-    `date,siteName,startTime,endTime,requiredPeople,memo\n2026-05-01,アリオ札幌,10:00,18:00,3,通常\n2026-05-02,南郷7丁目,09:00,17:00,2,`,
+    `date,siteName,clientName,startTime,endTime,requiredPeople,memo\n2026-05-01,WB小樽,△△株式会社,10:00,18:00,3,通常\n2026-05-02,南郷7丁目,○○物流,09:00,17:00,2,`,
     'site_template.csv'
   );
 }

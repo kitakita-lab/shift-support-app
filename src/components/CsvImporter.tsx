@@ -534,6 +534,7 @@ export default function CsvImporter({
                       <tr>
                         <th>日付</th>
                         <th>現場名</th>
+                        <th>クライアント名</th>
                         <th>開始</th>
                         <th>終了</th>
                         <th>必要人数</th>
@@ -545,6 +546,7 @@ export default function CsvImporter({
                         <tr key={i}>
                           <td>{s.date}</td>
                           <td>{s.siteName}</td>
+                          <td>{s.clientName?.trim() || '—'}</td>
                           <td>{s.startTime}</td>
                           <td>{s.endTime}</td>
                           <td>{s.requiredPeople}人</td>

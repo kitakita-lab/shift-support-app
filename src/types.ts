@@ -15,6 +15,7 @@ export interface WorkSite {
   groupLabel?: string;
   sessionId?: string;
   date: string;
+  clientName?: string;
   siteName: string;
   startTime: string;
   endTime: string;
