@@ -23,7 +23,7 @@ const ALT_FILL: ExcelJS.Fill = {
   type: 'pattern', pattern: 'solid',
   fgColor: { argb: 'FFF8FAFF' },
 };
-// 会場名タイトル行（水色）
+// 現場大ブロック見出し（水色）
 const BLOCK_TITLE_FILL: ExcelJS.Fill = {
   type: 'pattern', pattern: 'solid',
   fgColor: { argb: 'FFE8F0FE' },
@@ -97,16 +97,32 @@ function styleSiteSheetRow(
   if (hasShortage) row.getCell(shortageCol).font = SHORTAGE_FONT;
 }
 
-// ── シート①：現場別シフト表（会期ブロック形式）──────────────
+// ── シート①：現場別シフト表（現場大ブロック + 会期小ブロック形式）──────────────
+//
+// [Excel再取込の設計メモ]
+// 出力したExcelを将来再取込する際の照合キー（一時的な照合用、永続化しない）:
+//   対象月 + 現場名 + クライアント名 + 日付 + 開始時間 + 終了時間
+// → この組み合わせで ShiftAssignment.siteId を特定し、assignedStaffIds のみ上書きする
+// → スタッフ名は staffMap で名前→ID 逆引き。不一致はエラー扱い（自動変換しない）
+// → スタッフマスタ・現場マスタ（WorkSite）は再取込で変更しない
+// → groupId / siteId / sessionId 等の永続キーはExcelに書き出さず、照合にも使わない
 
 interface SiteBlock {
   venueLabel:    string;
+  siteName:      string;
+  clientName?:   string;
   startDate:     string;
   endDate:       string;
   startTime:     string;
   endTime:       string;
-  staffColCount: number;   // max(maxRequired, maxAssigned) — このブロックのスタッフ列数
+  maxRequired:   number;   // このセッション内の必要人数最大値
+  staffColCount: number;   // max(maxRequired, maxAssigned, 1)
   sites:         WorkSite[];
+}
+
+interface VenueGroup {
+  venueLabel: string;
+  sessions:   SiteBlock[];
 }
 
 /** sorted（日付昇順）を sessionId 単位でブロックに分割する */
@@ -136,10 +152,13 @@ function buildBlocks(
     const first = s[0];
     blocks.push({
       venueLabel:    formatSiteLabel(first.siteName, first.clientName),
+      siteName:      first.siteName,
+      clientName:    first.clientName,
       startDate:     first.date,
       endDate:       s[s.length - 1].date,
       startTime:     first.startTime,
       endTime:       first.endTime,
+      maxRequired,
       staffColCount: Math.max(maxRequired, maxAssigned, 1),
       sites:         s,
     });
@@ -148,6 +167,37 @@ function buildBlocks(
   // 開始日昇順 → 会場名昇順で並べる
   return blocks.sort(
     (a, b) => a.startDate.localeCompare(b.startDate) || a.venueLabel.localeCompare(b.venueLabel)
+  );
+}
+
+/** セッションブロックを 現場名+クライアント名 単位の大グループに集約する */
+function buildVenueGroups(
+  sorted: WorkSite[],
+  assignMap: Record<string, ShiftAssignment>
+): VenueGroup[] {
+  const blocks = buildBlocks(sorted, assignMap);
+  const venueMap = new Map<string, SiteBlock[]>();
+
+  for (const block of blocks) {
+    // siteCompositeKey は表示グループ用の一時キー（永続化しない）
+    const key = siteCompositeKey(block.siteName, block.clientName);
+    if (!venueMap.has(key)) venueMap.set(key, []);
+    venueMap.get(key)!.push(block);
+  }
+
+  const groups: VenueGroup[] = [];
+  for (const [, sessions] of venueMap) {
+    groups.push({
+      venueLabel: sessions[0].venueLabel,
+      sessions,   // buildBlocks の sort 順を引き継ぐ（startDate 昇順）
+    });
+  }
+
+  // 各グループの最初の会期開始日昇順 → 会場名昇順
+  return groups.sort(
+    (a, b) =>
+      a.sessions[0].startDate.localeCompare(b.sessions[0].startDate) ||
+      a.venueLabel.localeCompare(b.venueLabel)
   );
 }
 
@@ -160,11 +210,11 @@ function buildSiteSheet(
 ): void {
   const ws = wb.addWorksheet('現場別シフト表');
 
-  const blocks = buildBlocks(sorted, assignMap);
-  if (blocks.length === 0) return;
+  const venueGroups = buildVenueGroups(sorted, assignMap);
+  if (venueGroups.length === 0) return;
 
-  // シート全体の最大スタッフ列数（全ブロック横断）
-  const globalMaxN   = Math.max(...blocks.map((b) => b.staffColCount));
+  // シート全体の最大スタッフ列数（全現場・全会期横断）
+  const globalMaxN   = Math.max(...venueGroups.flatMap((g) => g.sessions.map((b) => b.staffColCount)));
   // 列構成：日付(1) | スタッフ1..N(2..1+N) | 不足人数(2+N) | メモ(3+N)
   const TOTAL_COLS   = 3 + globalMaxN;
   const STAFF_START  = 2;
@@ -178,67 +228,72 @@ function buildSiteSheet(
     22,                             // メモ
   ].map((width) => ({ width }));
 
-  blocks.forEach((block, blockIdx) => {
-    // ブロック間スペーサー（先頭は不要）
-    if (blockIdx > 0) ws.addRow([]);
+  venueGroups.forEach((venue, venueIdx) => {
+    // 現場大ブロック間スペーサー（先頭は不要）
+    if (venueIdx > 0) ws.addRow([]);
 
-    // ── 会場名タイトル行 ──────────────────────────────────────
-    const titleRow = ws.addRow([block.venueLabel]);
-    titleRow.height = 26;
-    ws.mergeCells(titleRow.number, 1, titleRow.number, TOTAL_COLS);
-    const titleCell     = titleRow.getCell(1);
-    titleCell.font      = BLOCK_TITLE_FONT;
-    titleCell.fill      = BLOCK_TITLE_FILL;
-    titleCell.alignment = { vertical: 'middle', indent: 1 };
-    titleCell.border    = thinBorder('FFBFDBFE');
+    // ── 現場大ブロック見出し ───────────────────────────────────
+    const venueTitleRow = ws.addRow([venue.venueLabel]);
+    venueTitleRow.height = 28;
+    ws.mergeCells(venueTitleRow.number, 1, venueTitleRow.number, TOTAL_COLS);
+    const venueTitleCell     = venueTitleRow.getCell(1);
+    venueTitleCell.font      = BLOCK_TITLE_FONT;
+    venueTitleCell.fill      = BLOCK_TITLE_FILL;
+    venueTitleCell.alignment = { vertical: 'middle', indent: 1 };
+    venueTitleCell.border    = thinBorder('FFBFDBFE');
 
-    // ── 会期情報行（期間・開始・終了時刻）────────────────────────
-    const dateLabel = block.startDate === block.endDate
-      ? block.startDate
-      : `${block.startDate} 〜 ${block.endDate}`;
-    const infoRow = ws.addRow([
-      `会期：${dateLabel}　　開始：${block.startTime}　終了：${block.endTime}`,
-    ]);
-    infoRow.height = 18;
-    ws.mergeCells(infoRow.number, 1, infoRow.number, TOTAL_COLS);
-    const infoCell     = infoRow.getCell(1);
-    infoCell.font      = BLOCK_INFO_FONT;
-    infoCell.fill      = BLOCK_INFO_FILL;
-    infoCell.alignment = { vertical: 'middle', indent: 1 };
-    infoCell.border    = thinBorder('FFE2E8F0');
+    venue.sessions.forEach((block, sessionIdx) => {
+      // 同一現場内の会期間スペーサー（先頭会期は会場タイトル直後なので不要）
+      if (sessionIdx > 0) ws.addRow([]);
 
-    // ── 列ヘッダー行（このブロックのスタッフ数まで名前を出す）──
-    const staffHeaders = Array.from({ length: globalMaxN }, (_, i) =>
-      i < block.staffColCount ? `スタッフ${i + 1}` : ''
-    );
-    const colHdrRow = ws.addRow(['日付', ...staffHeaders, '不足人数', 'メモ']);
-    colHdrRow.height = 22;
-    colHdrRow.eachCell({ includeEmpty: true }, (cell) => {
-      cell.font      = HEADER_FONT;
-      cell.fill      = HEADER_FILL;
-      cell.alignment = CENTER;
-      cell.border    = thinBorder('FF1A56DB');
-    });
-
-    // ── データ行（1現場1日 = 1行）────────────────────────────
-    block.sites.forEach((site, siteIdx) => {
-      const asgn     = assignMap[site.id];
-      const shortage = asgn ? asgn.shortage : site.requiredPeople;
-      const staffIds = asgn && asgn.assignedStaffIds.length > 0
-        ? sortedByStaffNo(asgn.assignedStaffIds, staffIndex)
-        : [];
-      const staffCells = Array.from({ length: globalMaxN }, (_, i) =>
-        staffIds[i] ? (staffMap[staffIds[i]] ?? staffIds[i]) : ''
-      );
-
-      const row = ws.addRow([
-        site.date,
-        ...staffCells,
-        shortage,
-        site.memo ?? '',
+      // ── 会期情報行（期間・時刻・必要人数）──────────────────────
+      const dateLabel = block.startDate === block.endDate
+        ? block.startDate
+        : `${block.startDate} 〜 ${block.endDate}`;
+      const infoRow = ws.addRow([
+        `会期：${dateLabel}　　開始：${block.startTime}　終了：${block.endTime}　　必要人数：${block.maxRequired}人`,
       ]);
+      infoRow.height = 18;
+      ws.mergeCells(infoRow.number, 1, infoRow.number, TOTAL_COLS);
+      const infoCell     = infoRow.getCell(1);
+      infoCell.font      = BLOCK_INFO_FONT;
+      infoCell.fill      = BLOCK_INFO_FILL;
+      infoCell.alignment = { vertical: 'middle', indent: 2 };
+      infoCell.border    = thinBorder('FFE2E8F0');
 
-      styleSiteSheetRow(row, shortage > 0, siteIdx % 2 === 1, STAFF_START, STAFF_END, SHORTAGE_COL);
+      // ── 列ヘッダー行（このブロックのスタッフ数まで名前を出す）──
+      const staffHeaders = Array.from({ length: globalMaxN }, (_, i) =>
+        i < block.staffColCount ? `スタッフ${i + 1}` : ''
+      );
+      const colHdrRow = ws.addRow(['日付', ...staffHeaders, '不足人数', 'メモ']);
+      colHdrRow.height = 22;
+      colHdrRow.eachCell({ includeEmpty: true }, (cell) => {
+        cell.font      = HEADER_FONT;
+        cell.fill      = HEADER_FILL;
+        cell.alignment = CENTER;
+        cell.border    = thinBorder('FF1A56DB');
+      });
+
+      // ── データ行（1現場1日 = 1行）────────────────────────────
+      block.sites.forEach((site, siteIdx) => {
+        const asgn     = assignMap[site.id];
+        const shortage = asgn ? asgn.shortage : site.requiredPeople;
+        const staffIds = asgn && asgn.assignedStaffIds.length > 0
+          ? sortedByStaffNo(asgn.assignedStaffIds, staffIndex)
+          : [];
+        const staffCells = Array.from({ length: globalMaxN }, (_, i) =>
+          staffIds[i] ? (staffMap[staffIds[i]] ?? staffIds[i]) : ''
+        );
+
+        const row = ws.addRow([
+          site.date,
+          ...staffCells,
+          shortage,
+          site.memo ?? '',
+        ]);
+
+        styleSiteSheetRow(row, shortage > 0, siteIdx % 2 === 1, STAFF_START, STAFF_END, SHORTAGE_COL);
+      });
     });
   });
 }
