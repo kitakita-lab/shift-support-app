@@ -46,4 +46,6 @@ export interface NormalizedShiftRow {
   requiredPeople: number;
   assignedStaffNames: string[];
   memo?: string;
+  /** 取込元の生テキスト。デバッグ・重複判定に使用。normalize後は書き換えない */
+  rawSiteName?: string;
 }
