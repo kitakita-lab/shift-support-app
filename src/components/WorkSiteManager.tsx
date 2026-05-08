@@ -925,17 +925,16 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
 
             {sortedGroups.map(({ groupId, sites }) => {
               const isEditingSession    = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
-              const activeSites         = sites.filter((s) => !s.isPlaceholder);
-              const monthActiveSites    = activeSites.filter((s) => s.date.startsWith(selectedMonth));
-              const displaySessions     = groupSitesIntoDisplaySessions(sites);
+              const activeSites          = sites.filter((s) => !s.isPlaceholder);
+              const monthActiveSites     = activeSites.filter((s) => s.date.startsWith(selectedMonth));
               const monthDisplaySessions = groupSitesIntoDisplaySessions(monthActiveSites);
               const siteName            = sites[0]?.siteName ?? '';
               const clientName          = sites[0]?.clientName ?? '';
               const isVenueOpen         = expandedVenues.has(groupId);
 
-              const venueStats = activeSites.length > 0
+              const venueStats = monthActiveSites.length > 0
                 ? (() => {
-                    const allPeople = displaySessions.flatMap((s) =>
+                    const allPeople = monthDisplaySessions.flatMap((s) =>
                       s.dailyPeople.length > 0
                         ? s.dailyPeople.map((d) => d.requiredPeople)
                         : Array.from({ length: s.dateCount }, () => s.requiredPeople)
@@ -954,16 +953,18 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
                       <div className="site-header__info">
                         <div className="site-title">{formatSiteLabel(siteName, clientName)}</div>
                         <div className="site-meta">
-                          {venueStats === null ? (
+                          {activeSites.length === 0 ? (
                             <span className="site-summary__unregistered">未登録</span>
-                          ) : (
+                          ) : monthActiveSites.length === 0 ? (
+                            <span className="site-summary__no-month">この月の会期なし</span>
+                          ) : venueStats ? (
                             <>
                               <span className={`site-summary__peak site-summary__peak--${peakColorClass(venueStats.maxPeople, venueStats.avgPeople)}`}>
                                 👥ピーク{venueStats.maxPeople}人
                               </span>
                               <span className="site-summary__avg">📊平均{venueStats.avgPeople}人</span>
                             </>
-                          )}
+                          ) : null}
                         </div>
                       </div>
                       <span className="venue-chevron">{isVenueOpen ? '▲' : '▼'}</span>

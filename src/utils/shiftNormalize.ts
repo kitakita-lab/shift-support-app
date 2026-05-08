@@ -52,6 +52,81 @@ export function normalizeStaffNames(raw: string): string[] {
   return raw.split(/\s*\/\s*/).map((n) => n.trim()).filter((n) => n !== '');
 }
 
+// ─── 業務データ normalize ヘルパー ─────────────────────────────────────
+
+/**
+ * siteName に混入した "+N名" パターンから追加人数を取り出す。
+ * 例: "渋谷+2名" → 2、"現場名" → 0
+ */
+export function extractRequiredPeopleDelta(raw: string): number {
+  const m = raw.match(/\+(\d+)名/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+/**
+ * siteName から汚染文字列を除去して純粋な現場名を返す。
+ * 除去対象: "+N名"パターン、"※"以降のアノテーション
+ * 例: "渋谷+2名※追加" → "渋谷"
+ */
+export function cleanSiteName(raw: string): string {
+  return raw
+    .replace(/\+\d+名/g, '')
+    .replace(/※.*/g, '')
+    .trim();
+}
+
+/**
+ * siteName 末尾の全角・半角括弧内を clientName として抽出する。
+ * 既に clientName が設定されている場合はそちらを優先する。
+ * 例: "渋谷（ABC社）" → "ABC社"
+ */
+export function extractClientNameFromParens(
+  siteName: string,
+  existing?: string
+): string | undefined {
+  if (existing?.trim()) return existing.trim();
+  const m = siteName.match(/[（(]([^）)]+)[）)]$/);
+  return m ? m[1].trim() : undefined;
+}
+
+/**
+ * 表記ゆれを吸収した現場同一性判定キーを返す。
+ * cleanSiteName → 全角スペース→半角 → 小文字 → clientName を付与
+ */
+export function normalizeSiteIdentity(siteName: string, clientName?: string): string {
+  const cleaned = cleanSiteName(siteName)
+    .replace(/　/g, ' ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  return `${(clientName ?? '').trim().toLowerCase()}\0${cleaned}`;
+}
+
+/**
+ * NormalizedShiftRow に業務 normalize を適用して新しい行を返す。
+ * - siteName から "+N名"・"※..." を除去
+ * - "+N名" 分を requiredPeople に加算
+ * - 括弧内クライアント名を抽出（clientName 未設定時のみ）
+ * - rawSiteName に元の値を保存
+ */
+export function normalizeBusinessShiftRow(row: NormalizedShiftRow): NormalizedShiftRow {
+  const delta = extractRequiredPeopleDelta(row.siteName);
+  const cleaned = cleanSiteName(row.siteName);
+  const clientName = extractClientNameFromParens(cleaned, row.clientName);
+  const siteNameFinal = clientName
+    ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim()
+    : cleaned;
+
+  return {
+    ...row,
+    siteName: siteNameFinal,
+    clientName: clientName || undefined,
+    requiredPeople: row.requiredPeople + delta,
+    rawSiteName: row.rawSiteName ?? row.siteName,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * WorkSite 1件を NormalizedShiftRow に変換する。
  *
