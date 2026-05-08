@@ -87,11 +87,11 @@ function passesHardConstraints(
 
 /** scoreStaffForSite が返すスコア内訳。高いほど優先度が高いことを示す（workDays のみ低いほど優先） */
 type StaffScore = {
-  preferred:     number;   // 優先現場に合致: 1 / しない: 0
-  workDays:      number;   // 月間勤務日数（低いほど優先）
-  pairBonus?:    number;   // ペア設定の相手が配置済みなら加点（未実装）
-  leaderBonus?:  number;   // リーダー未配置現場でリーダーに加点（未実装）
-  levelBalance?: number;   // レベル分散のための補正（未実装）
+  preferred:    number;   // 優先現場に合致: 1 / しない: 0
+  pairBonus:    number;   // ペア設定の相手が配置済みなら加点（未実装: 常に 0）
+  leaderBonus:  number;   // リーダー未配置現場でリーダーに加点（未実装: 常に 0）
+  levelBalance: number;   // レベル分散のための補正（未実装: 常に 0）
+  workDays:     number;   // 月間勤務日数（低いほど優先）
 };
 
 /**
@@ -117,9 +117,11 @@ function scoreStaffForSite(
   assignedDates: Set<string>
 ): StaffScore {
   return {
-    preferred: s.preferredWorkSites.includes(site.siteName) ? 1 : 0,
-    workDays:  assignedDates.size,
-    // pairBonus / leaderBonus / levelBalance は未実装（将来ここに計算を追加）
+    preferred:    s.preferredWorkSites.includes(site.siteName) ? 1 : 0,
+    pairBonus:    0,   // 未実装（将来: preferredPairs の相手が配置済みなら加点）
+    leaderBonus:  0,   // 未実装（将来: isLeader かつリーダー未配置の現場で加点）
+    levelBalance: 0,   // 未実装（将来: スタッフレベル分散のための補正）
+    workDays:     assignedDates.size,
   };
 }
 
@@ -133,14 +135,15 @@ function compareByScore(
 ): number {
   // 1. 優先現場スコア（高いほど優先）
   if (scoreA.preferred !== scoreB.preferred) return scoreB.preferred - scoreA.preferred;
-  // 2. 追加ボーナス合計（pairBonus / leaderBonus / levelBalance）: 高いほど優先
-  //    未実装時はすべて 0 なので現在の挙動に影響しない
-  const bonusA = (scoreA.pairBonus ?? 0) + (scoreA.leaderBonus ?? 0) + (scoreA.levelBalance ?? 0);
-  const bonusB = (scoreB.pairBonus ?? 0) + (scoreB.leaderBonus ?? 0) + (scoreB.levelBalance ?? 0);
-  if (bonusA !== bonusB) return bonusB - bonusA;
-  // 3. 月間勤務日数（少ないほど優先）
+  // 2. ペアボーナス（高いほど優先）
+  if (scoreA.pairBonus !== scoreB.pairBonus) return scoreB.pairBonus - scoreA.pairBonus;
+  // 3. リーダーボーナス（高いほど優先）
+  if (scoreA.leaderBonus !== scoreB.leaderBonus) return scoreB.leaderBonus - scoreA.leaderBonus;
+  // 4. レベル分散補正（高いほど優先）
+  if (scoreA.levelBalance !== scoreB.levelBalance) return scoreB.levelBalance - scoreA.levelBalance;
+  // 5. 月間勤務日数（少ないほど優先）
   if (scoreA.workDays !== scoreB.workDays) return scoreA.workDays - scoreB.workDays;
-  // 4. staffNo 順（安定ソート）
+  // 6. staffNo 順（安定ソート）
   return compareStaffNo(a, b);
 }
 
