@@ -5,6 +5,7 @@ export interface Staff {
   availableWeekdays: string[];
   requestedDaysOff: string[];
   maxWorkDays: number;
+  maxConsecutiveDays?: number;
   memo: string;
   preferredWorkSites: string[];
 }

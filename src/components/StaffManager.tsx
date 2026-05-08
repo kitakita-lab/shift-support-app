@@ -16,6 +16,7 @@ function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
     availableWeekdays: [],
     requestedDaysOff: [],
     maxWorkDays: 20,
+    maxConsecutiveDays: 5,
     memo: '',
     preferredWorkSites: [],
   };
@@ -228,6 +229,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
       availableWeekdays: s.availableWeekdays,
       requestedDaysOff: s.requestedDaysOff,
       maxWorkDays: s.maxWorkDays,
+      maxConsecutiveDays: s.maxConsecutiveDays ?? 5,
       memo: s.memo,
       preferredWorkSites: s.preferredWorkSites,
     });
@@ -300,6 +302,25 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
               onChange={(e) => setForm({ ...form, memo: e.target.value })}
               placeholder="任意"
             />
+          </div>
+
+          <div className="form-row">
+            <label className="form-label">最大連勤日数</label>
+            <input
+              className="form-input form-input--short"
+              type="number"
+              min={1}
+              value={form.maxConsecutiveDays ?? 5}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                setForm({ ...form, maxConsecutiveDays: v >= 1 ? v : 5 });
+              }}
+              onBlur={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (isNaN(v) || v < 1) setForm({ ...form, maxConsecutiveDays: 5 });
+              }}
+            />
+            <span className="form-unit">日</span>
           </div>
 
           <div className="form-row form-row--top">
