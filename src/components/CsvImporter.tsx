@@ -1,5 +1,5 @@
 import { useRef, useState, useMemo, useEffect } from 'react';
-import { Staff, WorkSite } from '../types';
+import { Staff, WorkSite, NormalizedShiftRow } from '../types';
 import {
   parseStaffCSV,
   parseSiteCSV,
@@ -13,8 +13,15 @@ import {
   SiteParseResult,
   DaysOffRow,
 } from '../utils/csvImport';
+import { normalizeShiftRow } from '../utils/shiftNormalize';
 import { nextStaffNo } from '../utils/staffUtils';
 import { formatSiteLabel, siteCompositeKey } from '../utils/siteUtils';
+
+// 貼り付けインポートのサンプルテキスト（コピー・テキストエリア貼り付け用）
+const PASTE_SAMPLE_TEXT =
+  `date,siteName,clientName,startTime,endTime,requiredPeople\n` +
+  `2026-01-05,札幌駅前,Y!mobile,10:00,18:00,2\n` +
+  `2026-01-06,札幌駅前,Y!mobile,10:00,18:00,2`;
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -206,6 +213,7 @@ export default function CsvImporter({
   const [pasteSiteText,    setPasteSiteText]    = useState('');
   const [pasteSitePreview, setPasteSitePreview] = useState<SiteParseResult | null>(null);
   const [pasteSiteSuccess, setPasteSiteSuccess] = useState('');
+  const [pasteCopied,      setPasteCopied]      = useState(false);
 
   const [daysOffTargetMonth, setDaysOffTargetMonth] = useState(() => selectedMonth);
   const [daysOffMode,        setDaysOffMode]        = useState<DaysOffMode>('replace');
@@ -222,6 +230,12 @@ export default function CsvImporter({
   );
   const pasteSitePreviewCounts = useMemo(
     () => pasteSitePreview ? countImportSessions(pasteSitePreview.valid) : { sessionCount: 0, venueCount: 0 },
+    [pasteSitePreview]
+  );
+  // normalize 経由のプレビュー行（source-of-truth を NormalizedShiftRow に寄せる準備）
+  // TODO: 将来的に applySiteImport も NormalizedShiftRow[] ベースへ移行予定
+  const pasteNormalizedRows = useMemo<NormalizedShiftRow[]>(
+    () => pasteSitePreview?.valid.map((s) => normalizeShiftRow(s)) ?? [],
     [pasteSitePreview]
   );
 
@@ -299,6 +313,7 @@ export default function CsvImporter({
     setTimeout(() => setStaffSuccess(''), 5000);
   }
 
+  // TODO: 将来的に引数を NormalizedShiftRow[] に変更し、WorkSite 変換をここで行う予定
   function applySiteImport(validSites: WorkSite[]): { venueCount: number; sessionCount: number } {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -357,23 +372,24 @@ export default function CsvImporter({
     setTimeout(() => setSiteSuccess(''), 5000);
   }
 
-  function handleParsePasteSite() {
-    const text = pasteSiteText.trim();
-    if (!text) return;
-    setPasteSitePreview(parseSiteCSV(text));
+  function handleCopySample() {
+    navigator.clipboard.writeText(PASTE_SAMPLE_TEXT).then(() => {
+      setPasteCopied(true);
+      setTimeout(() => setPasteCopied(false), 2000);
+    });
   }
 
-  function clearPasteSitePreview() {
+  function clearPasteSiteText() {
+    setPasteSiteText('');
     setPasteSitePreview(null);
   }
 
   function handleImportPasteSites() {
     if (!pasteSitePreview?.valid.length) return;
     const { venueCount, sessionCount } = applySiteImport(pasteSitePreview.valid);
-    clearPasteSitePreview();
+    clearPasteSiteText();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
     setPasteSiteSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
-    setPasteSiteText('');
     setTimeout(() => setPasteSiteSuccess(''), 5000);
   }
 
@@ -606,49 +622,66 @@ export default function CsvImporter({
           ChatGPT等から受け取ったCSV文字列をそのまま貼り付けてインポートできます。ファイル操作が難しいスマホ環境向けです。
         </p>
 
+        {/* フォーマット説明 */}
+        <ul className="paste-format-notes">
+          <li>ヘッダー行（1行目）は必須です</li>
+          <li>列順固定：<code>date, siteName, clientName, startTime, endTime, requiredPeople</code></li>
+          <li>エンコードは UTF-8 推奨（BOM付き可）</li>
+          <li>ChatGPT等で生成したCSVをそのまま貼り付け可能</li>
+        </ul>
+
+        {/* サンプル */}
+        <div className="paste-sample">
+          <div className="paste-sample__header">
+            <span className="paste-sample__label">サンプル</span>
+            <button className="btn btn--ghost btn--sm" onClick={handleCopySample}>
+              {pasteCopied ? 'コピーしました ✓' : 'クリップボードにコピー'}
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => {
+                setPasteSiteText(PASTE_SAMPLE_TEXT);
+                setPasteSitePreview(parseSiteCSV(PASTE_SAMPLE_TEXT));
+              }}
+            >
+              テキストエリアに貼り付け
+            </button>
+          </div>
+          <pre className="paste-sample__code">{PASTE_SAMPLE_TEXT}</pre>
+        </div>
+
+        {/* textarea：貼り付けると自動解析してプレビュー表示 */}
         <textarea
           className="paste-textarea"
           rows={6}
           value={pasteSiteText}
-          onChange={(e) => setPasteSiteText(e.target.value)}
-          placeholder={`date,siteName,clientName,startTime,endTime,requiredPeople\n2026-01-05,札幌駅前,Y!mobile,10:00,18:00,2`}
+          onChange={(e) => {
+            const text = e.target.value;
+            setPasteSiteText(text);
+            if (text.trim()) {
+              setPasteSitePreview(parseSiteCSV(text));
+            } else {
+              setPasteSitePreview(null);
+            }
+          }}
+          placeholder={'CSV文字列をここに貼り付けてください（自動解析されます）'}
           spellCheck={false}
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
         />
 
-        <div className="paste-import__actions">
-          <button
-            className="btn btn--ghost"
-            onClick={() => {
-              setPasteSiteText(
-                `date,siteName,clientName,startTime,endTime,requiredPeople\n2026-01-05,札幌駅前,Y!mobile,10:00,18:00,2\n2026-01-06,札幌駅前,Y!mobile,10:00,18:00,2`
-              );
-              setPasteSitePreview(null);
-            }}
-          >
-            サンプル表示
-          </button>
-          <button
-            className="btn btn--secondary"
-            onClick={handleParsePasteSite}
-            disabled={!pasteSiteText.trim()}
-          >
-            貼り付けデータを読み込む
-          </button>
-        </div>
-
+        {/* 自動解析プレビュー（normalize経由で NormalizedShiftRow を表示） */}
         {pasteSitePreview && (
           <div className="import-preview">
             <div className="import-summary">
-              <span className="import-summary__ok">取込可能：{pasteSitePreview.valid.length}行</span>
+              <span className="import-summary__ok">解析OK：{pasteNormalizedRows.length}行</span>
               {pasteSitePreview.errors.length > 0 && (
                 <span className="import-summary__err">エラー：{pasteSitePreview.errors.length}行スキップ</span>
               )}
             </div>
             <ErrorList errors={pasteSitePreview.errors} />
-            {pasteSitePreview.valid.length > 0 ? (
+            {pasteNormalizedRows.length > 0 ? (
               <>
                 <div className="table-wrapper">
                   <table className="data-table">
@@ -660,19 +693,17 @@ export default function CsvImporter({
                         <th>開始</th>
                         <th>終了</th>
                         <th>必要人数</th>
-                        <th>メモ</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {pasteSitePreview.valid.map((s, i) => (
+                      {pasteNormalizedRows.map((r, i) => (
                         <tr key={i}>
-                          <td>{s.date}</td>
-                          <td>{s.siteName}</td>
-                          <td>{s.clientName?.trim() || '—'}</td>
-                          <td>{s.startTime}</td>
-                          <td>{s.endTime}</td>
-                          <td>{s.requiredPeople}人</td>
-                          <td>{s.memo || '—'}</td>
+                          <td>{r.date}</td>
+                          <td>{r.siteName}</td>
+                          <td>{r.clientName ?? '—'}</td>
+                          <td>{r.startTime}</td>
+                          <td>{r.endTime}</td>
+                          <td>{r.requiredPeople}人</td>
                         </tr>
                       ))}
                     </tbody>
@@ -685,7 +716,7 @@ export default function CsvImporter({
                   </span>
                   <div className="import-actions__buttons">
                     <button className="btn btn--primary" onClick={handleImportPasteSites}>追加する</button>
-                    <button className="btn btn--secondary" onClick={clearPasteSitePreview}>キャンセル</button>
+                    <button className="btn btn--secondary" onClick={clearPasteSiteText}>クリア</button>
                   </div>
                 </div>
               </>

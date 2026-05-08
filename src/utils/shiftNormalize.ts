@@ -1,4 +1,29 @@
 import { Staff, WorkSite, ShiftAssignment, NormalizedShiftRow } from '../types';
+import { parseSiteCSV, ParseError } from './csvImport';
+
+// normalize 層のエラー型（ParseError と同形式）
+export type NormalizeError = ParseError;
+
+/** parseSiteCSVToNormalized / normalizeShiftRows の返却型 */
+export interface NormalizeShiftResult {
+  rows: NormalizedShiftRow[];
+  errors: NormalizeError[];
+}
+
+/**
+ * CSV テキストをパースして NormalizedShiftRow[] に変換する。
+ * 貼り付け取込・ファイル取込のエントリポイント。
+ * エラー行はスキップして errors に収集する。
+ *
+ * TODO: 将来的に CSV Export / Excel Export の source-of-truth をこの関数経由へ統一予定
+ */
+export function parseSiteCSVToNormalized(rawText: string): NormalizeShiftResult {
+  const { valid, errors } = parseSiteCSV(rawText);
+  return {
+    rows: valid.map((site) => normalizeShiftRow(site)),
+    errors,
+  };
+}
 
 /**
  * シフト行の一致判定・再取込の上書き判定に使うキーを返す。
