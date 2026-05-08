@@ -166,6 +166,9 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   const [editingNos, setEditingNos] = useState<Record<string, string>>({});
   const [addSiteOpen, setAddSiteOpen] = useState(false);
   const [siteSearch, setSiteSearch] = useState('');
+  const [consecutiveDaysInput, setConsecutiveDaysInput] = useState<string>(
+    String(form.maxConsecutiveDays ?? 5)
+  );
 
   // siteName → clientNames[] のルックアップ（検索フィルタ用）
   const siteClientMap = useMemo(() => {
@@ -217,6 +220,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
       onChange(sortStaff([...staff, { ...form, id: crypto.randomUUID() }]));
     }
     setForm(emptyForm(staff));
+    setConsecutiveDaysInput('5');
     setAddSiteOpen(false);
     setSiteSearch('');
   }
@@ -233,6 +237,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
       memo: s.memo,
       preferredWorkSites: s.preferredWorkSites,
     });
+    setConsecutiveDaysInput(String(s.maxConsecutiveDays ?? 5));
   }
 
   function handleDelete(id: string) {
@@ -242,6 +247,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   function handleCancel() {
     setEditId(null);
     setForm(emptyForm(staff));
+    setConsecutiveDaysInput('5');
     setAddSiteOpen(false);
     setSiteSearch('');
   }
@@ -308,16 +314,16 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
             <label className="form-label">最大連勤日数</label>
             <input
               className="form-input form-input--short"
-              type="number"
-              min={1}
-              value={form.maxConsecutiveDays ?? 5}
-              onChange={(e) => {
-                const v = parseInt(e.target.value, 10);
-                setForm({ ...form, maxConsecutiveDays: v >= 1 ? v : 5 });
-              }}
-              onBlur={(e) => {
-                const v = parseInt(e.target.value, 10);
-                if (isNaN(v) || v < 1) setForm({ ...form, maxConsecutiveDays: 5 });
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={consecutiveDaysInput}
+              onChange={(e) => setConsecutiveDaysInput(e.target.value)}
+              onBlur={() => {
+                const v = parseInt(consecutiveDaysInput, 10);
+                const normalized = consecutiveDaysInput.trim() === '' || isNaN(v) ? 5 : Math.max(1, v);
+                setForm({ ...form, maxConsecutiveDays: normalized });
+                setConsecutiveDaysInput(String(normalized));
               }}
             />
             <span className="form-unit">日</span>
