@@ -1,12 +1,14 @@
 import { Staff, WorkSite, ShiftAssignment } from '../types';
 import { compareStaffNo } from './staffUtils';
 
+// ── デフォルト値 ──────────────────────────────────────────────
 const DEFAULT_MAX_CONSECUTIVE_DAYS = 5;
 const DEFAULT_MAX_WORK_DAYS = 20;
 
 // 曜日インデックス（getDay()）→ Staff.availableWeekdays の文字列
 const DOW_KEYS = ['日', '月', '火', '水', '木', '金', '土'] as const;
 
+// ── 日付ユーティリティ ────────────────────────────────────────
 function parseDateLocal(s: string): Date {
   const [y, m, d] = s.replace(/\//g, '-').split('-').map(Number);
   return new Date(y, m - 1, d);
@@ -17,9 +19,28 @@ function formatDate(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-// targetDate を追加したときの連勤数が limit を超えるか判定
-// limit は Staff.maxConsecutiveDays ?? DEFAULT_MAX_CONSECUTIVE_DAYS を渡す
-function wouldExceedConsecutive(assignedDates: Set<string>, targetDate: string, limit: number): boolean {
+// ── HARD CONSTRAINTS（絶対条件チェック関数群）────────────────
+// 以下のいずれかを返す関数が false を返したスタッフはその現場に配置しない。
+
+// 曜日制限：空配列・未定義は全曜日可能（既存データ互換）
+function isAvailableOnDate(s: Staff, date: string): boolean {
+  if (!s.availableWeekdays || s.availableWeekdays.length === 0) return true;
+  const dow = DOW_KEYS[parseDateLocal(date).getDay()];
+  return s.availableWeekdays.includes(dow);
+}
+
+// 月間最大勤務日数：上限未満なら通過
+function isWithinMaxWorkDays(s: Staff, assignedDates: Set<string>): boolean {
+  const limit = s.maxWorkDays ?? DEFAULT_MAX_WORK_DAYS;
+  return assignedDates.size < limit;
+}
+
+// 最大連勤：追加後の連勤数が limit を超えるか
+function wouldExceedConsecutive(
+  assignedDates: Set<string>,
+  targetDate: string,
+  limit: number
+): boolean {
   let count = 1;
   const back = parseDateLocal(targetDate);
   back.setDate(back.getDate() - 1);
@@ -36,73 +57,133 @@ function wouldExceedConsecutive(assignedDates: Set<string>, targetDate: string, 
   return count > limit;
 }
 
-// スタッフがその曜日に勤務可能か判定
-// availableWeekdays が空配列または未定義の場合は全曜日可能とみなす（既存データ互換）
-function isAvailableOnDate(s: Staff, date: string): boolean {
-  if (!s.availableWeekdays || s.availableWeekdays.length === 0) return true;
-  const dow = DOW_KEYS[parseDateLocal(date).getDay()];
-  return s.availableWeekdays.includes(dow);
+/**
+ * 絶対条件をすべて満たすか判定する。false を返したスタッフは配置しない。
+ *
+ * 将来の拡張:
+ *   引数に alreadyAssignedIds: string[] を追加し、以下をここに実装する
+ *   - NG組み合わせ: alreadyAssignedIds に NG 相手が含まれる場合 return false
+ *   - 最低レベル要件: site.requiredLevel && (s.level ?? 1) < site.requiredLevel
+ *   - リーダー必須現場: site.requiresLeader かつリーダー未配置なら非リーダーを除外
+ */
+function passesHardConstraints(
+  s: Staff,
+  site: WorkSite,
+  assignedDates: Set<string>
+): boolean {
+  // 1. 希望休
+  if (s.requestedDaysOff.includes(site.date)) return false;
+  // 2. 勤務不可曜日
+  if (!isAvailableOnDate(s, site.date)) return false;
+  // 3. 月間最大勤務日数
+  if (!isWithinMaxWorkDays(s, assignedDates)) return false;
+  // 4. 最大連勤
+  const consecutiveLimit = s.maxConsecutiveDays ?? DEFAULT_MAX_CONSECUTIVE_DAYS;
+  if (wouldExceedConsecutive(assignedDates, site.date, consecutiveLimit)) return false;
+  return true;
 }
 
-// 月間勤務日数が上限未満か判定
-// maxWorkDays が未定義の場合は DEFAULT_MAX_WORK_DAYS を使用（既存データ互換）
-function isWithinMaxWorkDays(s: Staff, assignedDates: Set<string>): boolean {
-  const limit = s.maxWorkDays ?? DEFAULT_MAX_WORK_DAYS;
-  // assignedDates は日付単位の Set なので重複カウントなし
-  return assignedDates.size < limit;
+// ── SOFT SCORES（スコアリング関数）───────────────────────────
+
+/** scoreStaffForSite が返すスコア構造 */
+interface StaffScore {
+  preferred: boolean;  // 優先現場に合致するか
+  workDays:  number;   // 月間勤務日数（少ないほど優先）
+  //
+  // 将来追加するスコア項目:
+  // - pairedBonus: number      ペア設定の相手が同じ現場に配置済みなら加点
+  // - levelScore:  number      スタッフレベル分散のための補正
+  // - leaderBonus: number      リーダー未配置現場でのリーダー加点
 }
 
+/**
+ * スタッフをこの現場に配置する優先度スコアを返す。
+ *
+ * 現在の優先順位:
+ *   1. preferred — 優先現場に合致するか（true > false）
+ *   2. workDays  — 月間勤務日数が少ないほど優先
+ *   3. staffNo   — 安定ソート（compareByScore の外で compareStaffNo が担当）
+ *
+ * 将来の追加場所:
+ *   - ペア設定（preferredPairs）: 相手がすでに配置済みなら pairedBonus を加算
+ *   - 優先現場 clientName 対応（Phase 2）: site.clientName も照合して preferred を判定
+ *   - スタッフレベル分散: 高レベル集中を抑制する levelScore を計算
+ *   - リーダー加点: リーダーが0人の現場で isLeader スタッフに leaderBonus を加算
+ *
+ * TODO(Phase 2): preferredWorkSites を { siteName, clientName } 対応にする場合は
+ *               preferred の判定を複合キー照合に変更する
+ */
+function scoreStaffForSite(
+  s: Staff,
+  site: WorkSite,
+  assignedDates: Set<string>
+): StaffScore {
+  return {
+    preferred: s.preferredWorkSites.includes(site.siteName),
+    workDays:  assignedDates.size,
+  };
+}
+
+/**
+ * スコアの大小比較（降順：スコアが高いほど候補リストの前に並ぶ）
+ * 将来 StaffScore に項目を追加した場合、ここに比較ロジックを追記する。
+ */
+function compareByScore(
+  a: Staff, scoreA: StaffScore,
+  b: Staff, scoreB: StaffScore
+): number {
+  // 1. 優先現場合致を先に
+  if (scoreA.preferred !== scoreB.preferred) return scoreA.preferred ? -1 : 1;
+  // 2. 勤務日数が少ない順
+  if (scoreA.workDays !== scoreB.workDays) return scoreA.workDays - scoreB.workDays;
+  // 3. staffNo 順（安定ソート）
+  return compareStaffNo(a, b);
+}
+
+// ── メイン関数 ────────────────────────────────────────────────
 export function generateShifts(
   staff: Staff[],
   workSites: WorkSite[]
 ): ShiftAssignment[] {
-  const sortedSites = [...workSites.filter((s) => !s.isPlaceholder)].sort((a, b) => a.date.localeCompare(b.date));
+  const sortedSites = [...workSites.filter((s) => !s.isPlaceholder)].sort(
+    (a, b) => a.date.localeCompare(b.date)
+  );
 
-  // 各スタッフの割当済み日付を追跡（連勤判定・月間上限判定に使用）
+  // 各スタッフの割当済み日付（連勤判定・月間上限判定に使用）
   const assignedDates: Record<string, Set<string>> = {};
   staff.forEach((s) => (assignedDates[s.id] = new Set()));
 
   const assignments: ShiftAssignment[] = [];
 
   for (const site of sortedSites) {
-    // ── 絶対条件フィルタ ──────────────────────────────────────────
-    // 以下のいずれかに該当するスタッフは候補から除外する
-    //   1. 希望休（requestedDaysOff）
-    //   2. 最大連勤超過（maxConsecutiveDays、未設定時は DEFAULT_MAX_CONSECUTIVE_DAYS）
-    //   3. 勤務不可曜日（availableWeekdays）
-    //   4. 月間最大勤務日数超過（maxWorkDays）
-    const candidates = staff.filter((s) => {
-      const consecutiveLimit  = s.maxConsecutiveDays ?? DEFAULT_MAX_CONSECUTIVE_DAYS;
-      const notOnHoliday      = !s.requestedDaysOff.includes(site.date);
-      const withinConsecutive = !wouldExceedConsecutive(assignedDates[s.id], site.date, consecutiveLimit);
-      const availableWeekday  = isAvailableOnDate(s, site.date);
-      const withinMaxDays     = isWithinMaxWorkDays(s, assignedDates[s.id]);
-      return notOnHoliday && withinConsecutive && availableWeekday && withinMaxDays;
-    });
+    // ── Step 1: 絶対条件フィルタ ───────────────────────────────
+    const candidates = staff.filter((s) =>
+      passesHardConstraints(s, site, assignedDates[s.id])
+    );
 
-    // 優先現場グループを先に割当、不足時のみ一般グループで補充
-    // 同一グループ内: 勤務日数少ない順 → staffNo順
-    // TODO(Phase 2): preferredWorkSites を { siteName, clientName } 対応にする場合は
-    //               ここの includes(site.siteName) を複合キー照合に変更する
-    const byWorkDaysThenStaffNo = (a: Staff, b: Staff): number => {
-      const diff = assignedDates[a.id].size - assignedDates[b.id].size;
-      return diff !== 0 ? diff : compareStaffNo(a, b);
-    };
-    const preferred = candidates.filter((s) =>  s.preferredWorkSites.includes(site.siteName)).sort(byWorkDaysThenStaffNo);
-    const others    = candidates.filter((s) => !s.preferredWorkSites.includes(site.siteName)).sort(byWorkDaysThenStaffNo);
-    const merged    = [...preferred, ...others];
+    // ── Step 2: スコアリングでソート ──────────────────────────
+    const scored = candidates
+      .map((s) => ({ s, score: scoreStaffForSite(s, site, assignedDates[s.id]) }))
+      .sort((a, b) => compareByScore(a.s, a.score, b.s, b.score));
 
-    const assigned = merged.slice(0, site.requiredPeople).sort(compareStaffNo);
+    // ── Step 3: 上位 requiredPeople 人を選出（最終ソートはstaffNo順）─
+    const assigned = scored
+      .slice(0, site.requiredPeople)
+      .map(({ s }) => s)
+      .sort(compareStaffNo);
+
     assigned.forEach((s) => assignedDates[s.id].add(site.date));
 
     if (import.meta.env.DEV) {
-      console.log(`[シフト] ${site.date} ${site.siteName}: 優先候補${preferred.length}人 / 一般候補${others.length}人 → 選出: [${assigned.map((s) => s.name).join(', ')}]`);
+      const preferredCount = candidates.filter((s) => s.preferredWorkSites.includes(site.siteName)).length;
+      console.log(
+        `[シフト] ${site.date} ${site.siteName}: 候補${candidates.length}人（優先${preferredCount}人）→ 選出: [${assigned.map((s) => s.name).join(', ')}]`
+      );
     }
 
     const shortage = Math.max(0, site.requiredPeople - assigned.length);
-
     assignments.push({
-      siteId: site.id,
+      siteId:           site.id,
       assignedStaffIds: assigned.map((s) => s.id),
       shortage,
     });
