@@ -85,16 +85,14 @@ function passesHardConstraints(
 
 // ── SOFT SCORES（スコアリング関数）───────────────────────────
 
-/** scoreStaffForSite が返すスコア構造 */
-interface StaffScore {
-  preferred: boolean;  // 優先現場に合致するか
-  workDays:  number;   // 月間勤務日数（少ないほど優先）
-  //
-  // 将来追加するスコア項目:
-  // - pairedBonus: number      ペア設定の相手が同じ現場に配置済みなら加点
-  // - levelScore:  number      スタッフレベル分散のための補正
-  // - leaderBonus: number      リーダー未配置現場でのリーダー加点
-}
+/** scoreStaffForSite が返すスコア内訳。高いほど優先度が高いことを示す（workDays のみ低いほど優先） */
+type StaffScore = {
+  preferred:     number;   // 優先現場に合致: 1 / しない: 0
+  workDays:      number;   // 月間勤務日数（低いほど優先）
+  pairBonus?:    number;   // ペア設定の相手が配置済みなら加点（未実装）
+  leaderBonus?:  number;   // リーダー未配置現場でリーダーに加点（未実装）
+  levelBalance?: number;   // レベル分散のための補正（未実装）
+};
 
 /**
  * スタッフをこの現場に配置する優先度スコアを返す。
@@ -119,24 +117,30 @@ function scoreStaffForSite(
   assignedDates: Set<string>
 ): StaffScore {
   return {
-    preferred: s.preferredWorkSites.includes(site.siteName),
+    preferred: s.preferredWorkSites.includes(site.siteName) ? 1 : 0,
     workDays:  assignedDates.size,
+    // pairBonus / leaderBonus / levelBalance は未実装（将来ここに計算を追加）
   };
 }
 
 /**
- * スコアの大小比較（降順：スコアが高いほど候補リストの前に並ぶ）
- * 将来 StaffScore に項目を追加した場合、ここに比較ロジックを追記する。
+ * StaffScore の各項目を順番に比較する。
+ * 将来 StaffScore に項目を追加した場合、ここに比較ステップを追記する。
  */
 function compareByScore(
   a: Staff, scoreA: StaffScore,
   b: Staff, scoreB: StaffScore
 ): number {
-  // 1. 優先現場合致を先に
-  if (scoreA.preferred !== scoreB.preferred) return scoreA.preferred ? -1 : 1;
-  // 2. 勤務日数が少ない順
+  // 1. 優先現場スコア（高いほど優先）
+  if (scoreA.preferred !== scoreB.preferred) return scoreB.preferred - scoreA.preferred;
+  // 2. 追加ボーナス合計（pairBonus / leaderBonus / levelBalance）: 高いほど優先
+  //    未実装時はすべて 0 なので現在の挙動に影響しない
+  const bonusA = (scoreA.pairBonus ?? 0) + (scoreA.leaderBonus ?? 0) + (scoreA.levelBalance ?? 0);
+  const bonusB = (scoreB.pairBonus ?? 0) + (scoreB.leaderBonus ?? 0) + (scoreB.levelBalance ?? 0);
+  if (bonusA !== bonusB) return bonusB - bonusA;
+  // 3. 月間勤務日数（少ないほど優先）
   if (scoreA.workDays !== scoreB.workDays) return scoreA.workDays - scoreB.workDays;
-  // 3. staffNo 順（安定ソート）
+  // 4. staffNo 順（安定ソート）
   return compareStaffNo(a, b);
 }
 
