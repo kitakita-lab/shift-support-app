@@ -1488,6 +1488,35 @@ h2 {
   display: none;
 }
 
+.paste-textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  font-family: monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  resize: vertical;
+  background: #fafafa;
+  color: #1e293b;
+  margin-bottom: 10px;
+}
+
+.paste-textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  background: #fff;
+}
+
+.paste-import__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
 .import-upload {
   display: flex;
   align-items: center;

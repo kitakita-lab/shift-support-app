@@ -31,3 +31,19 @@ export interface ShiftAssignment {
   assignedStaffIds: string[];
   shortage: number;
 }
+
+/**
+ * シフト情報の共通正規化形式。
+ * CSV取込・貼り付け取込・Excel出力・将来の再取込/上書き判定の共通言語として使う。
+ * 内部IDを持たず、人間が読める文字列フィールドのみで構成する。
+ */
+export interface NormalizedShiftRow {
+  date: string;
+  siteName: string;
+  clientName?: string;
+  startTime: string;
+  endTime: string;
+  requiredPeople: number;
+  assignedStaffNames: string[];
+  memo?: string;
+}

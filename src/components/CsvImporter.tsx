@@ -203,6 +203,10 @@ export default function CsvImporter({
   const [siteSuccess,    setSiteSuccess]    = useState('');
   const [daysOffSuccess, setDaysOffSuccess] = useState('');
 
+  const [pasteSiteText,    setPasteSiteText]    = useState('');
+  const [pasteSitePreview, setPasteSitePreview] = useState<SiteParseResult | null>(null);
+  const [pasteSiteSuccess, setPasteSiteSuccess] = useState('');
+
   const [daysOffTargetMonth, setDaysOffTargetMonth] = useState(() => selectedMonth);
   const [daysOffMode,        setDaysOffMode]        = useState<DaysOffMode>('replace');
   const [overwriteMode,      setOverwriteMode]      = useState(false);
@@ -215,6 +219,10 @@ export default function CsvImporter({
   const sitePreviewCounts = useMemo(
     () => sitePreview ? countImportSessions(sitePreview.valid) : { sessionCount: 0, venueCount: 0 },
     [sitePreview]
+  );
+  const pasteSitePreviewCounts = useMemo(
+    () => pasteSitePreview ? countImportSessions(pasteSitePreview.valid) : { sessionCount: 0, venueCount: 0 },
+    [pasteSitePreview]
   );
 
   const staffInputRef   = useRef<HTMLInputElement>(null);
@@ -291,15 +299,13 @@ export default function CsvImporter({
     setTimeout(() => setStaffSuccess(''), 5000);
   }
 
-  function handleImportSites() {
-    if (!sitePreview?.valid.length) return;
+  function applySiteImport(validSites: WorkSite[]): { venueCount: number; sessionCount: number } {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-    // clientName + siteName の複合キーでグループ化（同名現場でもクライアント違いは別グループ）
     const bySiteKey = new Map<string, WorkSite[]>();
-    for (const site of sitePreview.valid) {
+    for (const site of validSites) {
       const key = siteCompositeKey(site.siteName, site.clientName);
       if (!bySiteKey.has(key)) bySiteKey.set(key, []);
       bySiteKey.get(key)!.push(site);
@@ -314,22 +320,16 @@ export default function CsvImporter({
       const venueLabel = formatSiteLabel(siteName, clientName);
       const sorted = [...siteGroup].sort((a, b) => a.date.localeCompare(b.date));
 
-      // 連続日 + 同一時間帯 → 同じ sessionId にまとめる（requiredPeople は無視）
       let currentSessionId = crypto.randomUUID();
       sessionCount++;
       let prev = sorted[0];
       withGroup.push({
-        ...prev,
-        groupId,
-        groupLabel: `${venueLabel}：${importLabel}`,
-        sessionId: currentSessionId,
+        ...prev, groupId, groupLabel: `${venueLabel}：${importLabel}`, sessionId: currentSessionId,
       });
 
       for (let i = 1; i < sorted.length; i++) {
         const cur = sorted[i];
-        const sameSettings =
-          cur.startTime === prev.startTime &&
-          cur.endTime   === prev.endTime;
+        const sameSettings = cur.startTime === prev.startTime && cur.endTime === prev.endTime;
         const dayDiff = Math.round(
           (parseSiteDate(cur.date).getTime() - parseSiteDate(prev.date).getTime()) / 86400000
         );
@@ -338,21 +338,43 @@ export default function CsvImporter({
           sessionCount++;
         }
         withGroup.push({
-          ...cur,
-          groupId,
-          groupLabel: `${venueLabel}：${importLabel}`,
-          sessionId: currentSessionId,
+          ...cur, groupId, groupLabel: `${venueLabel}：${importLabel}`, sessionId: currentSessionId,
         });
         prev = cur;
       }
     }
 
-    const venueCount = bySiteKey.size;
     onImportSites(withGroup, overwriteMode);
+    return { venueCount: bySiteKey.size, sessionCount };
+  }
+
+  function handleImportSites() {
+    if (!sitePreview?.valid.length) return;
+    const { venueCount, sessionCount } = applySiteImport(sitePreview.valid);
     clearSitePreview();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
     setSiteSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
     setTimeout(() => setSiteSuccess(''), 5000);
+  }
+
+  function handleParsePasteSite() {
+    const text = pasteSiteText.trim();
+    if (!text) return;
+    setPasteSitePreview(parseSiteCSV(text));
+  }
+
+  function clearPasteSitePreview() {
+    setPasteSitePreview(null);
+  }
+
+  function handleImportPasteSites() {
+    if (!pasteSitePreview?.valid.length) return;
+    const { venueCount, sessionCount } = applySiteImport(pasteSitePreview.valid);
+    clearPasteSitePreview();
+    const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
+    setPasteSiteSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
+    setPasteSiteText('');
+    setTimeout(() => setPasteSiteSuccess(''), 5000);
   }
 
   function handleApplyDaysOff() {
@@ -575,6 +597,105 @@ export default function CsvImporter({
         )}
 
         {siteSuccess && <div className="success-msg">{siteSuccess}</div>}
+      </div>
+
+      {/* ── 現場CSV テキスト貼り付け ────────────────────────── */}
+      <div className="card">
+        <h3>現場CSV テキスト貼り付け</h3>
+        <p className="section-desc">
+          ChatGPT等から受け取ったCSV文字列をそのまま貼り付けてインポートできます。ファイル操作が難しいスマホ環境向けです。
+        </p>
+
+        <textarea
+          className="paste-textarea"
+          rows={6}
+          value={pasteSiteText}
+          onChange={(e) => setPasteSiteText(e.target.value)}
+          placeholder={`date,siteName,clientName,startTime,endTime,requiredPeople\n2026-01-05,札幌駅前,Y!mobile,10:00,18:00,2`}
+          spellCheck={false}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+        />
+
+        <div className="paste-import__actions">
+          <button
+            className="btn btn--ghost"
+            onClick={() => {
+              setPasteSiteText(
+                `date,siteName,clientName,startTime,endTime,requiredPeople\n2026-01-05,札幌駅前,Y!mobile,10:00,18:00,2\n2026-01-06,札幌駅前,Y!mobile,10:00,18:00,2`
+              );
+              setPasteSitePreview(null);
+            }}
+          >
+            サンプル表示
+          </button>
+          <button
+            className="btn btn--secondary"
+            onClick={handleParsePasteSite}
+            disabled={!pasteSiteText.trim()}
+          >
+            貼り付けデータを読み込む
+          </button>
+        </div>
+
+        {pasteSitePreview && (
+          <div className="import-preview">
+            <div className="import-summary">
+              <span className="import-summary__ok">取込可能：{pasteSitePreview.valid.length}行</span>
+              {pasteSitePreview.errors.length > 0 && (
+                <span className="import-summary__err">エラー：{pasteSitePreview.errors.length}行スキップ</span>
+              )}
+            </div>
+            <ErrorList errors={pasteSitePreview.errors} />
+            {pasteSitePreview.valid.length > 0 ? (
+              <>
+                <div className="table-wrapper">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>日付</th>
+                        <th>現場名</th>
+                        <th>クライアント名</th>
+                        <th>開始</th>
+                        <th>終了</th>
+                        <th>必要人数</th>
+                        <th>メモ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pasteSitePreview.valid.map((s, i) => (
+                        <tr key={i}>
+                          <td>{s.date}</td>
+                          <td>{s.siteName}</td>
+                          <td>{s.clientName?.trim() || '—'}</td>
+                          <td>{s.startTime}</td>
+                          <td>{s.endTime}</td>
+                          <td>{s.requiredPeople}人</td>
+                          <td>{s.memo || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="import-actions">
+                  <span className="import-actions__label">
+                    {pasteSitePreviewCounts.venueCount}現場・{pasteSitePreviewCounts.sessionCount}会期
+                    {overwriteMode && <span className="days-off-mode-badge">上書きモード</span>}
+                  </span>
+                  <div className="import-actions__buttons">
+                    <button className="btn btn--primary" onClick={handleImportPasteSites}>追加する</button>
+                    <button className="btn btn--secondary" onClick={clearPasteSitePreview}>キャンセル</button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="import-no-valid">取り込める有効なデータがありません</p>
+            )}
+          </div>
+        )}
+
+        {pasteSiteSuccess && <div className="success-msg">{pasteSiteSuccess}</div>}
       </div>
 
       {/* ── 希望休CSV ─────────────────────────────────────── */}
