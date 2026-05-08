@@ -618,42 +618,12 @@ export default function CsvImporter({
       {/* ── 現場CSV テキスト貼り付け ────────────────────────── */}
       <div className="card">
         <h3>現場CSV テキスト貼り付け</h3>
-        <p className="section-desc">
-          ChatGPT等から受け取ったCSV文字列をそのまま貼り付けてインポートできます。ファイル操作が難しいスマホ環境向けです。
-        </p>
+        <p className="section-desc">CSVを貼り付けるだけで取り込めます</p>
 
-        {/* フォーマット説明 */}
-        <ul className="paste-format-notes">
-          <li>ヘッダー行（1行目）は必須です</li>
-          <li>列順固定：<code>date, siteName, clientName, startTime, endTime, requiredPeople</code></li>
-          <li>エンコードは UTF-8 推奨（BOM付き可）</li>
-          <li>ChatGPT等で生成したCSVをそのまま貼り付け可能</li>
-        </ul>
-
-        {/* サンプル */}
-        <div className="paste-sample">
-          <div className="paste-sample__header">
-            <span className="paste-sample__label">サンプル</span>
-            <button className="btn btn--ghost btn--sm" onClick={handleCopySample}>
-              {pasteCopied ? 'コピーしました ✓' : 'クリップボードにコピー'}
-            </button>
-            <button
-              className="btn btn--ghost btn--sm"
-              onClick={() => {
-                setPasteSiteText(PASTE_SAMPLE_TEXT);
-                setPasteSitePreview(parseSiteCSV(PASTE_SAMPLE_TEXT));
-              }}
-            >
-              テキストエリアに貼り付け
-            </button>
-          </div>
-          <pre className="paste-sample__code">{PASTE_SAMPLE_TEXT}</pre>
-        </div>
-
-        {/* textarea：貼り付けると自動解析してプレビュー表示 */}
+        {/* テキストエリア（主役） */}
         <textarea
           className="paste-textarea"
-          rows={6}
+          rows={7}
           value={pasteSiteText}
           onChange={(e) => {
             const text = e.target.value;
@@ -664,12 +634,41 @@ export default function CsvImporter({
               setPasteSitePreview(null);
             }
           }}
-          placeholder={'CSV文字列をここに貼り付けてください（自動解析されます）'}
+          placeholder={'ここにCSVを貼り付け'}
           spellCheck={false}
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
         />
+
+        {/* 補助操作（サンプルと詳細は折りたたみ） */}
+        <div className="paste-helper">
+          <button className="btn btn--ghost btn--sm" onClick={handleCopySample}>
+            {pasteCopied ? 'コピーしました ✓' : 'サンプルをコピー'}
+          </button>
+          <details className="paste-details">
+            <summary className="paste-details__summary">フォーマット例を見る</summary>
+            <div className="paste-details__body">
+              <pre className="paste-sample__code">{PASTE_SAMPLE_TEXT}</pre>
+              <button
+                className="btn btn--ghost btn--sm"
+                style={{ marginBottom: 10 }}
+                onClick={() => {
+                  setPasteSiteText(PASTE_SAMPLE_TEXT);
+                  setPasteSitePreview(parseSiteCSV(PASTE_SAMPLE_TEXT));
+                }}
+              >
+                テキストエリアに貼り付ける
+              </button>
+              <ul className="paste-format-notes">
+                <li>1行目はヘッダー行が必要です</li>
+                <li>列順：<code>date, siteName, clientName, startTime, endTime, requiredPeople</code></li>
+                <li>ChatGPT等で生成したCSVをそのまま貼り付けできます</li>
+                <li>文字コードは UTF-8 推奨（BOM付き可）</li>
+              </ul>
+            </div>
+          </details>
+        </div>
 
         {/* 自動解析プレビュー（normalize経由で NormalizedShiftRow を表示） */}
         {pasteSitePreview && (

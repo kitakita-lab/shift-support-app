@@ -1488,81 +1488,98 @@ h2 {
   display: none;
 }
 
-.paste-format-notes {
-  margin: 0 0 12px 0;
-  padding: 10px 14px 10px 28px;
-  background: #f0f9ff;
-  border: 1px solid #bae6fd;
-  border-radius: 6px;
-  font-size: 12px;
-  color: #0369a1;
-  line-height: 1.8;
-}
-
-.paste-format-notes code {
+/* テキストエリア（主役） */
+.paste-textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 14px;
   font-family: monospace;
-  font-size: 11px;
-  background: #e0f2fe;
-  padding: 1px 4px;
-  border-radius: 3px;
+  font-size: 13px;
+  line-height: 1.6;
+  border: 2px solid #d1d5db;
+  border-radius: 8px;
+  resize: vertical;
+  background: #fff;
+  color: #1e293b;
+  margin-bottom: 8px;
 }
 
-.paste-sample {
-  margin-bottom: 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  overflow: hidden;
+.paste-textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
-.paste-sample__header {
+/* サンプルコピー + 折りたたみ詳細の横並びエリア */
+.paste-helper {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  gap: 10px;
   flex-wrap: wrap;
+  margin-bottom: 12px;
 }
 
-.paste-sample__label {
-  font-size: 12px;
-  font-weight: 600;
+/* details 折りたたみ */
+.paste-details {
+  font-size: 13px;
+}
+
+.paste-details__summary {
+  cursor: pointer;
   color: #64748b;
-  margin-right: auto;
+  font-size: 12px;
+  user-select: none;
+  list-style: none;
 }
 
+.paste-details__summary::before {
+  content: '▶ ';
+  font-size: 10px;
+}
+
+details[open] .paste-details__summary::before {
+  content: '▼ ';
+}
+
+.paste-details__body {
+  margin-top: 10px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+/* details 内のサンプルコードブロック */
 .paste-sample__code {
-  margin: 0;
+  margin: 0 0 10px 0;
   padding: 10px 12px;
   font-family: monospace;
   font-size: 12px;
   line-height: 1.6;
   color: #1e293b;
   background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
   white-space: pre;
   overflow-x: auto;
 }
 
-.paste-textarea {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 10px 12px;
-  font-family: monospace;
-  font-size: 13px;
-  line-height: 1.5;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  resize: vertical;
-  background: #fafafa;
-  color: #1e293b;
-  margin-bottom: 10px;
+/* フォーマット説明（詳細内） */
+.paste-format-notes {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.9;
 }
 
-.paste-textarea:focus {
-  outline: none;
-  border-color: #3b82f6;
-  background: #fff;
+.paste-format-notes code {
+  font-family: monospace;
+  font-size: 11px;
+  background: #e2e8f0;
+  padding: 1px 4px;
+  border-radius: 3px;
 }
 
 .paste-import__actions {
