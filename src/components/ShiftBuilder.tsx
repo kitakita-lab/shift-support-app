@@ -8,10 +8,12 @@ interface Props {
   staff: Staff[];
   workSites: WorkSite[];
   assignments: ShiftAssignment[];
+  selectedMonth: string;
   onGenerate: (assignments: ShiftAssignment[]) => void;
+  onClear: () => void;
 }
 
-export default function ShiftBuilder({ staff, workSites, assignments, onGenerate }: Props) {
+export default function ShiftBuilder({ staff, workSites, assignments, selectedMonth, onGenerate, onClear }: Props) {
   const staffMap: Record<string, string> = {};
   const staffIndex: Record<string, Staff> = {};
   staff.forEach((s) => {
@@ -37,6 +39,18 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
     }
   }
 
+  function formatYearMonth(ym: string): string {
+    const [y, m] = ym.split('-');
+    return `${y}年${Number(m)}月`;
+  }
+
+  function handleClear() {
+    if (assignments.length === 0) return;
+    const label = formatYearMonth(selectedMonth);
+    if (!confirm(`${label}の生成済みシフトを削除します。よろしいですか？`)) return;
+    onClear();
+  }
+
   function handleGenerate() {
     if (activeSites.length === 0) {
       alert('シフト対象の現場が登録されていません');
@@ -59,6 +73,11 @@ export default function ShiftBuilder({ staff, workSites, assignments, onGenerate
           <button className="btn btn--primary btn--large" onClick={handleGenerate}>
             シフトを自動作成
           </button>
+          {assignments.length > 0 && (
+            <button className="btn btn--danger" onClick={handleClear}>
+              シフトをクリア
+            </button>
+          )}
           <span className="shift-hint">
             スタッフの勤務可能曜日・希望休・最大勤務日数を考慮して自動割り当てします
           </span>
