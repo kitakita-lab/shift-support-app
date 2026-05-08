@@ -103,6 +103,12 @@ export default function App() {
     ]);
   }
 
+  // 当月分のシフトのみ削除する（他月は保持）
+  function handleClearMonthlyShifts() {
+    const monthSiteIds = new Set(monthlyWorkSites.map((s) => s.id));
+    setAssignments((prev) => prev.filter((a) => !monthSiteIds.has(a.siteId)));
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -170,7 +176,9 @@ export default function App() {
             staff={staff}
             workSites={monthlyWorkSites}
             assignments={monthlyAssignments}
+            selectedMonth={selectedMonth}
             onGenerate={handleGenerateShifts}
+            onClear={handleClearMonthlyShifts}
           />
         )}
         {activeTab === 'export' && (

@@ -23,18 +23,18 @@ const ALT_FILL: ExcelJS.Fill = {
   type: 'pattern', pattern: 'solid',
   fgColor: { argb: 'FFF8FAFF' },
 };
-// 現場大ブロック見出し（水色）
+// 現場大ブロック見出し（濃紺：最も目立つ）
 const BLOCK_TITLE_FILL: ExcelJS.Fill = {
   type: 'pattern', pattern: 'solid',
-  fgColor: { argb: 'FFE8F0FE' },
+  fgColor: { argb: 'FF1E3A8A' },
 };
 const BLOCK_TITLE_FONT: Partial<ExcelJS.Font> = {
-  bold: true, size: 12, color: { argb: 'FF1A56DB' },
+  bold: true, size: 12, color: { argb: 'FFFFFFFF' },
 };
-// 会期情報行（薄グレー）
+// 会期情報行（薄水色：現場行より控えめ）
 const BLOCK_INFO_FILL: ExcelJS.Fill = {
   type: 'pattern', pattern: 'solid',
-  fgColor: { argb: 'FFF1F5F9' },
+  fgColor: { argb: 'FFE8F0FE' },
 };
 const BLOCK_INFO_FONT: Partial<ExcelJS.Font> = {
   size: 10, color: { argb: 'FF475569' },
@@ -257,7 +257,7 @@ function buildSiteSheet(
     venueTitleCell.font      = BLOCK_TITLE_FONT;
     venueTitleCell.fill      = BLOCK_TITLE_FILL;
     venueTitleCell.alignment = { vertical: 'middle', indent: 1 };
-    venueTitleCell.border    = thinBorder('FFBFDBFE');
+    venueTitleCell.border    = thinBorder('FF1E3A8A');
 
     venue.sessions.forEach((block, sessionIdx) => {
       // ── 会期情報行（期間・時刻・人数サマリー）──────────────────────
