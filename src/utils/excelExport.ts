@@ -159,9 +159,12 @@ function buildBlocks(
       return Math.max(acc, asgn ? asgn.shortage : x.requiredPeople);
     }, 0);
     const first = s[0];
+    // 表示には displaySiteName を優先（+N名・※... 等を除いた整形済み名）
+    // rawSiteName は原本表記確認用として WorkSite に保持しているが、Excel出力には含めない
+    const displayName = first.displaySiteName ?? first.siteName;
     blocks.push({
-      venueLabel:       formatSiteLabel(first.siteName, first.clientName),
-      siteName:         first.siteName,
+      venueLabel:       formatSiteLabel(displayName, first.clientName),
+      siteName:         displayName,
       clientName:       first.clientName,
       startDate:        first.date,
       endDate:          s[s.length - 1].date,
@@ -366,7 +369,7 @@ function buildStaffSheet(
     names.forEach((staffName) => {
       const row = ws.addRow([
         site.date,
-        site.siteName,
+        site.displaySiteName ?? site.siteName,
         site.clientName ?? '',
         site.startTime,
         site.endTime,

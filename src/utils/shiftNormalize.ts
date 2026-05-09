@@ -14,8 +14,6 @@ export interface NormalizeShiftResult {
  * CSV テキストをパースして NormalizedShiftRow[] に変換する。
  * 貼り付け取込・ファイル取込のエントリポイント。
  * エラー行はスキップして errors に収集する。
- *
- * TODO: 将来的に CSV Export / Excel Export の source-of-truth をこの関数経由へ統一予定
  */
 export function parseSiteCSVToNormalized(rawText: string): NormalizeShiftResult {
   const { valid, errors } = parseSiteCSV(rawText);
@@ -27,10 +25,7 @@ export function parseSiteCSVToNormalized(rawText: string): NormalizeShiftResult 
 
 /**
  * シフト行の一致判定・再取込の上書き判定に使うキーを返す。
- *
- * キー構成: date / siteName / clientName / startTime / endTime
- * requiredPeople はキーに含めない（後から必要人数が変わる可能性があるため）。
- * trim() で空白差異を吸収し、clientName 未設定は空文字として扱う。
+ * requiredPeople はキーに含めない（後から変わる可能性があるため）。
  */
 export function buildShiftRowKey(
   date: string,
@@ -45,7 +40,6 @@ export function buildShiftRowKey(
 /**
  * " / " または "/" で区切られたスタッフ名文字列を配列に変換する。
  * csvExport.ts の結合区切り文字（' / '）と対応している。
- * 空文字・空白のみの場合は空配列を返す。
  */
 export function normalizeStaffNames(raw: string): string[] {
   if (!raw.trim()) return [];
@@ -59,19 +53,27 @@ export function normalizeStaffNames(raw: string): string[] {
  * 例: "渋谷+2名" → 2、"現場名" → 0
  */
 export function extractRequiredPeopleDelta(raw: string): number {
-  const m = raw.match(/\+(\d+)名/);
+  const m = raw.match(/[+＋](\d+)名/);
   return m ? parseInt(m[1], 10) : 0;
 }
 
 /**
  * siteName から汚染文字列を除去して純粋な現場名を返す。
- * 除去対象: "+N名"パターン、"※"以降のアノテーション
- * 例: "渋谷+2名※追加" → "渋谷"
+ *
+ * 除去対象:
+ * - "+N名" / "＋N名" / "+N" / "＋N"（全角プラス対応）
+ * - "※..." （※ 以降すべて）
+ * - 末尾の補足語: サテ / 臨時 / 応援 / 短縮営業（スペース区切り）
+ *
+ * 例: "WB小樽+2名 ネイチャー" → "WB小樽 ネイチャー"
+ *     "イオン厚別 ※サテライト" → "イオン厚別"
  */
 export function cleanSiteName(raw: string): string {
   return raw
-    .replace(/\+\d+名/g, '')
+    .replace(/[+＋]\d+名?/g, '')
     .replace(/※.*/g, '')
+    .replace(/[\s　]+(サテ|臨時|応援|短縮営業)\s*$/g, '')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -91,37 +93,76 @@ export function extractClientNameFromParens(
 
 /**
  * 表記ゆれを吸収した現場同一性判定キーを返す。
- * cleanSiteName → 全角スペース→半角 → 小文字 → clientName を付与
+ *
+ * 仕様:
+ * - cleanSiteName 適用後に全角英数→半角、スペース除去、括弧除去、小文字化
+ * - clientName もまとめてキーに含める
+ *
+ * 例: "アリオ ハーベストコート" / "アリオハーベストコート" → 同一キー
+ *     "イオン厚別（ティーガイア）" → extractClientNameFromParens後の形と同一キー
  */
 export function normalizeSiteIdentity(siteName: string, clientName?: string): string {
-  const cleaned = cleanSiteName(siteName)
-    .replace(/　/g, ' ')
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
-  return `${(clientName ?? '').trim().toLowerCase()}\0${cleaned}`;
+  const norm = (s: string): string =>
+    cleanSiteName(s)
+      .replace(/[Ａ-Ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/[ａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/[\s　]/g, '')
+      .replace(/[（）()]/g, '')
+      .toLowerCase();
+  return `${norm(clientName ?? '')}\0${norm(siteName)}`;
+}
+
+/**
+ * CSV 取込した WorkSite に normalize を適用して返す。
+ * groupId 付与前の `buildCsvImportGroups` / `applySiteImport` で使用。
+ *
+ * フィールドの役割:
+ * - rawSiteName     : 元の siteName を保存（原本確認・再処理用）。既に設定済みなら上書きしない
+ * - displaySiteName : 画面・Excel 表示用の整えた名前（+N名・※... 等を除去）
+ * - normalizedSiteKey: グルーピング・重複判定用の比較キー（スペース/括弧/全角を吸収）
+ * - siteName        : 既存互換のため displaySiteName と同値にする
+ */
+export function applySiteNormalize(site: WorkSite): WorkSite {
+  const rawSiteName = site.rawSiteName ?? site.siteName;
+  const cleaned = cleanSiteName(site.siteName);
+  const m = cleaned.match(/[（(]([^）)]+)[）)]$/);
+  const extractedClient = m ? m[1].trim() : undefined;
+  const clientName = site.clientName?.trim() || extractedClient || '';
+  const displaySiteName = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
+  const normalizedSiteKey = normalizeSiteIdentity(displaySiteName, clientName);
+  return {
+    ...site,
+    siteName: displaySiteName,
+    rawSiteName,
+    displaySiteName,
+    clientName,
+    normalizedSiteKey,
+  };
 }
 
 /**
  * NormalizedShiftRow に業務 normalize を適用して新しい行を返す。
- * - siteName から "+N名"・"※..." を除去
+ * - cleanSiteName、括弧内クライアント名抽出
  * - "+N名" 分を requiredPeople に加算
- * - 括弧内クライアント名を抽出（clientName 未設定時のみ）
  * - rawSiteName に元の値を保存
+ * - normalizedSiteKey を設定
  */
 export function normalizeBusinessShiftRow(row: NormalizedShiftRow): NormalizedShiftRow {
   const delta = extractRequiredPeopleDelta(row.siteName);
   const cleaned = cleanSiteName(row.siteName);
-  const clientName = extractClientNameFromParens(cleaned, row.clientName);
-  const siteNameFinal = clientName
-    ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim()
-    : cleaned;
+  const m = cleaned.match(/[（(]([^）)]+)[）)]$/);
+  const extractedClient = m ? m[1].trim() : undefined;
+  const clientName = row.clientName?.trim() || extractedClient || undefined;
+  const siteName = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
 
   return {
     ...row,
-    siteName: siteNameFinal,
-    clientName: clientName || undefined,
+    siteName,
+    clientName,
     requiredPeople: row.requiredPeople + delta,
     rawSiteName: row.rawSiteName ?? row.siteName,
+    normalizedSiteKey: normalizeSiteIdentity(siteName, clientName),
   };
 }
 
@@ -129,10 +170,6 @@ export function normalizeBusinessShiftRow(row: NormalizedShiftRow): NormalizedSh
 
 /**
  * WorkSite 1件を NormalizedShiftRow に変換する。
- *
- * @param site       変換元の現場データ
- * @param assignment 対応するシフト割当（省略時は assignedStaffNames が空配列）
- * @param staffMap   staffId → 名前のマップ（省略時は ID をそのまま使う）
  */
 export function normalizeShiftRow(
   site: WorkSite,
@@ -159,10 +196,6 @@ export function normalizeShiftRow(
 /**
  * WorkSite[] を一括で NormalizedShiftRow[] に変換する。
  * isPlaceholder な現場はスキップし、日付昇順にソートして返す。
- *
- * @param sites       変換元の現場一覧
- * @param assignments 対応するシフト割当一覧
- * @param staff       スタッフ一覧（ID → 名前解決に使用）
  */
 export function normalizeShiftRows(
   sites: WorkSite[],

@@ -18,6 +18,12 @@ export interface WorkSite {
   date: string;
   clientName?: string;
   siteName: string;
+  /** CSV取込・入力元の元表記。normalize後も消えない原本 */
+  rawSiteName?: string;
+  /** 画面・Excelで表示するための整えた現場名（+N名・※... 等を除去済み） */
+  displaySiteName?: string;
+  /** 表記ゆれ吸収・グルーピング・重複判定用の内部比較キー */
+  normalizedSiteKey?: string;
   startTime: string;
   endTime: string;
   requiredPeople: number;
@@ -46,6 +52,8 @@ export interface NormalizedShiftRow {
   requiredPeople: number;
   assignedStaffNames: string[];
   memo?: string;
-  /** 取込元の生テキスト。デバッグ・重複判定に使用。normalize後は書き換えない */
+  /** 取込元の生テキスト。normalize後は書き換えない */
   rawSiteName?: string;
+  /** 表記ゆれ吸収済みの同一性判定キー。normalizeSiteIdentity() で生成 */
+  normalizedSiteKey?: string;
 }

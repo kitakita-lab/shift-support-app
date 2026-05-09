@@ -1,7 +1,8 @@
 import { useRef, useState, useMemo } from 'react';
 import { WorkSite } from '../types';
 import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
-import { formatSiteLabel, siteCompositeKey } from '../utils/siteUtils';
+import { formatSiteLabel } from '../utils/siteUtils';
+import { normalizeSiteIdentity, applySiteNormalize } from '../utils/shiftNormalize';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
@@ -85,10 +86,11 @@ function peakColorClass(peak: number, avg: number): 'high' | 'medium' | 'normal'
 }
 
 // 連続日 + 同一時間帯（requiredPeople は無視）でグルーピングしたときの会期数・現場数を返す
+// normalizedSiteKey または normalizeSiteIdentity で表記ゆれを吸収したキーを使用
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = siteCompositeKey(site.siteName, site.clientName);
+    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -110,16 +112,20 @@ function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCo
   return { sessionCount, venueCount: bySiteKey.size };
 }
 
-// CSV パース済みデータに groupId / sessionId を付与して WorkSite[] を返す
+// CSV パース済みデータに normalize + groupId / sessionId を付与して WorkSite[] を返す
+// applySiteNormalize で "+N名"・"※..."・括弧クライアント名を処理し、
+// normalizeSiteIdentity で表記ゆれ吸収した同一性キーでグループ化する
 function buildCsvImportGroups(sites: WorkSite[]): WorkSite[] {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
   const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-  // clientName + siteName の複合キーでグループ化（同名現場でもクライアント違いは別グループ）
+  const normalizedSites = sites.map(applySiteNormalize);
+
   const bySiteKey = new Map<string, WorkSite[]>();
-  for (const site of sites) {
-    const key = siteCompositeKey(site.siteName, site.clientName);
+  for (const site of normalizedSites) {
+    // applySiteNormalize 後は normalizedSiteKey が保証されているが、型上 optional なので fallback
+    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -443,6 +449,9 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
   const [csvModalOverwrite, setCsvModalOverwrite] = useState(false);
   const csvFileRef = useRef<HTMLInputElement>(null);
 
+  // ── 現場検索
+  const [siteSearch, setSiteSearch] = useState('');
+
   // ── 登録プレビュー計算
   const previewCount = useMemo(() =>
     newSessions.reduce((sum, s) => sum + calcDayCount(s.startDate, s.endDate), 0),
@@ -460,7 +469,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
     [csvModalPreview]
   );
 
-  // ── グループ化
+  // ── グループ化・月優先ソート
   const { sortedGroups, ungroupedSites } = useMemo(() => {
     const grouped: Record<string, WorkSite[]> = {};
     const ungrouped: WorkSite[] = [];
@@ -473,12 +482,38 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
         groupId,
         sites: [...sites].sort((a, b) => a.date.localeCompare(b.date)),
       }))
-      .sort((a, b) => (a.sites[0]?.date ?? '').localeCompare(b.sites[0]?.date ?? ''));
+      .sort((a, b) => {
+        const aActive = a.sites.filter((s) => !s.isPlaceholder);
+        const bActive = b.sites.filter((s) => !s.isPlaceholder);
+        const aMonth  = aActive.filter((s) => s.date.startsWith(selectedMonth));
+        const bMonth  = bActive.filter((s) => s.date.startsWith(selectedMonth));
+        // 0: 当月あり, 1: 他月のみ, 2: 未登録
+        const aPri = aMonth.length > 0 ? 0 : aActive.length > 0 ? 1 : 2;
+        const bPri = bMonth.length > 0 ? 0 : bActive.length > 0 ? 1 : 2;
+        if (aPri !== bPri) return aPri - bPri;
+        const aDate = (aMonth[0] ?? aActive[0])?.date ?? '';
+        const bDate = (bMonth[0] ?? bActive[0])?.date ?? '';
+        return aDate.localeCompare(bDate);
+      });
     return {
       sortedGroups: groupEntries,
       ungroupedSites: [...ungrouped].sort((a, b) => a.date.localeCompare(b.date)),
     };
-  }, [workSites]);
+  }, [workSites, selectedMonth]);
+
+  // ── 検索フィルタ（displaySiteName / rawSiteName / clientName を対象）
+  const { filteredGroups, filteredUngrouped } = useMemo(() => {
+    const q = siteSearch.trim().toLowerCase();
+    if (!q) return { filteredGroups: sortedGroups, filteredUngrouped: ungroupedSites };
+    const match = (s: WorkSite) =>
+      (s.displaySiteName ?? s.siteName).toLowerCase().includes(q) ||
+      (s.clientName ?? '').toLowerCase().includes(q) ||
+      (s.rawSiteName ?? '').toLowerCase().includes(q);
+    return {
+      filteredGroups:    sortedGroups.filter(({ sites }) => sites[0] ? match(sites[0]) : false),
+      filteredUngrouped: ungroupedSites.filter(match),
+    };
+  }, [sortedGroups, ungroupedSites, siteSearch]);
 
   // ── 新規現場登録 ────────────────────────────────────────────
 
@@ -922,13 +957,27 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
           </div>
         ) : (
           <div className="site-list">
+            <div className="site-search">
+              <input
+                type="search"
+                className="site-search__input"
+                placeholder="現場名・クライアント名で検索"
+                value={siteSearch}
+                onChange={(e) => setSiteSearch(e.target.value)}
+              />
+              {siteSearch && (
+                <span className="site-search__count">
+                  {filteredGroups.length + filteredUngrouped.length} / {sortedGroups.length + ungroupedSites.length}件
+                </span>
+              )}
+            </div>
 
-            {sortedGroups.map(({ groupId, sites }) => {
+            {filteredGroups.map(({ groupId, sites }) => {
               const isEditingSession    = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
               const activeSites          = sites.filter((s) => !s.isPlaceholder);
               const monthActiveSites     = activeSites.filter((s) => s.date.startsWith(selectedMonth));
               const monthDisplaySessions = groupSitesIntoDisplaySessions(monthActiveSites);
-              const siteName            = sites[0]?.siteName ?? '';
+              const siteName            = sites[0]?.displaySiteName ?? sites[0]?.siteName ?? '';
               const clientName          = sites[0]?.clientName ?? '';
               const isVenueOpen         = expandedVenues.has(groupId);
 
@@ -1089,10 +1138,10 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
               );
             })}
 
-            {ungroupedSites.length > 0 && (
+            {filteredUngrouped.length > 0 && (
               <div className="site-ungrouped-section">
-                <p className="site-ungrouped-label">グループなし（{ungroupedSites.length}件）</p>
-                {ungroupedSites.map((site) => {
+                <p className="site-ungrouped-label">グループなし（{filteredUngrouped.length}件）</p>
+                {filteredUngrouped.map((site) => {
                   const isConvertingThis =
                     !sessionEditor?.isExistingGroup &&
                     (sessionEditor?.sourceIds.includes(site.id) ?? false);
@@ -1100,7 +1149,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
                     <div key={site.id} className="site-card site-card--ungrouped">
                       <div className="site-header">
                         <div className="site-header__left">
-                          <div className="site-title">{formatSiteLabel(site.siteName, site.clientName)}</div>
+                          <div className="site-title">{formatSiteLabel(site.displaySiteName ?? site.siteName, site.clientName)}</div>
                           <div className="site-meta">{site.date}</div>
                         </div>
                         <div className="site-actions">
