@@ -1,8 +1,6 @@
 import ExcelJS from 'exceljs';
 import { Staff, WorkSite, ShiftAssignment } from '../types';
 import { sortedByStaffNo } from './staffUtils';
-import { formatSiteLabel } from './siteUtils';
-import { buildDisplaySiteName } from './shiftNormalize';
 
 // ── 共通スタイル定数 ───────────────────────────────────────
 
@@ -98,6 +96,19 @@ function styleSiteSheetRow(
   if (hasShortage) row.getCell(shortageCol).font = SHORTAGE_FONT;
 }
 
+// 現場ブロック見出し用ラベル。
+// subSiteName と clientName の両方がある場合に二重括弧にならないよう独自生成する。
+// 例: siteName="Bivi新札幌" sub="2階1ドラッグ側" client="千代田"
+//     → "Bivi新札幌（2階1ドラッグ側）　千代田"
+function buildVenueLabel(siteName: string, subSiteName?: string, clientName?: string): string {
+  const sub    = subSiteName?.trim();
+  const client = clientName?.trim();
+  if (sub && client) return `${siteName}（${sub}）　${client}`;
+  if (sub)           return `${siteName}（${sub}）`;
+  if (client)        return `${siteName}（${client}）`;
+  return siteName;
+}
+
 // ── シート①：現場別シフト表（現場大ブロック + 会期小ブロック形式）──────────────
 //
 // [Excel再取込 照合キー設計メモ — 実装は将来]
@@ -162,7 +173,7 @@ function buildBlocks(
     }, 0);
     const first = s[0];
     blocks.push({
-      venueLabel:       formatSiteLabel(buildDisplaySiteName(first.siteName, first.subSiteName), first.clientName),
+      venueLabel:       buildVenueLabel(first.siteName, first.subSiteName, first.clientName),
       siteName:         first.siteName,
       subSiteName:      first.subSiteName,
       clientName:       first.clientName,
