@@ -1,7 +1,8 @@
 import { useRef, useState, useMemo } from 'react';
 import { WorkSite } from '../types';
 import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
-import { formatSiteLabel, siteCompositeKey } from '../utils/siteUtils';
+import { formatSiteLabel } from '../utils/siteUtils';
+import { normalizeSiteIdentity, applySiteNormalize } from '../utils/shiftNormalize';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
@@ -85,10 +86,11 @@ function peakColorClass(peak: number, avg: number): 'high' | 'medium' | 'normal'
 }
 
 // 連続日 + 同一時間帯（requiredPeople は無視）でグルーピングしたときの会期数・現場数を返す
+// normalizeSiteIdentity で表記ゆれを吸収したキーを使用
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = siteCompositeKey(site.siteName, site.clientName);
+    const key = normalizeSiteIdentity(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -110,16 +112,19 @@ function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCo
   return { sessionCount, venueCount: bySiteKey.size };
 }
 
-// CSV パース済みデータに groupId / sessionId を付与して WorkSite[] を返す
+// CSV パース済みデータに normalize + groupId / sessionId を付与して WorkSite[] を返す
+// applySiteNormalize で "+N名"・"※..."・括弧クライアント名を処理し、
+// normalizeSiteIdentity で表記ゆれ吸収した同一性キーでグループ化する
 function buildCsvImportGroups(sites: WorkSite[]): WorkSite[] {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
   const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-  // clientName + siteName の複合キーでグループ化（同名現場でもクライアント違いは別グループ）
+  const normalizedSites = sites.map(applySiteNormalize);
+
   const bySiteKey = new Map<string, WorkSite[]>();
-  for (const site of sites) {
-    const key = siteCompositeKey(site.siteName, site.clientName);
+  for (const site of normalizedSites) {
+    const key = normalizeSiteIdentity(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }

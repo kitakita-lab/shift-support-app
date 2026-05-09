@@ -13,9 +13,9 @@ import {
   SiteParseResult,
   DaysOffRow,
 } from '../utils/csvImport';
-import { normalizeShiftRow } from '../utils/shiftNormalize';
+import { normalizeShiftRow, normalizeSiteIdentity, applySiteNormalize } from '../utils/shiftNormalize';
 import { nextStaffNo } from '../utils/staffUtils';
-import { formatSiteLabel, siteCompositeKey } from '../utils/siteUtils';
+import { formatSiteLabel } from '../utils/siteUtils';
 
 // 貼り付けインポートのサンプルテキスト（コピー・テキストエリア貼り付け用）
 const PASTE_SAMPLE_TEXT =
@@ -98,10 +98,11 @@ function parseSiteDate(s: string): Date {
 }
 
 // 連続日 + 同一時間帯でグルーピングしたときの会期数・現場数を返す（プレビュー表示用）
+// normalizeSiteIdentity で表記ゆれを吸収したキーを使用
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = siteCompositeKey(site.siteName, site.clientName);
+    const key = normalizeSiteIdentity(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -313,15 +314,16 @@ export default function CsvImporter({
     setTimeout(() => setStaffSuccess(''), 5000);
   }
 
-  // TODO: 将来的に引数を NormalizedShiftRow[] に変更し、WorkSite 変換をここで行う予定
   function applySiteImport(validSites: WorkSite[]): { venueCount: number; sessionCount: number } {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
+    const normalizedSites = validSites.map(applySiteNormalize);
+
     const bySiteKey = new Map<string, WorkSite[]>();
-    for (const site of validSites) {
-      const key = siteCompositeKey(site.siteName, site.clientName);
+    for (const site of normalizedSites) {
+      const key = normalizeSiteIdentity(site.siteName, site.clientName);
       if (!bySiteKey.has(key)) bySiteKey.set(key, []);
       bySiteKey.get(key)!.push(site);
     }

@@ -46,6 +46,8 @@ export interface NormalizedShiftRow {
   requiredPeople: number;
   assignedStaffNames: string[];
   memo?: string;
-  /** 取込元の生テキスト。デバッグ・重複判定に使用。normalize後は書き換えない */
+  /** 取込元の生テキスト。normalize後は書き換えない */
   rawSiteName?: string;
+  /** 表記ゆれ吸収済みの同一性判定キー。normalizeSiteIdentity() で生成 */
+  normalizedSiteKey?: string;
 }
