@@ -820,6 +820,7 @@ export default function CsvImporter({
                       <tr>
                         <th>クライアント</th>
                         <th>現場名</th>
+                        <th>サブ会場名</th>
                         <th>開始日</th>
                         <th>終了日</th>
                         <th>時間</th>
@@ -832,6 +833,7 @@ export default function CsvImporter({
                         <tr key={i}>
                           <td>{s.clientName || '—'}</td>
                           <td>{s.siteName}</td>
+                          <td>{s.subSiteName || '—'}</td>
                           <td>{s.startDate}</td>
                           <td>{s.endDate}</td>
                           <td>{s.startTime}〜{s.endTime}</td>

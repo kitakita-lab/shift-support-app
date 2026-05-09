@@ -507,6 +507,8 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
     if (!q) return { filteredGroups: sortedGroups, filteredUngrouped: ungroupedSites };
     const match = (s: WorkSite) =>
       (s.displaySiteName ?? s.siteName).toLowerCase().includes(q) ||
+      s.siteName.toLowerCase().includes(q) ||
+      (s.subSiteName ?? '').toLowerCase().includes(q) ||
       (s.clientName ?? '').toLowerCase().includes(q) ||
       (s.rawSiteName ?? '').toLowerCase().includes(q);
     return {

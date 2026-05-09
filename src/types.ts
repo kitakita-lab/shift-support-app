@@ -18,11 +18,13 @@ export interface WorkSite {
   date: string;
   clientName?: string;
   siteName: string;
-  /** CSV取込・入力元の元表記。normalize後も消えない原本 */
+  /** CSVや入力元の元表記。normalize後も消えない原本 */
   rawSiteName?: string;
-  /** 画面・Excelで表示するための整えた現場名（+N名・※... 等を除去済み） */
+  /** サブ会場名・売場名・ブース名（Excelテンプレートの subSiteName 列から取得） */
+  subSiteName?: string;
+  /** 画面・Excel表示用の整えた現場名。buildDisplaySiteName() で生成 */
   displaySiteName?: string;
-  /** 表記ゆれ吸収・グルーピング・重複判定用の内部比較キー */
+  /** グルーピング・重複判定用の内部比較キー。buildNormalizedSiteKey() で生成 */
   normalizedSiteKey?: string;
   startTime: string;
   endTime: string;

@@ -5,14 +5,15 @@ import { ParseError } from './csvImport';
 // ─── 公開型 ──────────────────────────────────────────────────
 
 export interface ExcelSiteSession {
-  clientName: string;
-  siteName:   string;
-  startDate:  string;
-  endDate:    string;
-  startTime:  string;
-  endTime:    string;
+  clientName:  string;
+  siteName:    string;
+  subSiteName: string;
+  startDate:   string;
+  endDate:     string;
+  startTime:   string;
+  endTime:     string;
   requiredPeople: number;
-  memo:       string;
+  memo:        string;
 }
 
 export interface ExcelSiteParseResult {
@@ -163,8 +164,7 @@ export async function parseExcelSiteFile(file: File): Promise<ExcelSiteParseResu
     const subSiteName   = getText(subSiteNameCol);
     const memo          = getText(memoCol);
 
-    // subSiteName はスペース区切りで siteName に結合
-    const siteName = subSiteName ? `${siteNameRaw} ${subSiteName}` : siteNameRaw;
+    const siteName = siteNameRaw; // 親会場名のみ（subSiteName は独立フィールドで保持）
 
     const startDate = cellToDateString(getCell(startDateCol));
     const endDate   = cellToDateString(getCell(endDateCol));
@@ -198,7 +198,7 @@ export async function parseExcelSiteFile(file: File): Promise<ExcelSiteParseResu
       return;
     }
 
-    sessions.push({ clientName, siteName, startDate, endDate, startTime, endTime, requiredPeople, memo });
+    sessions.push({ clientName, siteName, subSiteName, startDate, endDate, startTime, endTime, requiredPeople, memo });
 
     // 日付範囲を展開して WorkSite を1件/日で生成
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -208,17 +208,17 @@ export async function parseExcelSiteFile(file: File): Promise<ExcelSiteParseResu
     while (cursor <= endD) {
       const date = `${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}-${pad(cursor.getDate())}`;
       valid.push({
-        id:              crypto.randomUUID(),
+        id:          crypto.randomUUID(),
         date,
         siteName,
-        rawSiteName:     siteName,
-        displaySiteName: siteName,
+        subSiteName: subSiteName || undefined,
+        rawSiteName: siteNameRaw,
         clientName,
         startTime,
         endTime,
         requiredPeople,
-        memo:            memo || '',
-        source:          'csv',
+        memo:        memo || '',
+        source:      'csv',
       });
       cursor.setDate(cursor.getDate() + 1);
     }
