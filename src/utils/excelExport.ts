@@ -1,7 +1,8 @@
 import ExcelJS from 'exceljs';
 import { Staff, WorkSite, ShiftAssignment } from '../types';
 import { sortedByStaffNo } from './staffUtils';
-import { formatSiteLabel, siteCompositeKey } from './siteUtils';
+import { formatSiteLabel } from './siteUtils';
+import { buildDisplaySiteName } from './shiftNormalize';
 
 // ── 共通スタイル定数 ───────────────────────────────────────
 
@@ -111,7 +112,8 @@ function styleSiteSheetRow(
 
 interface SiteBlock {
   venueLabel:       string;
-  siteName:         string;
+  siteName:         string;    // 親会場名のみ（displaySiteName ではない）
+  subSiteName?:     string;    // サブ会場名（独立フィールド）
   clientName?:      string;
   startDate:        string;
   endDate:          string;
@@ -140,7 +142,7 @@ function buildBlocks(
     // sessionId がある場合はそれを使う（正常系）。ない場合は複合キーで代替（旧データ互換）
     const key = site.sessionId
       ? `s:${site.sessionId}`
-      : `f:${siteCompositeKey(site.siteName, site.clientName)}:${site.startTime}:${site.endTime}`;
+      : `f:${(site.clientName ?? '').trim()}\0${site.siteName.trim()}\0${(site.subSiteName ?? '').trim()}:${site.startTime}:${site.endTime}`;
     if (!sessionMap.has(key)) sessionMap.set(key, []);
     sessionMap.get(key)!.push(site);
   }
@@ -159,12 +161,10 @@ function buildBlocks(
       return Math.max(acc, asgn ? asgn.shortage : x.requiredPeople);
     }, 0);
     const first = s[0];
-    // 表示には displaySiteName を優先（+N名・※... 等を除いた整形済み名）
-    // rawSiteName は原本表記確認用として WorkSite に保持しているが、Excel出力には含めない
-    const displayName = first.displaySiteName ?? first.siteName;
     blocks.push({
-      venueLabel:       formatSiteLabel(displayName, first.clientName),
-      siteName:         displayName,
+      venueLabel:       formatSiteLabel(buildDisplaySiteName(first.siteName, first.subSiteName), first.clientName),
+      siteName:         first.siteName,
+      subSiteName:      first.subSiteName,
       clientName:       first.clientName,
       startDate:        first.date,
       endDate:          s[s.length - 1].date,
@@ -193,8 +193,7 @@ function buildVenueGroups(
   const venueMap = new Map<string, SiteBlock[]>();
 
   for (const block of blocks) {
-    // siteCompositeKey は表示グループ用の一時キー（永続化しない）
-    const key = siteCompositeKey(block.siteName, block.clientName);
+    const key = `${(block.clientName ?? '').trim()}\0${block.siteName.trim()}\0${(block.subSiteName ?? '').trim()}`;
     if (!venueMap.has(key)) venueMap.set(key, []);
     venueMap.get(key)!.push(block);
   }
