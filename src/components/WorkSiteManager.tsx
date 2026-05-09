@@ -443,6 +443,9 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
   const [csvModalOverwrite, setCsvModalOverwrite] = useState(false);
   const csvFileRef = useRef<HTMLInputElement>(null);
 
+  // ── 現場検索
+  const [siteSearch, setSiteSearch] = useState('');
+
   // ── 登録プレビュー計算
   const previewCount = useMemo(() =>
     newSessions.reduce((sum, s) => sum + calcDayCount(s.startDate, s.endDate), 0),
@@ -460,7 +463,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
     [csvModalPreview]
   );
 
-  // ── グループ化
+  // ── グループ化・月優先ソート
   const { sortedGroups, ungroupedSites } = useMemo(() => {
     const grouped: Record<string, WorkSite[]> = {};
     const ungrouped: WorkSite[] = [];
@@ -473,12 +476,36 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
         groupId,
         sites: [...sites].sort((a, b) => a.date.localeCompare(b.date)),
       }))
-      .sort((a, b) => (a.sites[0]?.date ?? '').localeCompare(b.sites[0]?.date ?? ''));
+      .sort((a, b) => {
+        const aActive = a.sites.filter((s) => !s.isPlaceholder);
+        const bActive = b.sites.filter((s) => !s.isPlaceholder);
+        const aMonth  = aActive.filter((s) => s.date.startsWith(selectedMonth));
+        const bMonth  = bActive.filter((s) => s.date.startsWith(selectedMonth));
+        // 0: 当月あり, 1: 他月のみ, 2: 未登録
+        const aPri = aMonth.length > 0 ? 0 : aActive.length > 0 ? 1 : 2;
+        const bPri = bMonth.length > 0 ? 0 : bActive.length > 0 ? 1 : 2;
+        if (aPri !== bPri) return aPri - bPri;
+        const aDate = (aMonth[0] ?? aActive[0])?.date ?? '';
+        const bDate = (bMonth[0] ?? bActive[0])?.date ?? '';
+        return aDate.localeCompare(bDate);
+      });
     return {
       sortedGroups: groupEntries,
       ungroupedSites: [...ungrouped].sort((a, b) => a.date.localeCompare(b.date)),
     };
-  }, [workSites]);
+  }, [workSites, selectedMonth]);
+
+  // ── 検索フィルタ
+  const { filteredGroups, filteredUngrouped } = useMemo(() => {
+    const q = siteSearch.trim().toLowerCase();
+    if (!q) return { filteredGroups: sortedGroups, filteredUngrouped: ungroupedSites };
+    const match = (siteName: string, clientName?: string) =>
+      siteName.toLowerCase().includes(q) || (clientName ?? '').toLowerCase().includes(q);
+    return {
+      filteredGroups:   sortedGroups.filter(({ sites }) => match(sites[0]?.siteName ?? '', sites[0]?.clientName)),
+      filteredUngrouped: ungroupedSites.filter((s) => match(s.siteName, s.clientName)),
+    };
+  }, [sortedGroups, ungroupedSites, siteSearch]);
 
   // ── 新規現場登録 ────────────────────────────────────────────
 
@@ -922,8 +949,22 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
           </div>
         ) : (
           <div className="site-list">
+            <div className="site-search">
+              <input
+                type="search"
+                className="site-search__input"
+                placeholder="現場名・クライアント名で検索"
+                value={siteSearch}
+                onChange={(e) => setSiteSearch(e.target.value)}
+              />
+              {siteSearch && (
+                <span className="site-search__count">
+                  {filteredGroups.length + filteredUngrouped.length} / {sortedGroups.length + ungroupedSites.length}件
+                </span>
+              )}
+            </div>
 
-            {sortedGroups.map(({ groupId, sites }) => {
+            {filteredGroups.map(({ groupId, sites }) => {
               const isEditingSession    = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
               const activeSites          = sites.filter((s) => !s.isPlaceholder);
               const monthActiveSites     = activeSites.filter((s) => s.date.startsWith(selectedMonth));
@@ -1089,10 +1130,10 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
               );
             })}
 
-            {ungroupedSites.length > 0 && (
+            {filteredUngrouped.length > 0 && (
               <div className="site-ungrouped-section">
-                <p className="site-ungrouped-label">グループなし（{ungroupedSites.length}件）</p>
-                {ungroupedSites.map((site) => {
+                <p className="site-ungrouped-label">グループなし（{filteredUngrouped.length}件）</p>
+                {filteredUngrouped.map((site) => {
                   const isConvertingThis =
                     !sessionEditor?.isExistingGroup &&
                     (sessionEditor?.sourceIds.includes(site.id) ?? false);
