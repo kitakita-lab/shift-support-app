@@ -17,7 +17,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'worksite',  label: '現場管理' },
   { id: 'shift',     label: 'シフト作成' },
   { id: 'export',    label: '出力' },
-  { id: 'import',    label: 'CSVインポート' },
+  { id: 'import',    label: 'インポート' },
 ];
 
 function toYearMonth(d: Date): string {
