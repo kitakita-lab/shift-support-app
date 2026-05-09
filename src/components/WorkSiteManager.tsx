@@ -86,11 +86,11 @@ function peakColorClass(peak: number, avg: number): 'high' | 'medium' | 'normal'
 }
 
 // 連続日 + 同一時間帯（requiredPeople は無視）でグルーピングしたときの会期数・現場数を返す
-// normalizeSiteIdentity で表記ゆれを吸収したキーを使用
+// normalizedSiteKey または normalizeSiteIdentity で表記ゆれを吸収したキーを使用
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = normalizeSiteIdentity(site.siteName, site.clientName);
+    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -124,7 +124,8 @@ function buildCsvImportGroups(sites: WorkSite[]): WorkSite[] {
 
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of normalizedSites) {
-    const key = normalizeSiteIdentity(site.siteName, site.clientName);
+    // applySiteNormalize 後は normalizedSiteKey が保証されているが、型上 optional なので fallback
+    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -500,15 +501,17 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
     };
   }, [workSites, selectedMonth]);
 
-  // ── 検索フィルタ
+  // ── 検索フィルタ（displaySiteName / rawSiteName / clientName を対象）
   const { filteredGroups, filteredUngrouped } = useMemo(() => {
     const q = siteSearch.trim().toLowerCase();
     if (!q) return { filteredGroups: sortedGroups, filteredUngrouped: ungroupedSites };
-    const match = (siteName: string, clientName?: string) =>
-      siteName.toLowerCase().includes(q) || (clientName ?? '').toLowerCase().includes(q);
+    const match = (s: WorkSite) =>
+      (s.displaySiteName ?? s.siteName).toLowerCase().includes(q) ||
+      (s.clientName ?? '').toLowerCase().includes(q) ||
+      (s.rawSiteName ?? '').toLowerCase().includes(q);
     return {
-      filteredGroups:   sortedGroups.filter(({ sites }) => match(sites[0]?.siteName ?? '', sites[0]?.clientName)),
-      filteredUngrouped: ungroupedSites.filter((s) => match(s.siteName, s.clientName)),
+      filteredGroups:    sortedGroups.filter(({ sites }) => sites[0] ? match(sites[0]) : false),
+      filteredUngrouped: ungroupedSites.filter(match),
     };
   }, [sortedGroups, ungroupedSites, siteSearch]);
 
@@ -974,7 +977,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
               const activeSites          = sites.filter((s) => !s.isPlaceholder);
               const monthActiveSites     = activeSites.filter((s) => s.date.startsWith(selectedMonth));
               const monthDisplaySessions = groupSitesIntoDisplaySessions(monthActiveSites);
-              const siteName            = sites[0]?.siteName ?? '';
+              const siteName            = sites[0]?.displaySiteName ?? sites[0]?.siteName ?? '';
               const clientName          = sites[0]?.clientName ?? '';
               const isVenueOpen         = expandedVenues.has(groupId);
 
@@ -1146,7 +1149,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
                     <div key={site.id} className="site-card site-card--ungrouped">
                       <div className="site-header">
                         <div className="site-header__left">
-                          <div className="site-title">{formatSiteLabel(site.siteName, site.clientName)}</div>
+                          <div className="site-title">{formatSiteLabel(site.displaySiteName ?? site.siteName, site.clientName)}</div>
                           <div className="site-meta">{site.date}</div>
                         </div>
                         <div className="site-actions">

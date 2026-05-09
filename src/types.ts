@@ -18,6 +18,12 @@ export interface WorkSite {
   date: string;
   clientName?: string;
   siteName: string;
+  /** CSV取込・入力元の元表記。normalize後も消えない原本 */
+  rawSiteName?: string;
+  /** 画面・Excelで表示するための整えた現場名（+N名・※... 等を除去済み） */
+  displaySiteName?: string;
+  /** 表記ゆれ吸収・グルーピング・重複判定用の内部比較キー */
+  normalizedSiteKey?: string;
   startTime: string;
   endTime: string;
   requiredPeople: number;

@@ -102,7 +102,7 @@ function parseSiteDate(s: string): Date {
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = normalizeSiteIdentity(site.siteName, site.clientName);
+    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -323,7 +323,7 @@ export default function CsvImporter({
 
     const bySiteKey = new Map<string, WorkSite[]>();
     for (const site of normalizedSites) {
-      const key = normalizeSiteIdentity(site.siteName, site.clientName);
+      const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
       if (!bySiteKey.has(key)) bySiteKey.set(key, []);
       bySiteKey.get(key)!.push(site);
     }

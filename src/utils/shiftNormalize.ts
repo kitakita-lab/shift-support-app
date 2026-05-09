@@ -117,17 +117,28 @@ export function normalizeSiteIdentity(siteName: string, clientName?: string): st
  * CSV 取込した WorkSite に normalize を適用して返す。
  * groupId 付与前の `buildCsvImportGroups` / `applySiteImport` で使用。
  *
- * - cleanSiteName で "+N名"・"※..." を除去
- * - 括弧内クライアント名を抽出（clientName 未設定時のみ）
- * - siteName から括弧を除去（clientName へ移動済みのため）
+ * フィールドの役割:
+ * - rawSiteName     : 元の siteName を保存（原本確認・再処理用）。既に設定済みなら上書きしない
+ * - displaySiteName : 画面・Excel 表示用の整えた名前（+N名・※... 等を除去）
+ * - normalizedSiteKey: グルーピング・重複判定用の比較キー（スペース/括弧/全角を吸収）
+ * - siteName        : 既存互換のため displaySiteName と同値にする
  */
 export function applySiteNormalize(site: WorkSite): WorkSite {
+  const rawSiteName = site.rawSiteName ?? site.siteName;
   const cleaned = cleanSiteName(site.siteName);
   const m = cleaned.match(/[（(]([^）)]+)[）)]$/);
   const extractedClient = m ? m[1].trim() : undefined;
   const clientName = site.clientName?.trim() || extractedClient || '';
-  const siteName = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
-  return { ...site, siteName, clientName };
+  const displaySiteName = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
+  const normalizedSiteKey = normalizeSiteIdentity(displaySiteName, clientName);
+  return {
+    ...site,
+    siteName: displaySiteName,
+    rawSiteName,
+    displaySiteName,
+    clientName,
+    normalizedSiteKey,
+  };
 }
 
 /**
