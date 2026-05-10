@@ -74,6 +74,10 @@ function bigramSim(a: string, b: string): number {
   return (2 * intersection) / (ba.size + bb.size);
 }
 
+// 類似度閾値。低すぎると「イオン苗穂」と「イオン発寒」のような別会場が候補に出る。
+// 正規化一致は強制スコア 1.0 なので完全一致は必ず候補に出る。
+const CANDIDATE_THRESHOLD = 0.5;
+
 function findCandidates(
   rawSiteName: string,
   subSiteNameRaw: string,
@@ -81,11 +85,13 @@ function findCandidates(
 ): ExistingVenueCandidate[] {
   const normRaw = simpleNorm(rawSiteName + subSiteNameRaw);
   return groups
-    .map((g) => ({
-      ...g,
-      score: bigramSim(normRaw, simpleNorm(g.siteName + (g.subSiteName ?? ''))),
-    }))
-    .filter((c) => c.score >= 0.2)
+    .map((g) => {
+      const normGroup = simpleNorm(g.siteName + (g.subSiteName ?? ''));
+      // 正規化後が完全一致なら score 1.0 として必ず候補に出す
+      const score = normRaw === normGroup ? 1.0 : bigramSim(normRaw, normGroup);
+      return { ...g, score };
+    })
+    .filter((c) => c.score >= CANDIDATE_THRESHOLD)
     .sort((a, b) => b.score - a.score)
     .slice(0, 3);
 }
@@ -284,16 +290,27 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
     );
   }
 
-  function handleConfirmAllNew() {
+  function handleConfirmNoCandidates() {
+    const targets = decisions.filter((d) => d.candidates.length === 0);
+    if (targets.length === 0) return;
+    if (
+      !window.confirm(
+        `候補なしの ${targets.length}件を新規会場として確定します。\n` +
+        `既存候補がある会場は対象外です。\nよろしいですか？`,
+      )
+    ) return;
     setDecisions((prev) =>
-      prev.map((d) => ({
-        ...d,
-        choice: {
-          kind:        'new' as const,
-          siteName:    d.choice?.kind === 'new' ? d.choice.siteName    : d.rawSiteName,
-          subSiteName: d.choice?.kind === 'new' ? d.choice.subSiteName : d.subSiteNameRaw,
-        },
-      })),
+      prev.map((d) => {
+        if (d.candidates.length > 0) return d; // 候補ありは個別確認が必要
+        return {
+          ...d,
+          choice: {
+            kind:        'new' as const,
+            siteName:    d.choice?.kind === 'new' ? d.choice.siteName    : d.rawSiteName,
+            subSiteName: d.choice?.kind === 'new' ? d.choice.subSiteName : d.subSiteNameRaw,
+          },
+        };
+      }),
     );
   }
 
@@ -311,11 +328,13 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
     setTimeout(() => setSuccess(''), 6000);
   }
 
-  const requiredMapped = REQUIRED_MAPPING_KEYS.every((k) => mapping[k] !== null);
-  const allDecided     = decisions.length > 0 && decisions.every((d) => d.choice !== null);
-  const validRowCount  = parsedRows.filter((r) => r.errors.length === 0).length;
-  const errorRowCount  = parsedRows.filter((r) => r.errors.length > 0).length;
-  const currentIdx     = WIZARD_STEPS.findIndex((s) => s.key === step);
+  const requiredMapped    = REQUIRED_MAPPING_KEYS.every((k) => mapping[k] !== null);
+  const allDecided        = decisions.length > 0 && decisions.every((d) => d.choice !== null);
+  const validRowCount     = parsedRows.filter((r) => r.errors.length === 0).length;
+  const errorRowCount     = parsedRows.filter((r) => r.errors.length > 0).length;
+  const noCandidateCount  = decisions.filter((d) => d.candidates.length === 0).length;
+  const hasCandidateCount = decisions.filter((d) => d.candidates.length > 0).length;
+  const currentIdx        = WIZARD_STEPS.findIndex((s) => s.key === step);
 
   return (
     <div className="card">
@@ -456,16 +475,26 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
             <span className="import-summary__ok">
               会場 {decisions.length}件・有効行 {validRowCount}行
             </span>
+            {hasCandidateCount > 0 && (
+              <span className="wiz-badge wiz-badge--warning" style={{ marginLeft: 8 }}>
+                既存候補あり {hasCandidateCount}件
+              </span>
+            )}
             {errorRowCount > 0 && (
               <span className="import-summary__err">{errorRowCount}行はエラーのためスキップ</span>
             )}
           </div>
 
-          {decisions.length > 0 && (
+          {noCandidateCount > 0 && (
             <div className="wiz-venue-actions">
-              <button className="btn btn--ghost btn--sm" onClick={handleConfirmAllNew}>
-                全件新規として確定
+              <button className="btn btn--ghost btn--sm" onClick={handleConfirmNoCandidates}>
+                候補なし {noCandidateCount}件を新規として確定
               </button>
+              {hasCandidateCount > 0 && (
+                <span className="wiz-hint">
+                  ※ 既存候補がある {hasCandidateCount}件は個別に選択してください
+                </span>
+              )}
             </div>
           )}
 

@@ -18,13 +18,24 @@ export interface WorkSite {
   date: string;
   clientName?: string;
   siteName: string;
-  /** CSVや入力元の元表記。normalize後も消えない原本 */
+  /** 取り込み元の原文。変換前の確認・復元用。normalize後も上書きしない。 */
   rawSiteName?: string;
-  /** サブ会場名・売場名・ブース名（Excelテンプレートの subSiteName 列から取得） */
+  /**
+   * 物理的な区画・売場名。例: 2階ドラッグ側、センターコート
+   * siteName に混ぜない。空欄可。
+   */
   subSiteName?: string;
-  /** 画面・Excel表示用の整えた現場名。buildDisplaySiteName() で生成 */
+  /**
+   * UI表示・Excel表示専用。buildDisplaySiteName() で生成。
+   * 例: "Bivi新札幌（2階ドラッグ側）"
+   * 内部グルーピングキー・重複判定には使わない。
+   */
   displaySiteName?: string;
-  /** グルーピング・重複判定用の内部比較キー。buildNormalizedSiteKey() で生成 */
+  /**
+   * グルーピング・重複判定用の内部比較キー。buildNormalizedSiteKey() で生成。
+   * clientName + siteName + subSiteName を正規化・エイリアス変換して結合する。
+   * displaySiteName は使わない。
+   */
   normalizedSiteKey?: string;
   startTime: string;
   endTime: string;
