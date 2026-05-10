@@ -115,8 +115,10 @@ function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCo
 // CSV パース済みデータに normalize + groupId / sessionId を付与して WorkSite[] を返す
 // applySiteNormalize で "+N名"・"※..."・括弧クライアント名を処理し、
 // normalizeSiteIdentity で表記ゆれ吸収した同一性キーでグループ化する
-function buildCsvImportGroups(sites: WorkSite[]): WorkSite[] {
-  const now = new Date();
+function buildCsvImportGroups(sites: WorkSite[], sourceFileName?: string): WorkSite[] {
+  const now           = new Date();
+  const importBatchId = createId();
+  const importedAt    = now.toISOString();
   const pad = (n: number) => String(n).padStart(2, '0');
   const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
@@ -138,7 +140,15 @@ function buildCsvImportGroups(sites: WorkSite[]): WorkSite[] {
     const sorted = [...siteGroup].sort((a, b) => a.date.localeCompare(b.date));
     let currentSessionId = createId();
     let prev = sorted[0];
-    result.push({ ...prev, groupId, groupLabel: `${venueLabel}：${importLabel}`, sessionId: currentSessionId });
+    result.push({
+      ...prev,
+      groupId,
+      groupLabel: `${venueLabel}：${importLabel}`,
+      sessionId: currentSessionId,
+      importBatchId,
+      importedAt,
+      ...(sourceFileName ? { sourceFileName } : {}),
+    });
     for (let i = 1; i < sorted.length; i++) {
       const cur = sorted[i];
       const sameSettings = cur.startTime === prev.startTime && cur.endTime === prev.endTime;
@@ -148,7 +158,15 @@ function buildCsvImportGroups(sites: WorkSite[]): WorkSite[] {
       if (!sameSettings || dayDiff !== 1) {
         currentSessionId = createId();
       }
-      result.push({ ...cur, groupId, groupLabel: `${venueLabel}：${importLabel}`, sessionId: currentSessionId });
+      result.push({
+        ...cur,
+        groupId,
+        groupLabel: `${venueLabel}：${importLabel}`,
+        sessionId: currentSessionId,
+        importBatchId,
+        importedAt,
+        ...(sourceFileName ? { sourceFileName } : {}),
+      });
       prev = cur;
     }
   }
@@ -739,7 +757,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
 
   function handleModalImport() {
     if (!csvModalPreview?.valid.length) return;
-    const groups = buildCsvImportGroups(csvModalPreview.valid);
+    const groups = buildCsvImportGroups(csvModalPreview.valid, csvModalPreview.fileName);
     const base = csvModalOverwrite
       ? workSites.filter((s) => s.source !== 'csv')
       : workSites;

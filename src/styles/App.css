@@ -2511,3 +2511,47 @@ details[open] .paste-details__summary::before {
 .wiz-venue-card__edit .form-input {
   max-width: 240px;
 }
+
+/* ── Import Batch History ─────────────────────────────── */
+.import-batch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.import-batch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.import-batch-row__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.import-batch-row__file {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.import-batch-row__meta {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.import-batch-row__actions {
+  flex-shrink: 0;
+}

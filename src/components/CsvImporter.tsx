@@ -59,6 +59,100 @@ interface DaysOffPreview {
 type StaffPreview = StaffParseResult & { fileName: string };
 type SitePreview  = SiteParseResult  & { fileName: string };
 
+// ── ImportBatchCard ───────────────────────────────────────────
+
+interface ImportBatch {
+  importBatchId: string;
+  sourceFileName?: string;
+  importedAt?: string;
+  venueCount: number;
+  siteCount: number;
+}
+
+function buildImportBatches(workSites: WorkSite[]): ImportBatch[] {
+  const map = new Map<string, { groupIds: Set<string>; count: number; sample: WorkSite }>();
+  for (const site of workSites) {
+    if (!site.importBatchId || site.isPlaceholder) continue;
+    if (!map.has(site.importBatchId)) {
+      map.set(site.importBatchId, { groupIds: new Set(), count: 0, sample: site });
+    }
+    const entry = map.get(site.importBatchId)!;
+    entry.count++;
+    if (site.groupId) entry.groupIds.add(site.groupId);
+  }
+  return [...map.entries()]
+    .map(([id, { groupIds, count, sample }]) => ({
+      importBatchId: id,
+      sourceFileName: sample.sourceFileName,
+      importedAt:     sample.importedAt,
+      venueCount:     groupIds.size,
+      siteCount:      count,
+    }))
+    .sort((a, b) => (b.importedAt ?? '').localeCompare(a.importedAt ?? ''));
+}
+
+function formatImportedAt(iso: string): string {
+  try {
+    const d = new Date(iso);
+    const y  = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const dy = String(d.getDate()).padStart(2, '0');
+    const h  = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${y}-${mo}-${dy} ${h}:${mi}`;
+  } catch {
+    return iso;
+  }
+}
+
+function ImportBatchCard({
+  workSites,
+  onDeleteBatch,
+}: {
+  workSites: WorkSite[];
+  onDeleteBatch: (batchId: string) => void;
+}) {
+  const batches = buildImportBatches(workSites);
+  if (batches.length === 0) return null;
+  return (
+    <div className="card">
+      <h3>インポート履歴</h3>
+      <p className="section-desc">
+        取り込み済みデータをバッチ単位で確認・削除できます。
+      </p>
+      <div className="import-batch-list">
+        {batches.map((batch) => (
+          <div key={batch.importBatchId} className="import-batch-row">
+            <div className="import-batch-row__info">
+              <span className="import-batch-row__file">
+                {batch.sourceFileName ?? '（ファイル名不明）'}
+              </span>
+              <span className="import-batch-row__meta">
+                {batch.importedAt ? formatImportedAt(batch.importedAt) : '日時不明'}
+                　{batch.venueCount}会場・{batch.siteCount}日分
+              </span>
+            </div>
+            <button
+              className="btn btn--danger btn--sm"
+              onClick={() => {
+                const label = batch.sourceFileName ?? 'このバッチ';
+                if (window.confirm(
+                  `「${label}」の取り込みデータ（${batch.venueCount}会場・${batch.siteCount}日分）を削除します。\n` +
+                  `この操作は元に戻せません。よろしいですか？`
+                )) {
+                  onDeleteBatch(batch.importBatchId);
+                }
+              }}
+            >
+              削除
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Props ─────────────────────────────────────────────────────
 
 interface Props {
@@ -70,6 +164,7 @@ interface Props {
   onImportSites: (imported: WorkSite[], overwrite: boolean) => void;
   onApplyDaysOff: (updates: { id: string; requestedDaysOff: string[] }[]) => void;
   onDeleteCsvSites: () => void;
+  onDeleteImportBatch: (importBatchId: string) => void;
   selectedMonth: string;
 }
 
@@ -209,6 +304,7 @@ export default function CsvImporter({
   onImportSites,
   onApplyDaysOff,
   onDeleteCsvSites,
+  onDeleteImportBatch,
   selectedMonth,
 }: Props) {
   const [staffPreview,   setStaffPreview]   = useState<StaffPreview | null>(null);
@@ -348,8 +444,13 @@ export default function CsvImporter({
     setTimeout(() => setStaffSuccess(''), 5000);
   }
 
-  function applySiteImport(validSites: WorkSite[]): { venueCount: number; sessionCount: number } {
-    const now = new Date();
+  function applySiteImport(
+    validSites: WorkSite[],
+    sourceFileName?: string,
+  ): { venueCount: number; sessionCount: number } {
+    const now           = new Date();
+    const importBatchId = crypto.randomUUID();
+    const importedAt    = now.toISOString();
     const pad = (n: number) => String(n).padStart(2, '0');
     const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
@@ -375,7 +476,13 @@ export default function CsvImporter({
       sessionCount++;
       let prev = sorted[0];
       withGroup.push({
-        ...prev, groupId, groupLabel: `${venueLabel}：${importLabel}`, sessionId: currentSessionId,
+        ...prev,
+        groupId,
+        groupLabel: `${venueLabel}：${importLabel}`,
+        sessionId: currentSessionId,
+        importBatchId,
+        importedAt,
+        ...(sourceFileName ? { sourceFileName } : {}),
       });
 
       for (let i = 1; i < sorted.length; i++) {
@@ -389,7 +496,13 @@ export default function CsvImporter({
           sessionCount++;
         }
         withGroup.push({
-          ...cur, groupId, groupLabel: `${venueLabel}：${importLabel}`, sessionId: currentSessionId,
+          ...cur,
+          groupId,
+          groupLabel: `${venueLabel}：${importLabel}`,
+          sessionId: currentSessionId,
+          importBatchId,
+          importedAt,
+          ...(sourceFileName ? { sourceFileName } : {}),
         });
         prev = cur;
       }
@@ -401,7 +514,7 @@ export default function CsvImporter({
 
   function handleImportSites() {
     if (!sitePreview?.valid.length) return;
-    const { venueCount, sessionCount } = applySiteImport(sitePreview.valid);
+    const { venueCount, sessionCount } = applySiteImport(sitePreview.valid, sitePreview.fileName);
     clearSitePreview();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
     setSiteSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
@@ -422,7 +535,7 @@ export default function CsvImporter({
 
   function handleImportPasteSites() {
     if (!pasteSitePreview?.valid.length) return;
-    const { venueCount, sessionCount } = applySiteImport(pasteSitePreview.valid);
+    const { venueCount, sessionCount } = applySiteImport(pasteSitePreview.valid, 'CSV貼り付け');
     clearPasteSiteText();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
     setPasteSiteSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
@@ -431,7 +544,7 @@ export default function CsvImporter({
 
   function handleImportExcel() {
     if (!excelPreview?.valid.length) return;
-    const { venueCount, sessionCount } = applySiteImport(excelPreview.valid);
+    const { venueCount, sessionCount } = applySiteImport(excelPreview.valid, excelFileName);
     clearExcelPreview();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
     setExcelSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
@@ -462,6 +575,9 @@ export default function CsvImporter({
 
       {/* ── 会期リストインポートウィザード ──────────────── */}
       <ImportWizard existingWorkSites={workSites} onImportSites={onImportSites} />
+
+      {/* ── インポート履歴 ────────────────────────────────── */}
+      <ImportBatchCard workSites={workSites} onDeleteBatch={onDeleteImportBatch} />
 
       {/* ── スタッフCSV ─────────────────────────────────── */}
       <div className="card">

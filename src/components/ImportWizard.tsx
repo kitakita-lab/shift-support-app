@@ -34,9 +34,16 @@ interface VenueDecision {
   clientName:    string;
   sessionCount:  number;
   candidates:    ExistingVenueCandidate[];
+  /**
+   * null = まだ未確定（ユーザーが選択していない）
+   * 'new'      = 新規会場として登録
+   * 'existing' = 既存会場に紐付け
+   * 'skip'     = 取り込まない
+   */
   choice:
     | { kind: 'new';      siteName: string; subSiteName: string }
     | { kind: 'existing'; groupId: string; siteName: string; subSiteName: string }
+    | { kind: 'skip' }
     | null;
 }
 
@@ -154,9 +161,12 @@ function expandDateRange(startDate: string, endDate: string): string[] {
 }
 
 function buildImportSites(
-  parsedRows: ParsedSessionRow[],
-  decisions:  VenueDecision[],
-  importLabel: string,
+  parsedRows:     ParsedSessionRow[],
+  decisions:      VenueDecision[],
+  importLabel:    string,
+  importBatchId:  string,
+  importedAt:     string,
+  sourceFileName: string,
 ): WorkSite[] {
   const decisionMap = new Map<string, VenueDecision>();
   for (const d of decisions) decisionMap.set(d.rawKey, d);
@@ -164,20 +174,21 @@ function buildImportSites(
   const result: WorkSite[] = [];
   for (const row of parsedRows) {
     if (row.errors.length > 0) continue;
-    const rawKey  = `${row.rawSiteName}\0${row.subSiteNameRaw}`;
+    const rawKey   = `${row.rawSiteName}\0${row.subSiteNameRaw}`;
     const decision = decisionMap.get(rawKey);
     if (!decision?.choice) continue;
+    if (decision.choice.kind === 'skip') continue; // 取り込まない
 
     const { choice, clientName } = decision;
-    const groupId    = choice.kind === 'existing' ? choice.groupId : crypto.randomUUID();
-    const siteName   = choice.siteName;
+    const groupId     = choice.kind === 'existing' ? choice.groupId : crypto.randomUUID();
+    const siteName    = choice.siteName;
     const subSiteName = choice.subSiteName.trim() || undefined;
-    const venuePart  =
+    const venuePart   =
       siteName +
       (subSiteName ? `（${subSiteName}）` : '') +
       (clientName?.trim() ? `　${clientName.trim()}` : '');
-    const groupLabel = `${venuePart}：${importLabel}`;
-    const sessionId  = crypto.randomUUID();
+    const groupLabel  = `${venuePart}：${importLabel}`;
+    const sessionId   = crypto.randomUUID();
 
     for (const date of expandDateRange(row.startDate, row.endDate)) {
       result.push(
@@ -196,6 +207,9 @@ function buildImportSites(
           requiredPeople: row.requiredPeople ?? 1,
           memo:           row.memo,
           source:         'csv',
+          importBatchId,
+          importedAt,
+          sourceFileName: sourceFileName || undefined,
         }),
       );
     }
@@ -291,17 +305,20 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
   }
 
   function handleConfirmNoCandidates() {
-    const targets = decisions.filter((d) => d.candidates.length === 0);
+    const targets = decisions.filter(
+      (d) => d.candidates.length === 0 && d.choice?.kind !== 'skip',
+    );
     if (targets.length === 0) return;
     if (
       !window.confirm(
         `候補なしの ${targets.length}件を新規会場として確定します。\n` +
-        `既存候補がある会場は対象外です。\nよろしいですか？`,
+        `既存候補がある会場・スキップ設定済みは対象外です。\nよろしいですか？`,
       )
     ) return;
     setDecisions((prev) =>
       prev.map((d) => {
-        if (d.candidates.length > 0) return d; // 候補ありは個別確認が必要
+        if (d.candidates.length > 0)    return d; // 候補ありは個別確認が必要
+        if (d.choice?.kind === 'skip')  return d; // ユーザーが明示的にスキップした行は保持
         return {
           ...d,
           choice: {
@@ -315,12 +332,15 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
   }
 
   function handleImport() {
-    const now = new Date();
+    const now           = new Date();
+    const importBatchId = crypto.randomUUID();
+    const importedAt    = now.toISOString();
     const pad = (n: number) => String(n).padStart(2, '0');
     const label =
       `会期リスト取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
       `${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    const sites      = buildImportSites(parsedRows, decisions, label);
+    const srcFile = rawSheet?.fileName ?? '';
+    const sites   = buildImportSites(parsedRows, decisions, label, importBatchId, importedAt, srcFile);
     const venueCount = new Set(sites.map((s) => s.groupId)).size;
     onImportSites(sites, false);
     reset();
@@ -332,9 +352,19 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
   const allDecided        = decisions.length > 0 && decisions.every((d) => d.choice !== null);
   const validRowCount     = parsedRows.filter((r) => r.errors.length === 0).length;
   const errorRowCount     = parsedRows.filter((r) => r.errors.length > 0).length;
-  const noCandidateCount  = decisions.filter((d) => d.candidates.length === 0).length;
+  const noCandidateCount  = decisions.filter(
+    (d) => d.candidates.length === 0 && d.choice?.kind !== 'skip',
+  ).length;
   const hasCandidateCount = decisions.filter((d) => d.candidates.length > 0).length;
-  const currentIdx        = WIZARD_STEPS.findIndex((s) => s.key === step);
+  const skipCount         = decisions.filter((d) => d.choice?.kind === 'skip').length;
+  // 取り込む（スキップ以外の）行数
+  const importableRowCount = parsedRows.filter((r) => {
+    if (r.errors.length > 0) return false;
+    const key = `${r.rawSiteName}\0${r.subSiteNameRaw}`;
+    const dec = decisions.find((d) => d.rawKey === key);
+    return dec?.choice?.kind !== 'skip';
+  }).length;
+  const currentIdx = WIZARD_STEPS.findIndex((s) => s.key === step);
 
   return (
     <div className="card">
@@ -399,7 +429,7 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
       {step === 'columns' && rawSheet && (
         <div className="wiz-body">
           <div className="form-row">
-            <label className="form-label">クライアント名（列未設定時のデフォルト）</label>
+            <label className="form-label">クライアント名（デフォルト補完）</label>
             <input
               type="text"
               className="form-input form-input--short"
@@ -408,6 +438,10 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
               placeholder="例：Y!mobile"
             />
           </div>
+          <p className="wiz-hint" style={{ marginTop: 0 }}>
+            ※ ファイル内に clientName 列が設定されている場合はその値を優先します。
+            未設定または空欄の行のみ、ここで入力した値を補完します。
+          </p>
 
           <div className="table-wrapper" style={{ marginTop: 14 }}>
             <table className="data-table">
@@ -480,6 +514,11 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
                 既存候補あり {hasCandidateCount}件
               </span>
             )}
+            {skipCount > 0 && (
+              <span className="wiz-badge" style={{ marginLeft: 8, background: '#f3f4f6', color: '#6b7280' }}>
+                スキップ {skipCount}件
+              </span>
+            )}
             {errorRowCount > 0 && (
               <span className="import-summary__err">{errorRowCount}行はエラーのためスキップ</span>
             )}
@@ -518,9 +557,9 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
             <button
               className="btn btn--primary"
               onClick={handleImport}
-              disabled={!allDecided || decisions.length === 0}
+              disabled={!allDecided || importableRowCount === 0}
             >
-              取り込む（{validRowCount}行）
+              取り込む（{importableRowCount}行）
             </button>
           </div>
         </div>
@@ -543,6 +582,7 @@ function VenueDecisionCard({ decision, onChoiceChange, onNameChange }: VenueDeci
   const hasCandidates = decision.candidates.length > 0;
   const isNew      = decision.choice?.kind === 'new';
   const isExisting = decision.choice?.kind === 'existing';
+  const isSkip     = decision.choice?.kind === 'skip';
 
   return (
     <div className={`wiz-venue-card${hasCandidates ? ' wiz-venue-card--candidates' : ''}`}>
@@ -644,6 +684,16 @@ function VenueDecisionCard({ decision, onChoiceChange, onNameChange }: VenueDeci
             )}
           </>
         )}
+
+        {/* Skip option */}
+        <label className="wiz-radio-label">
+          <input
+            type="radio"
+            checked={isSkip}
+            onChange={() => onChoiceChange({ kind: 'skip' })}
+          />
+          取り込まない
+        </label>
       </div>
     </div>
   );

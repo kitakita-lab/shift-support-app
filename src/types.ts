@@ -43,6 +43,12 @@ export interface WorkSite {
   memo: string;
   isPlaceholder?: boolean;
   source?: 'manual' | 'csv';
+  /** 取り込み元ファイル名（例: '会期リスト2026-05.xlsx'）。Supabase移行後も保持する。 */
+  sourceFileName?: string;
+  /** 取り込み日時（ISO8601）。バッチ一覧表示・差分管理に使用。 */
+  importedAt?: string;
+  /** 同一インポート操作のバッチID。バッチ単位での削除・管理に使用。 */
+  importBatchId?: string;
 }
 
 export interface ShiftAssignment {

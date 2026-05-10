@@ -109,6 +109,16 @@ export default function App() {
     setAssignments((prev) => prev.filter((a) => !monthSiteIds.has(a.siteId)));
   }
 
+  function handleDeleteImportBatch(importBatchId: string) {
+    const batchIds = new Set(
+      workSites.filter((s) => s.importBatchId === importBatchId).map((s) => s.id)
+    );
+    if (batchIds.size > 0) {
+      setAssignments((prev) => prev.filter((a) => !batchIds.has(a.siteId)));
+    }
+    setWorkSites((prev) => prev.filter((s) => s.importBatchId !== importBatchId));
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -223,6 +233,7 @@ export default function App() {
               }
               setWorkSites((prev) => prev.filter((s) => s.source !== 'csv'));
             }}
+            onDeleteImportBatch={handleDeleteImportBatch}
             selectedMonth={selectedMonth}
           />
         )}
