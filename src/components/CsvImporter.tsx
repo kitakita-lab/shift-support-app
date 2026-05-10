@@ -15,6 +15,7 @@ import {
   DaysOffRow,
 } from '../utils/csvImport';
 import { normalizeShiftRow, normalizeSiteIdentity, applySiteNormalize } from '../utils/shiftNormalize';
+import { diffImportBatch, ImportDiffResult } from '../utils/importDiff';
 import { nextStaffNo } from '../utils/staffUtils';
 import { formatSiteLabel } from '../utils/siteUtils';
 import {
@@ -23,7 +24,6 @@ import {
   ExcelSiteParseResult,
 } from '../utils/excelImport';
 
-// 貼り付けインポートのサンプルテキスト（コピー・テキストエリア貼り付け用）
 const PASTE_SAMPLE_TEXT =
   `date,siteName,clientName,startTime,endTime,requiredPeople\n` +
   `2026-01-05,札幌駅前,Y!mobile,10:00,18:00,2\n` +
@@ -59,7 +59,7 @@ interface DaysOffPreview {
 type StaffPreview = StaffParseResult & { fileName: string };
 type SitePreview  = SiteParseResult  & { fileName: string };
 
-// ── ImportBatchCard ───────────────────────────────────────────
+// ── ImportBatch ───────────────────────────────────────────────
 
 interface ImportBatch {
   importBatchId: string;
@@ -105,54 +105,6 @@ function formatImportedAt(iso: string): string {
   }
 }
 
-function ImportBatchCard({
-  workSites,
-  onDeleteBatch,
-}: {
-  workSites: WorkSite[];
-  onDeleteBatch: (batchId: string) => void;
-}) {
-  const batches = buildImportBatches(workSites);
-  if (batches.length === 0) return null;
-  return (
-    <div className="card">
-      <h3>インポート履歴</h3>
-      <p className="section-desc">
-        取り込み済みデータをバッチ単位で確認・削除できます。
-      </p>
-      <div className="import-batch-list">
-        {batches.map((batch) => (
-          <div key={batch.importBatchId} className="import-batch-row">
-            <div className="import-batch-row__info">
-              <span className="import-batch-row__file">
-                {batch.sourceFileName ?? '（ファイル名不明）'}
-              </span>
-              <span className="import-batch-row__meta">
-                {batch.importedAt ? formatImportedAt(batch.importedAt) : '日時不明'}
-                　{batch.venueCount}会場・{batch.siteCount}日分
-              </span>
-            </div>
-            <button
-              className="btn btn--danger btn--sm"
-              onClick={() => {
-                const label = batch.sourceFileName ?? 'このバッチ';
-                if (window.confirm(
-                  `「${label}」の取り込みデータ（${batch.venueCount}会場・${batch.siteCount}日分）を削除します。\n` +
-                  `この操作は元に戻せません。よろしいですか？`
-                )) {
-                  onDeleteBatch(batch.importBatchId);
-                }
-              }}
-            >
-              削除
-            </button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // ── Props ─────────────────────────────────────────────────────
 
 interface Props {
@@ -165,6 +117,7 @@ interface Props {
   onApplyDaysOff: (updates: { id: string; requestedDaysOff: string[] }[]) => void;
   onDeleteCsvSites: () => void;
   onDeleteImportBatch: (importBatchId: string) => void;
+  onReimportBatch: (oldBatchId: string, newSites: WorkSite[]) => void;
   selectedMonth: string;
 }
 
@@ -191,16 +144,106 @@ function ErrorList({ errors }: { errors: ParseError[] }) {
   );
 }
 
+function DiffSummary({ diff }: { diff: ImportDiffResult }) {
+  const total = diff.addedCount + diff.removedCount + diff.updatedCount + diff.unchangedCount;
+  return (
+    <div className="reimport-diff">
+      <div className="reimport-diff__title">変更内容プレビュー（日単位）</div>
+      <div className="reimport-diff__rows">
+        {diff.addedCount > 0 && (
+          <span className="reimport-diff__badge reimport-diff__badge--added">
+            追加 {diff.addedCount}日
+          </span>
+        )}
+        {diff.removedCount > 0 && (
+          <span className="reimport-diff__badge reimport-diff__badge--removed">
+            削除 {diff.removedCount}日
+          </span>
+        )}
+        {diff.updatedCount > 0 && (
+          <span className="reimport-diff__badge reimport-diff__badge--updated">
+            変更 {diff.updatedCount}日
+          </span>
+        )}
+        <span className="reimport-diff__badge reimport-diff__badge--unchanged">
+          変更なし {diff.unchangedCount}日
+        </span>
+        <span className="reimport-diff__total">→ 合計 {total}日</span>
+      </div>
+      <p className="wiz-hint">確定すると旧バッチが削除され、新データが登録されます。手動データは保護されます。</p>
+    </div>
+  );
+}
+
+// ── ImportBatchCard ────────────────────────────────────────────
+
+function ImportBatchCard({
+  workSites,
+  onDeleteBatch,
+  onStartReimport,
+}: {
+  workSites: WorkSite[];
+  onDeleteBatch: (batchId: string) => void;
+  onStartReimport: (batch: ImportBatch) => void;
+}) {
+  const batches = buildImportBatches(workSites);
+  if (batches.length === 0) return null;
+  return (
+    <div className="card">
+      <h3>インポート履歴</h3>
+      <p className="section-desc">
+        取り込み済みデータをバッチ単位で確認・再インポート・削除できます。
+        手動で作成・編集したデータは削除・上書きされません。
+      </p>
+      <div className="import-batch-list">
+        {batches.map((batch) => (
+          <div key={batch.importBatchId} className="import-batch-row">
+            <div className="import-batch-row__info">
+              <span className="import-batch-row__file">
+                {batch.sourceFileName ?? '（ファイル名不明）'}
+              </span>
+              <span className="import-batch-row__meta">
+                {batch.importedAt ? formatImportedAt(batch.importedAt) : '日時不明'}
+                　{batch.venueCount}会場・{batch.siteCount}日分
+              </span>
+            </div>
+            <div className="import-batch-row__actions">
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={() => onStartReimport(batch)}
+              >
+                再インポート
+              </button>
+              <button
+                className="btn btn--danger btn--sm"
+                onClick={() => {
+                  const label = batch.sourceFileName ?? 'このバッチ';
+                  if (window.confirm(
+                    `「${label}」の取り込みデータ（${batch.venueCount}会場・${batch.siteCount}日分）を削除します。\n` +
+                    `手動で作成・編集したデータは削除されません。\n` +
+                    `この操作は元に戻せません。よろしいですか？`
+                  )) {
+                    onDeleteBatch(batch.importBatchId);
+                  }
+                }}
+              >
+                削除
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Helpers ───────────────────────────────────────────────────
 
-// YYYY-MM-DD をローカル日付として解釈（UTC midnight ずれ回避）
 function parseSiteDate(s: string): Date {
   const [y, m, d] = s.split('-').map(Number);
   return new Date(y, m - 1, d);
 }
 
-// 連続日 + 同一時間帯でグルーピングしたときの会期数・現場数を返す（プレビュー表示用）
-// normalizeSiteIdentity で表記ゆれを吸収したキーを使用
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
@@ -305,6 +348,7 @@ export default function CsvImporter({
   onApplyDaysOff,
   onDeleteCsvSites,
   onDeleteImportBatch,
+  onReimportBatch,
   selectedMonth,
 }: Props) {
   const [staffPreview,   setStaffPreview]   = useState<StaffPreview | null>(null);
@@ -324,11 +368,17 @@ export default function CsvImporter({
   const [daysOffMode,        setDaysOffMode]        = useState<DaysOffMode>('replace');
   const [overwriteMode,      setOverwriteMode]      = useState(false);
 
+  // 再インポート状態
+  const [reimportBatch,    setReimportBatch]    = useState<ImportBatch | null>(null);
+  const [reimportFileName, setReimportFileName] = useState('');
+  const [reimportSites,    setReimportSites]    = useState<WorkSite[] | null>(null);
+  const [reimportDiff,     setReimportDiff]     = useState<ImportDiffResult | null>(null);
+  const [reimportLoading,  setReimportLoading]  = useState(false);
+
   useEffect(() => {
     setDaysOffTargetMonth(selectedMonth);
   }, [selectedMonth]);
 
-  // 連続日結合後の会期数・現場数（プレビュー表示用）
   const sitePreviewCounts = useMemo(
     () => sitePreview ? countImportSessions(sitePreview.valid) : { sessionCount: 0, venueCount: 0 },
     [sitePreview]
@@ -337,8 +387,6 @@ export default function CsvImporter({
     () => pasteSitePreview ? countImportSessions(pasteSitePreview.valid) : { sessionCount: 0, venueCount: 0 },
     [pasteSitePreview]
   );
-  // normalize 経由のプレビュー行（source-of-truth を NormalizedShiftRow に寄せる準備）
-  // TODO: 将来的に applySiteImport も NormalizedShiftRow[] ベースへ移行予定
   const pasteNormalizedRows = useMemo<NormalizedShiftRow[]>(
     () => pasteSitePreview?.valid.map((s) => normalizeShiftRow(s)) ?? [],
     [pasteSitePreview]
@@ -353,6 +401,7 @@ export default function CsvImporter({
   const siteInputRef    = useRef<HTMLInputElement>(null);
   const daysOffInputRef = useRef<HTMLInputElement>(null);
   const excelInputRef   = useRef<HTMLInputElement>(null);
+  const reimportFileRef = useRef<HTMLInputElement>(null);
 
   // ── File readers ────────────────────────────────────────────
 
@@ -428,26 +477,12 @@ export default function CsvImporter({
     if (excelInputRef.current) excelInputRef.current.value = '';
   }
 
-  // ── Import / apply handlers ──────────────────────────────────
+  // ── buildSiteGroups (純関数: groupId / sessionId / バッチ情報を付与) ──
 
-  function handleImportStaff() {
-    if (!staffPreview?.valid.length) return;
-    let nextNo = parseInt(nextStaffNo(staff), 10);
-    const withNos = staffPreview.valid.map((s) => ({
-      ...s,
-      staffNo: s.staffNo || String(nextNo++),
-    }));
-    const count = withNos.length;
-    onImportStaff(withNos);
-    clearStaffPreview();
-    setStaffSuccess(`${count}件のスタッフを追加しました（合計 ${staff.length + count}件）`);
-    setTimeout(() => setStaffSuccess(''), 5000);
-  }
-
-  function applySiteImport(
+  function buildSiteGroups(
     validSites: WorkSite[],
     sourceFileName?: string,
-  ): { venueCount: number; sessionCount: number } {
+  ): { sites: WorkSite[]; venueCount: number; sessionCount: number } {
     const now           = new Date();
     const importBatchId = crypto.randomUUID();
     const importedAt    = now.toISOString();
@@ -508,8 +543,32 @@ export default function CsvImporter({
       }
     }
 
-    onImportSites(withGroup, overwriteMode);
-    return { venueCount: bySiteKey.size, sessionCount };
+    return { sites: withGroup, venueCount: bySiteKey.size, sessionCount };
+  }
+
+  // ── Import / apply handlers ──────────────────────────────────
+
+  function handleImportStaff() {
+    if (!staffPreview?.valid.length) return;
+    let nextNo = parseInt(nextStaffNo(staff), 10);
+    const withNos = staffPreview.valid.map((s) => ({
+      ...s,
+      staffNo: s.staffNo || String(nextNo++),
+    }));
+    const count = withNos.length;
+    onImportStaff(withNos);
+    clearStaffPreview();
+    setStaffSuccess(`${count}件のスタッフを追加しました（合計 ${staff.length + count}件）`);
+    setTimeout(() => setStaffSuccess(''), 5000);
+  }
+
+  function applySiteImport(
+    validSites: WorkSite[],
+    sourceFileName?: string,
+  ): { venueCount: number; sessionCount: number } {
+    const { sites, venueCount, sessionCount } = buildSiteGroups(validSites, sourceFileName);
+    onImportSites(sites, overwriteMode);
+    return { venueCount, sessionCount };
   }
 
   function handleImportSites() {
@@ -567,6 +626,61 @@ export default function CsvImporter({
     setTimeout(() => setDaysOffSuccess(''), 5000);
   }
 
+  // ── 再インポートハンドラ ──────────────────────────────────────
+
+  function handleStartReimport(batch: ImportBatch) {
+    setReimportBatch(batch);
+    setReimportSites(null);
+    setReimportDiff(null);
+    setReimportFileName('');
+  }
+
+  function handleCancelReimport() {
+    setReimportBatch(null);
+    setReimportSites(null);
+    setReimportDiff(null);
+    setReimportFileName('');
+    if (reimportFileRef.current) reimportFileRef.current.value = '';
+  }
+
+  async function handleReimportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !reimportBatch) return;
+    setReimportLoading(true);
+    try {
+      let rawSites: WorkSite[];
+      if (file.name.toLowerCase().endsWith('.xlsx')) {
+        const result = await parseExcelSiteFile(file);
+        rawSites = result.valid;
+      } else {
+        const text = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload  = (ev) => resolve((ev.target?.result ?? '') as string);
+          reader.onerror = () => reject(new Error('読み込みに失敗しました'));
+          reader.readAsText(file, 'UTF-8');
+        });
+        rawSites = parseSiteCSV(text).valid;
+      }
+      const oldSites = workSites.filter((s) => s.importBatchId === reimportBatch.importBatchId);
+      const diff = diffImportBatch(oldSites, rawSites);
+      setReimportSites(rawSites);
+      setReimportDiff(diff);
+      setReimportFileName(file.name);
+    } finally {
+      setReimportLoading(false);
+      if (reimportFileRef.current) reimportFileRef.current.value = '';
+    }
+  }
+
+  function handleConfirmReimport() {
+    if (!reimportBatch || !reimportSites) return;
+    const { sites, venueCount, sessionCount } = buildSiteGroups(reimportSites, reimportFileName);
+    onReimportBatch(reimportBatch.importBatchId, sites);
+    setSiteSuccess(`再インポート完了：${venueCount}会場・${sessionCount}会期`);
+    setTimeout(() => setSiteSuccess(''), 5000);
+    handleCancelReimport();
+  }
+
   // ── Render ────────────────────────────────────────────────────
 
   return (
@@ -577,7 +691,65 @@ export default function CsvImporter({
       <ImportWizard existingWorkSites={workSites} onImportSites={onImportSites} />
 
       {/* ── インポート履歴 ────────────────────────────────── */}
-      <ImportBatchCard workSites={workSites} onDeleteBatch={onDeleteImportBatch} />
+      <ImportBatchCard
+        workSites={workSites}
+        onDeleteBatch={onDeleteImportBatch}
+        onStartReimport={handleStartReimport}
+      />
+
+      {/* ── 再インポートパネル ────────────────────────────── */}
+      {reimportBatch && (
+        <div className="card reimport-panel">
+          <h3>再インポート</h3>
+          <p className="section-desc">
+            「{reimportBatch.sourceFileName ?? reimportBatch.importBatchId}」
+            （{reimportBatch.venueCount}会場・{reimportBatch.siteCount}日分）を
+            新しいファイルで置き換えます。
+          </p>
+
+          {/* フェーズ1: ファイル選択 */}
+          <div className="import-upload">
+            <input
+              type="file"
+              accept=".csv,.xlsx"
+              id="reimport-file-input"
+              ref={reimportFileRef}
+              className="file-input-hidden"
+              onChange={handleReimportFile}
+              disabled={reimportLoading}
+            />
+            <label htmlFor="reimport-file-input" className="btn btn--secondary">
+              {reimportLoading ? '読込中…' : (reimportSites ? '別ファイルを選択' : '新しいファイルを選択（CSV / Excel）')}
+            </label>
+            <button className="btn btn--ghost" onClick={handleCancelReimport}>
+              キャンセル
+            </button>
+          </div>
+
+          {/* フェーズ2: 差分プレビューと確認 */}
+          {reimportSites && reimportDiff && (
+            <>
+              <div className="import-preview__filename">
+                ファイル：{reimportFileName}　{reimportSites.length}件
+              </div>
+              <DiffSummary diff={reimportDiff} />
+              <div className="import-actions">
+                <span className="import-actions__label">
+                  この内容で置き換えます
+                </span>
+                <div className="import-actions__buttons">
+                  <button className="btn btn--primary" onClick={handleConfirmReimport}>
+                    置き換える
+                  </button>
+                  <button className="btn btn--secondary" onClick={handleCancelReimport}>
+                    キャンセル
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── スタッフCSV ─────────────────────────────────── */}
       <div className="card">
@@ -691,26 +863,30 @@ export default function CsvImporter({
               checked={overwriteMode}
               onChange={(e) => setOverwriteMode(e.target.checked)}
             />
-            上書きモード（CSVデータを置換）
+            上書きモード（CSV/Excelデータを置換）
           </label>
           {overwriteMode && (
             <span className="import-overwrite__note">
-              取り込み時に既存のCSV取込済み現場
+              取り込み時に既存のインポート済み現場
               {csvSiteCount > 0 ? `（${csvSiteCount}件）` : ''}
-              をすべて削除してから登録します
+              をすべて削除してから登録します（手動作成データは保護されます）
             </span>
           )}
         </div>
 
         {csvSiteCount > 0 && (
           <div className="import-danger-zone">
-            <span className="import-current">CSV取込済み {csvSiteCount}件</span>
+            <span className="import-current">インポート済み {csvSiteCount}件</span>
             <button
               className="btn btn--danger btn--sm"
               onClick={() => {
-                if (window.confirm('インポート済み現場をすべて削除します。よろしいですか？')) {
+                if (window.confirm(
+                  `インポート済み現場を全件削除します（${csvSiteCount}件）。\n` +
+                  `手動で作成・編集した現場は削除されません。\n` +
+                  `この操作は元に戻せません。よろしいですか？`
+                )) {
                   onDeleteCsvSites();
-                  setSiteSuccess(`CSV取込済みの現場 ${csvSiteCount}件を削除しました`);
+                  setSiteSuccess(`インポート済み現場 ${csvSiteCount}件を削除しました`);
                   setTimeout(() => setSiteSuccess(''), 5000);
                 }
               }}
@@ -784,7 +960,6 @@ export default function CsvImporter({
         <h3>現場CSV テキスト貼り付け</h3>
         <p className="section-desc">CSVを貼り付けるだけで取り込めます</p>
 
-        {/* テキストエリア（主役） */}
         <textarea
           className="paste-textarea"
           rows={7}
@@ -805,7 +980,6 @@ export default function CsvImporter({
           autoCapitalize="off"
         />
 
-        {/* 補助操作（サンプルと詳細は折りたたみ） */}
         <div className="paste-helper">
           <button className="btn btn--ghost btn--sm" onClick={handleCopySample}>
             {pasteCopied ? 'コピーしました ✓' : 'サンプルをコピー'}
@@ -834,7 +1008,6 @@ export default function CsvImporter({
           </details>
         </div>
 
-        {/* 自動解析プレビュー（normalize経由で NormalizedShiftRow を表示） */}
         {pasteSitePreview && (
           <div className="import-preview">
             <div className="import-summary">

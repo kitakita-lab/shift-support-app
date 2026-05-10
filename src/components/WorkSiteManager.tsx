@@ -305,6 +305,7 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
         endTime:        session.endTime,
         requiredPeople: normalizeRequiredPeople(session.requiredPeople),
         memo:           session.memo,
+        source:         'manual',
       });
     }
   }
@@ -316,6 +317,7 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
       startTime: '', endTime: '',
       requiredPeople: 0, memo: '',
       isPlaceholder: true,
+      source:         'manual',
     }];
   }
   return sites;
@@ -573,6 +575,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
           endTime:        session.endTime,
           requiredPeople: normalizeRequiredPeople(session.requiredPeople),
           memo:           session.memo,
+          source:         'manual',
         });
       }
     }
