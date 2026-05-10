@@ -16,6 +16,11 @@ import {
 import { normalizeShiftRow, normalizeSiteIdentity, applySiteNormalize } from '../utils/shiftNormalize';
 import { nextStaffNo } from '../utils/staffUtils';
 import { formatSiteLabel } from '../utils/siteUtils';
+import {
+  parseExcelSiteFile,
+  downloadExcelSiteTemplate,
+  ExcelSiteParseResult,
+} from '../utils/excelImport';
 
 // 貼り付けインポートのサンプルテキスト（コピー・テキストエリア貼り付け用）
 const PASTE_SAMPLE_TEXT =
@@ -240,9 +245,15 @@ export default function CsvImporter({
     [pasteSitePreview]
   );
 
+  const [excelPreview,   setExcelPreview]   = useState<ExcelSiteParseResult | null>(null);
+  const [excelSuccess,   setExcelSuccess]   = useState('');
+  const [excelFileName,  setExcelFileName]  = useState('');
+  const [excelLoading,   setExcelLoading]   = useState(false);
+
   const staffInputRef   = useRef<HTMLInputElement>(null);
   const siteInputRef    = useRef<HTMLInputElement>(null);
   const daysOffInputRef = useRef<HTMLInputElement>(null);
+  const excelInputRef   = useRef<HTMLInputElement>(null);
 
   // ── File readers ────────────────────────────────────────────
 
@@ -281,6 +292,20 @@ export default function CsvImporter({
     });
   }
 
+  async function handleExcelFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setExcelLoading(true);
+    setExcelFileName(file.name);
+    setExcelSuccess('');
+    try {
+      const result = await parseExcelSiteFile(file);
+      setExcelPreview(result);
+    } finally {
+      setExcelLoading(false);
+    }
+  }
+
   // ── Clear handlers ───────────────────────────────────────────
 
   function clearStaffPreview() {
@@ -296,6 +321,12 @@ export default function CsvImporter({
   function clearDaysOffPreview() {
     setDaysOffPreview(null);
     if (daysOffInputRef.current) daysOffInputRef.current.value = '';
+  }
+
+  function clearExcelPreview() {
+    setExcelPreview(null);
+    setExcelFileName('');
+    if (excelInputRef.current) excelInputRef.current.value = '';
   }
 
   // ── Import / apply handlers ──────────────────────────────────
@@ -395,6 +426,15 @@ export default function CsvImporter({
     setTimeout(() => setPasteSiteSuccess(''), 5000);
   }
 
+  function handleImportExcel() {
+    if (!excelPreview?.valid.length) return;
+    const { venueCount, sessionCount } = applySiteImport(excelPreview.valid);
+    clearExcelPreview();
+    const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
+    setExcelSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
+    setTimeout(() => setExcelSuccess(''), 5000);
+  }
+
   function handleApplyDaysOff() {
     if (!daysOffPreview?.matched.length) return;
     const updates = daysOffPreview.matched.map(({ staffId, csvDaysOff }) => {
@@ -415,7 +455,7 @@ export default function CsvImporter({
 
   return (
     <div>
-      <h2>CSVインポート</h2>
+      <h2>インポート</h2>
 
       {/* ── スタッフCSV ─────────────────────────────────── */}
       <div className="card">
@@ -728,6 +768,100 @@ export default function CsvImporter({
         )}
 
         {pasteSiteSuccess && <div className="success-msg">{pasteSiteSuccess}</div>}
+      </div>
+
+      {/* ── 現場Excel ────────────────────────────────────────── */}
+      <div className="card">
+        <h3>現場Excelのインポート</h3>
+        <p className="section-desc">
+          Excelテンプレートをダウンロードして現場・会期を入力後、.xlsxファイルを選択してください。
+        </p>
+
+        <div className="import-upload">
+          <input
+            type="file"
+            accept=".xlsx"
+            id="site-excel-input"
+            ref={excelInputRef}
+            className="file-input-hidden"
+            onChange={handleExcelFile}
+          />
+          <label htmlFor="site-excel-input" className="btn btn--secondary">
+            {excelLoading ? '読込中…' : 'Excelファイルを選択'}
+          </label>
+          <button
+            className="btn btn--ghost"
+            onClick={() => downloadExcelSiteTemplate()}
+          >
+            テンプレートをダウンロード
+          </button>
+          <span className="import-current">現在 {currentSiteCount}件登録済み</span>
+        </div>
+
+        {excelPreview && (
+          <div className="import-preview">
+            <div className="import-preview__filename">ファイル：{excelFileName}</div>
+            <div className="import-summary">
+              <span className="import-summary__ok">
+                取込可能：{excelPreview.sessions.length}会期（{excelPreview.valid.length}日分）
+              </span>
+              {excelPreview.errors.length > 0 && (
+                <span className="import-summary__err">
+                  エラー：{excelPreview.errors.length}行スキップ
+                </span>
+              )}
+            </div>
+            <ErrorList errors={excelPreview.errors} />
+            {excelPreview.sessions.length > 0 ? (
+              <>
+                <div className="table-wrapper">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>クライアント</th>
+                        <th>現場名</th>
+                        <th>サブ会場名</th>
+                        <th>開始日</th>
+                        <th>終了日</th>
+                        <th>時間</th>
+                        <th>必要人数</th>
+                        <th>メモ</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {excelPreview.sessions.map((s, i) => (
+                        <tr key={i}>
+                          <td>{s.clientName || '—'}</td>
+                          <td>{s.siteName}</td>
+                          <td>{s.subSiteName || '—'}</td>
+                          <td>{s.startDate}</td>
+                          <td>{s.endDate}</td>
+                          <td>{s.startTime}〜{s.endTime}</td>
+                          <td>{s.requiredPeople}人</td>
+                          <td>{s.memo || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="import-actions">
+                  <span className="import-actions__label">
+                    {excelPreview.sessions.length}会期・{excelPreview.valid.length}日分
+                    {overwriteMode && <span className="days-off-mode-badge">上書きモード</span>}
+                  </span>
+                  <div className="import-actions__buttons">
+                    <button className="btn btn--primary" onClick={handleImportExcel}>追加する</button>
+                    <button className="btn btn--secondary" onClick={clearExcelPreview}>キャンセル</button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="import-no-valid">取り込める有効なデータがありません</p>
+            )}
+          </div>
+        )}
+
+        {excelSuccess && <div className="success-msg">{excelSuccess}</div>}
       </div>
 
       {/* ── 希望休CSV ─────────────────────────────────────── */}

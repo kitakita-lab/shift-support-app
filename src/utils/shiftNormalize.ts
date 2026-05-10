@@ -114,14 +114,49 @@ export function normalizeSiteIdentity(siteName: string, clientName?: string): st
 }
 
 /**
- * CSV 取込した WorkSite に normalize を適用して返す。
+ * 画面・Excel表示用の現場名を生成する。
+ * subSiteName がある場合: "siteName（subSiteName）"
+ */
+export function buildDisplaySiteName(
+  siteName: string,
+  subSiteName?: string,
+  _clientName?: string
+): string {
+  const sub = subSiteName?.trim();
+  return sub ? `${siteName}（${sub}）` : siteName;
+}
+
+/**
+ * グルーピング・重複判定用の内部キーを生成する。
+ * subSiteName を含めてキー生成（異なるサブ会場は別グループ）
+ */
+export function buildNormalizedSiteKey(
+  siteName: string,
+  subSiteName?: string,
+  clientName?: string
+): string {
+  const norm = (s: string): string =>
+    cleanSiteName(s)
+      .replace(/[Ａ-Ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/[ａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/[\s　]/g, '')
+      .replace(/[（）()]/g, '')
+      .toLowerCase();
+  const sub = subSiteName?.trim() ? `\0${norm(subSiteName)}` : '';
+  return `${norm(clientName ?? '')}\0${norm(siteName)}${sub}`;
+}
+
+/**
+ * CSV/Excel 取込した WorkSite に normalize を適用して返す。
  * groupId 付与前の `buildCsvImportGroups` / `applySiteImport` で使用。
  *
  * フィールドの役割:
- * - rawSiteName     : 元の siteName を保存（原本確認・再処理用）。既に設定済みなら上書きしない
- * - displaySiteName : 画面・Excel 表示用の整えた名前（+N名・※... 等を除去）
- * - normalizedSiteKey: グルーピング・重複判定用の比較キー（スペース/括弧/全角を吸収）
- * - siteName        : 既存互換のため displaySiteName と同値にする
+ * - rawSiteName      : 元の siteName を保存（原本確認・再処理用）。既に設定済みなら上書きしない
+ * - siteName         : 親会場名のみ（displaySiteName ではない）
+ * - subSiteName      : サブ会場名（独立フィールド）
+ * - displaySiteName  : 画面・Excel 表示用（buildDisplaySiteName で生成）
+ * - normalizedSiteKey: グルーピング・重複判定用の比較キー（buildNormalizedSiteKey で生成）
  */
 export function applySiteNormalize(site: WorkSite): WorkSite {
   const rawSiteName = site.rawSiteName ?? site.siteName;
@@ -129,12 +164,15 @@ export function applySiteNormalize(site: WorkSite): WorkSite {
   const m = cleaned.match(/[（(]([^）)]+)[）)]$/);
   const extractedClient = m ? m[1].trim() : undefined;
   const clientName = site.clientName?.trim() || extractedClient || '';
-  const displaySiteName = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
-  const normalizedSiteKey = normalizeSiteIdentity(displaySiteName, clientName);
+  const siteNameFinal = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
+  const subSiteName = site.subSiteName?.trim() || undefined;
+  const displaySiteName = buildDisplaySiteName(siteNameFinal, subSiteName, clientName);
+  const normalizedSiteKey = buildNormalizedSiteKey(siteNameFinal, subSiteName, clientName);
   return {
     ...site,
-    siteName: displaySiteName,
+    siteName: siteNameFinal,
     rawSiteName,
+    subSiteName,
     displaySiteName,
     clientName,
     normalizedSiteKey,
