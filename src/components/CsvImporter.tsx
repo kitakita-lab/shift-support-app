@@ -1,5 +1,6 @@
 import { useRef, useState, useMemo, useEffect } from 'react';
 import { Staff, WorkSite, NormalizedShiftRow } from '../types';
+import ImportWizard from './ImportWizard';
 import {
   parseStaffCSV,
   parseSiteCSV,
@@ -62,6 +63,7 @@ type SitePreview  = SiteParseResult  & { fileName: string };
 
 interface Props {
   staff: Staff[];
+  workSites: WorkSite[];
   currentSiteCount: number;
   csvSiteCount: number;
   onImportStaff: (imported: Staff[]) => void;
@@ -200,6 +202,7 @@ function computeMerged(
 
 export default function CsvImporter({
   staff,
+  workSites,
   currentSiteCount,
   csvSiteCount,
   onImportStaff,
@@ -456,6 +459,9 @@ export default function CsvImporter({
   return (
     <div>
       <h2>インポート</h2>
+
+      {/* ── 会期リストインポートウィザード ──────────────── */}
+      <ImportWizard existingWorkSites={workSites} onImportSites={onImportSites} />
 
       {/* ── スタッフCSV ─────────────────────────────────── */}
       <div className="card">

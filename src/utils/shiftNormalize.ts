@@ -92,10 +92,33 @@ export function extractClientNameFromParens(
 }
 
 /**
+ * 表記ゆれ吸収用の別名辞書（正規化後文字列 → 正規化後文字列）。
+ * 現時点では空。将来クライアント別・会場別の別名をここに追加する。
+ * キーは simpleNorm 適用後の形（小文字・スペースなし・括弧なし）で記述する。
+ * rawSiteName や siteName 原本は変更しない。
+ *
+ * 将来追加例:
+ *   'bivi': 'bivi', // ＢｉＶｉ / BiVi → bivi に統一
+ *   'ario': 'アリオ',
+ *   'イオンモール': 'イオン',
+ */
+export const SITE_NAME_ALIAS_DICT: Record<string, string> = {};
+
+/**
+ * 正規化済み文字列に別名辞書を適用して標準表記に変換する。
+ * normalizeSiteIdentity / buildNormalizedSiteKey の内部でのみ呼ぶ。
+ * siteName 原本（rawSiteName）は変更しない。
+ */
+export function normalizeAlias(s: string): string {
+  return SITE_NAME_ALIAS_DICT[s] ?? s;
+}
+
+/**
  * 表記ゆれを吸収した現場同一性判定キーを返す。
  *
  * 仕様:
  * - cleanSiteName 適用後に全角英数→半角、スペース除去、括弧除去、小文字化
+ * - さらに SITE_NAME_ALIAS_DICT による別名正規化を適用
  * - clientName もまとめてキーに含める
  *
  * 例: "アリオ ハーベストコート" / "アリオハーベストコート" → 同一キー
@@ -103,19 +126,22 @@ export function extractClientNameFromParens(
  */
 export function normalizeSiteIdentity(siteName: string, clientName?: string): string {
   const norm = (s: string): string =>
-    cleanSiteName(s)
-      .replace(/[Ａ-Ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-      .replace(/[ａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-      .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-      .replace(/[\s　]/g, '')
-      .replace(/[（）()]/g, '')
-      .toLowerCase();
+    normalizeAlias(
+      cleanSiteName(s)
+        .replace(/[Ａ-Ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+        .replace(/[ａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+        .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+        .replace(/[\s　]/g, '')
+        .replace(/[（）()]/g, '')
+        .toLowerCase()
+    );
   return `${norm(clientName ?? '')}\0${norm(siteName)}`;
 }
 
 /**
- * 画面・Excel表示用の現場名を生成する。
+ * 画面・Excel表示用の現場名を生成する（表示専用）。
  * subSiteName がある場合: "siteName（subSiteName）"
+ * 内部グルーピングキー・重複判定には使わない。
  */
 export function buildDisplaySiteName(
   siteName: string,
@@ -128,7 +154,9 @@ export function buildDisplaySiteName(
 
 /**
  * グルーピング・重複判定用の内部キーを生成する。
- * subSiteName を含めてキー生成（異なるサブ会場は別グループ）
+ * clientName + siteName + subSiteName を正規化・エイリアス変換して結合する。
+ * displaySiteName は使わない。
+ * subSiteName を含めてキー生成（異なるサブ会場は別グループ）。
  */
 export function buildNormalizedSiteKey(
   siteName: string,
@@ -136,13 +164,15 @@ export function buildNormalizedSiteKey(
   clientName?: string
 ): string {
   const norm = (s: string): string =>
-    cleanSiteName(s)
-      .replace(/[Ａ-Ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-      .replace(/[ａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-      .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-      .replace(/[\s　]/g, '')
-      .replace(/[（）()]/g, '')
-      .toLowerCase();
+    normalizeAlias(
+      cleanSiteName(s)
+        .replace(/[Ａ-Ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+        .replace(/[ａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+        .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+        .replace(/[\s　]/g, '')
+        .replace(/[（）()]/g, '')
+        .toLowerCase()
+    );
   const sub = subSiteName?.trim() ? `\0${norm(subSiteName)}` : '';
   return `${norm(clientName ?? '')}\0${norm(siteName)}${sub}`;
 }

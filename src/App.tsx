@@ -193,6 +193,7 @@ export default function App() {
         {activeTab === 'import' && (
           <CsvImporter
             staff={staff}
+            workSites={workSites}
             currentSiteCount={workSites.filter((s) => !s.isPlaceholder).length}
             csvSiteCount={workSites.filter((s) => s.source === 'csv').length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
