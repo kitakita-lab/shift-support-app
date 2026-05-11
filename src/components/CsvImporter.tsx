@@ -1,5 +1,5 @@
 import { useRef, useState, useMemo, useEffect } from 'react';
-import { Staff, WorkSite, NormalizedShiftRow } from '../types';
+import { Staff, WorkSite, NormalizedShiftRow, ImportLog } from '../types';
 import ImportWizard from './ImportWizard';
 import {
   parseStaffCSV,
@@ -110,14 +110,16 @@ function formatImportedAt(iso: string): string {
 interface Props {
   staff: Staff[];
   workSites: WorkSite[];
+  importLogs: ImportLog[];
   currentSiteCount: number;
   csvSiteCount: number;
   onImportStaff: (imported: Staff[]) => void;
   onImportSites: (imported: WorkSite[], overwrite: boolean) => void;
+  onAddImportLog: (log: ImportLog) => void;
   onApplyDaysOff: (updates: { id: string; requestedDaysOff: string[] }[]) => void;
   onDeleteCsvSites: () => void;
   onDeleteImportBatch: (importBatchId: string) => void;
-  onReimportBatch: (oldBatchId: string, newSites: WorkSite[]) => void;
+  onReimportBatch: (oldBatchId: string, newSites: WorkSite[], newLog: ImportLog) => void;
   selectedMonth: string;
 }
 
@@ -168,6 +170,11 @@ function DiffSummary({ diff }: { diff: ImportDiffResult }) {
         <span className="reimport-diff__badge reimport-diff__badge--unchanged">
           変更なし {diff.unchangedCount}日
         </span>
+        {diff.protectedCount > 0 && (
+          <span className="reimport-diff__badge reimport-diff__badge--protected">
+            保護 {diff.protectedCount}件
+          </span>
+        )}
         <span className="reimport-diff__total">→ 合計 {total}日</span>
       </div>
       <p className="wiz-hint">確定すると旧バッチが削除され、新データが登録されます。手動データは保護されます。</p>
@@ -177,16 +184,79 @@ function DiffSummary({ diff }: { diff: ImportDiffResult }) {
 
 // ── ImportBatchCard ────────────────────────────────────────────
 
+interface MergedBatch {
+  importBatchId: string;
+  sourceFileName?: string;
+  importedAt?: string;
+  source?: 'csv' | 'excel';
+  /** ImportLog 由来の取込時行数 */
+  rowCount?: number;
+  /** ImportLog 由来の追加件数 */
+  addedCount?: number;
+  /** ImportLog 由来のスキップ件数 */
+  skippedCount?: number;
+  /** workSites 由来の現在の会場数 */
+  venueCount: number;
+  /** workSites 由来の現在の日数 */
+  siteCount: number;
+}
+
+function mergeBatches(importLogs: ImportLog[], workSites: WorkSite[]): MergedBatch[] {
+  const batchMap = new Map<string, MergedBatch>();
+
+  // importLogs を基準に登録（主情報）
+  for (const log of importLogs) {
+    batchMap.set(log.importBatchId, {
+      importBatchId: log.importBatchId,
+      sourceFileName: log.sourceFileName,
+      importedAt:    log.importedAt,
+      source:        log.source,
+      rowCount:      log.rowCount,
+      addedCount:    log.addedCount,
+      skippedCount:  log.skippedCount,
+      venueCount:    0,
+      siteCount:     0,
+    });
+  }
+
+  // workSites から現在の件数を補完（ログなしの旧バッチも拾う）
+  const siteBatches = buildImportBatches(workSites);
+  for (const sb of siteBatches) {
+    const existing = batchMap.get(sb.importBatchId);
+    if (existing) {
+      existing.venueCount = sb.venueCount;
+      existing.siteCount  = sb.siteCount;
+      if (!existing.sourceFileName) existing.sourceFileName = sb.sourceFileName;
+      if (!existing.importedAt)    existing.importedAt    = sb.importedAt;
+    } else {
+      // ログなしの旧バッチ（後方互換）
+      batchMap.set(sb.importBatchId, {
+        importBatchId: sb.importBatchId,
+        sourceFileName: sb.sourceFileName,
+        importedAt:    sb.importedAt,
+        venueCount:    sb.venueCount,
+        siteCount:     sb.siteCount,
+      });
+    }
+  }
+
+  return [...batchMap.values()].sort(
+    (a, b) => (b.importedAt ?? '').localeCompare(a.importedAt ?? '')
+  );
+}
+
 function ImportBatchCard({
+  importLogs,
   workSites,
   onDeleteBatch,
   onStartReimport,
 }: {
+  importLogs: ImportLog[];
   workSites: WorkSite[];
   onDeleteBatch: (batchId: string) => void;
   onStartReimport: (batch: ImportBatch) => void;
 }) {
-  const batches = buildImportBatches(workSites);
+  const batches = mergeBatches(importLogs, workSites);
   if (batches.length === 0) return null;
   return (
     <div className="card">
@@ -206,11 +276,23 @@ function ImportBatchCard({
                 {batch.importedAt ? formatImportedAt(batch.importedAt) : '日時不明'}
                 　{batch.venueCount}会場・{batch.siteCount}日分
               </span>
+              {(batch.rowCount != null || batch.skippedCount != null) && (
+                <span className="import-batch-row__stats">
+                  {batch.rowCount != null && `取込行: ${batch.rowCount}`}
+                  {batch.skippedCount != null && batch.skippedCount > 0 && `　スキップ: ${batch.skippedCount}`}
+                </span>
+              )}
             </div>
             <div className="import-batch-row__actions">
               <button
                 className="btn btn--ghost btn--sm"
-                onClick={() => onStartReimport(batch)}
+                onClick={() => onStartReimport({
+                  importBatchId: batch.importBatchId,
+                  sourceFileName: batch.sourceFileName,
+                  importedAt:    batch.importedAt,
+                  venueCount:    batch.venueCount,
+                  siteCount:     batch.siteCount,
+                })}
               >
                 再インポート
               </button>
@@ -341,10 +423,12 @@ function computeMerged(
 export default function CsvImporter({
   staff,
   workSites,
+  importLogs,
   currentSiteCount,
   csvSiteCount,
   onImportStaff,
   onImportSites,
+  onAddImportLog,
   onApplyDaysOff,
   onDeleteCsvSites,
   onDeleteImportBatch,
@@ -482,7 +566,7 @@ export default function CsvImporter({
   function buildSiteGroups(
     validSites: WorkSite[],
     sourceFileName?: string,
-  ): { sites: WorkSite[]; venueCount: number; sessionCount: number } {
+  ): { sites: WorkSite[]; venueCount: number; sessionCount: number; importBatchId: string; importedAt: string } {
     const now           = new Date();
     const importBatchId = crypto.randomUUID();
     const importedAt    = now.toISOString();
@@ -543,7 +627,7 @@ export default function CsvImporter({
       }
     }
 
-    return { sites: withGroup, venueCount: bySiteKey.size, sessionCount };
+    return { sites: withGroup, venueCount: bySiteKey.size, sessionCount, importBatchId, importedAt };
   }
 
   // ── Import / apply handlers ──────────────────────────────────
@@ -565,9 +649,21 @@ export default function CsvImporter({
   function applySiteImport(
     validSites: WorkSite[],
     sourceFileName?: string,
+    sourceType: 'csv' | 'excel' = 'csv',
   ): { venueCount: number; sessionCount: number } {
-    const { sites, venueCount, sessionCount } = buildSiteGroups(validSites, sourceFileName);
+    const { sites, venueCount, sessionCount, importBatchId, importedAt } =
+      buildSiteGroups(validSites, sourceFileName);
     onImportSites(sites, overwriteMode);
+    onAddImportLog({
+      id:               crypto.randomUUID(),
+      importBatchId,
+      source:           sourceType,
+      sourceFileName,
+      importedAt,
+      rowCount:         validSites.length,
+      importedSiteCount: sites.length,
+      addedCount:       sites.length,
+    });
     return { venueCount, sessionCount };
   }
 
@@ -603,7 +699,7 @@ export default function CsvImporter({
 
   function handleImportExcel() {
     if (!excelPreview?.valid.length) return;
-    const { venueCount, sessionCount } = applySiteImport(excelPreview.valid, excelFileName);
+    const { venueCount, sessionCount } = applySiteImport(excelPreview.valid, excelFileName, 'excel');
     clearExcelPreview();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
     setExcelSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
@@ -673,9 +769,24 @@ export default function CsvImporter({
   }
 
   function handleConfirmReimport() {
-    if (!reimportBatch || !reimportSites) return;
-    const { sites, venueCount, sessionCount } = buildSiteGroups(reimportSites, reimportFileName);
-    onReimportBatch(reimportBatch.importBatchId, sites);
+    if (!reimportBatch || !reimportSites || !reimportDiff) return;
+    const { sites, venueCount, sessionCount, importBatchId, importedAt } =
+      buildSiteGroups(reimportSites, reimportFileName);
+    const sourceType: 'csv' | 'excel' = reimportFileName.toLowerCase().endsWith('.xlsx') ? 'excel' : 'csv';
+    const newLog: ImportLog = {
+      id:               crypto.randomUUID(),
+      importBatchId,
+      source:           sourceType,
+      sourceFileName:   reimportFileName,
+      importedAt,
+      rowCount:         reimportSites.length,
+      importedSiteCount: sites.length,
+      addedCount:       reimportDiff.addedCount,
+      changedCount:     reimportDiff.updatedCount,
+      deletedCount:     reimportDiff.removedCount,
+      protectedCount:   reimportDiff.protectedCount,
+    };
+    onReimportBatch(reimportBatch.importBatchId, sites, newLog);
     setSiteSuccess(`再インポート完了：${venueCount}会場・${sessionCount}会期`);
     setTimeout(() => setSiteSuccess(''), 5000);
     handleCancelReimport();
@@ -688,10 +799,15 @@ export default function CsvImporter({
       <h2>インポート</h2>
 
       {/* ── 会期リストインポートウィザード ──────────────── */}
-      <ImportWizard existingWorkSites={workSites} onImportSites={onImportSites} />
+      <ImportWizard
+        existingWorkSites={workSites}
+        onImportSites={onImportSites}
+        onAddImportLog={onAddImportLog}
+      />
 
       {/* ── インポート履歴 ────────────────────────────────── */}
       <ImportBatchCard
+        importLogs={importLogs}
         workSites={workSites}
         onDeleteBatch={onDeleteImportBatch}
         onStartReimport={handleStartReimport}

@@ -2552,6 +2552,12 @@ details[open] .paste-details__summary::before {
   color: #6b7280;
 }
 
+.import-batch-row__stats {
+  font-size: 11px;
+  color: #9ca3af;
+  font-style: italic;
+}
+
 .import-batch-row__actions {
   flex-shrink: 0;
 }
@@ -2614,6 +2620,11 @@ details[open] .paste-details__summary::before {
 .reimport-diff__badge--unchanged {
   background: #f3f4f6;
   color: #6b7280;
+}
+
+.reimport-diff__badge--protected {
+  background: #ede9fe;
+  color: #5b21b6;
 }
 
 .reimport-diff__total {

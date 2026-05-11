@@ -1,9 +1,10 @@
-import { Staff, WorkSite, ShiftAssignment } from '../types';
+import { Staff, WorkSite, ShiftAssignment, ImportLog } from '../types';
 
 const KEYS = {
-  staff: 'shift_staff',
-  workSites: 'shift_worksites',
-  assignments: 'shift_assignments',
+  staff:      'shift_staff',
+  workSites:  'shift_worksites',
+  assignments:'shift_assignments',
+  importLogs: 'shift_import_logs',
 };
 
 const genId = (): string =>
@@ -27,7 +28,7 @@ function save<T>(key: string, data: T[]): void {
 /**
  * Partial<WorkSite> から WorkSite を安全に復元する。
  * 必須フィールドが旧データに存在しない場合はデフォルト値を補完し、
- * 新フィールド（importBatchId 等）は存在する場合のみコピーする。
+ * 新フィールド（siteIdentityKey 等）は存在する場合のみコピーする。
  * Supabase 移行時もこの関数を更新するだけで対応できる。
  */
 function hydrateWorkSite(raw: Partial<WorkSite>): WorkSite {
@@ -41,19 +42,32 @@ function hydrateWorkSite(raw: Partial<WorkSite>): WorkSite {
     memo:           raw.memo           ?? '',
   };
   // オプションフィールドは値が存在するときのみコピー（旧データとの後方互換）
-  if (raw.clientName        != null) s.clientName        = raw.clientName;
-  if (raw.groupId           != null) s.groupId           = raw.groupId;
-  if (raw.groupLabel        != null) s.groupLabel        = raw.groupLabel;
-  if (raw.sessionId         != null) s.sessionId         = raw.sessionId;
-  if (raw.rawSiteName       != null) s.rawSiteName       = raw.rawSiteName;
-  if (raw.subSiteName       != null) s.subSiteName       = raw.subSiteName;
-  if (raw.displaySiteName   != null) s.displaySiteName   = raw.displaySiteName;
-  if (raw.normalizedSiteKey != null) s.normalizedSiteKey = raw.normalizedSiteKey;
-  if (raw.isPlaceholder     != null) s.isPlaceholder     = raw.isPlaceholder;
-  if (raw.source            != null) s.source            = raw.source;
-  if (raw.sourceFileName    != null) s.sourceFileName    = raw.sourceFileName;
-  if (raw.importedAt        != null) s.importedAt        = raw.importedAt;
-  if (raw.importBatchId     != null) s.importBatchId     = raw.importBatchId;
+  if (raw.clientName           != null) s.clientName           = raw.clientName;
+  if (raw.groupId              != null) s.groupId              = raw.groupId;
+  if (raw.groupLabel           != null) s.groupLabel           = raw.groupLabel;
+  if (raw.sessionId            != null) s.sessionId            = raw.sessionId;
+  if (raw.rawSiteName          != null) s.rawSiteName          = raw.rawSiteName;
+  if (raw.subSiteName          != null) s.subSiteName          = raw.subSiteName;
+  if (raw.displaySiteName      != null) s.displaySiteName      = raw.displaySiteName;
+  if (raw.normalizedSiteKey    != null) s.normalizedSiteKey    = raw.normalizedSiteKey;
+  if (raw.isPlaceholder        != null) s.isPlaceholder        = raw.isPlaceholder;
+  if (raw.source               != null) s.source               = raw.source;
+  if (raw.isManuallyEdited     != null) s.isManuallyEdited     = raw.isManuallyEdited;
+  if (raw.manualEditedAt       != null) s.manualEditedAt       = raw.manualEditedAt;
+  if (raw.sourceFileName       != null) s.sourceFileName       = raw.sourceFileName;
+  if (raw.importedAt           != null) s.importedAt           = raw.importedAt;
+  if (raw.importBatchId        != null) s.importBatchId        = raw.importBatchId;
+
+  // siteIdentityKey の後方互換補完:
+  // 1. 既存のキーがあればそのまま使う
+  // 2. normalizedSiteKey が既にあれば同一アルゴリズムなので流用する
+  // 3. 両方ない場合は undefined のまま（次回 applySiteNormalize で付与される）
+  if (raw.siteIdentityKey != null) {
+    s.siteIdentityKey = raw.siteIdentityKey;
+  } else if (raw.normalizedSiteKey != null) {
+    s.siteIdentityKey = raw.normalizedSiteKey;
+  }
+
   return s;
 }
 
@@ -70,6 +84,9 @@ export const storage = {
 
   loadAssignments: (): ShiftAssignment[] => load<ShiftAssignment>(KEYS.assignments),
   saveAssignments: (data: ShiftAssignment[]): void => save(KEYS.assignments, data),
+
+  loadImportLogs: (): ImportLog[] => load<ImportLog>(KEYS.importLogs),
+  saveImportLogs: (data: ImportLog[]): void => save(KEYS.importLogs, data),
 
   clearAll: (): void => {
     Object.values(KEYS).forEach((k) => localStorage.removeItem(k));

@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { WorkSite } from '../types';
+import { WorkSite, ImportLog } from '../types';
 import {
   RawSheet,
   ColumnMapping,
@@ -52,6 +52,7 @@ type WizardStep = 'file' | 'columns' | 'venues';
 interface Props {
   existingWorkSites: WorkSite[];
   onImportSites: (imported: WorkSite[], overwrite: boolean) => void;
+  onAddImportLog?: (log: ImportLog) => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -237,7 +238,7 @@ const WIZARD_STEPS: { key: WizardStep; label: string }[] = [
 
 // ── Main component ─────────────────────────────────────────────
 
-export default function ImportWizard({ existingWorkSites, onImportSites }: Props) {
+export default function ImportWizard({ existingWorkSites, onImportSites, onAddImportLog }: Props) {
   const [step,               setStep]               = useState<WizardStep>('file');
   const [rawSheet,           setRawSheet]           = useState<RawSheet | null>(null);
   const [mapping,            setMapping]            = useState<ColumnMapping>(EMPTY_MAPPING);
@@ -339,10 +340,23 @@ export default function ImportWizard({ existingWorkSites, onImportSites }: Props
     const label =
       `会期リスト取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
       `${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    const srcFile = rawSheet?.fileName ?? '';
-    const sites   = buildImportSites(parsedRows, decisions, label, importBatchId, importedAt, srcFile);
+    const srcFile  = rawSheet?.fileName ?? '';
+    const sites    = buildImportSites(parsedRows, decisions, label, importBatchId, importedAt, srcFile);
     const venueCount = new Set(sites.map((s) => s.groupId)).size;
     onImportSites(sites, false);
+    if (onAddImportLog) {
+      onAddImportLog({
+        id:               crypto.randomUUID(),
+        importBatchId,
+        source:           rawSheet?.fileName?.endsWith('.xlsx') ? 'excel' : 'csv',
+        sourceFileName:   srcFile,
+        importedAt,
+        rowCount:         parsedRows.filter((r) => r.errors.length === 0).length,
+        importedSiteCount: sites.length,
+        skippedCount:     skipCount,
+        addedCount:       sites.length,
+      });
+    }
     reset();
     setSuccess(`${venueCount}会場・${sites.length}日分を取り込みました`);
     setTimeout(() => setSuccess(''), 6000);
