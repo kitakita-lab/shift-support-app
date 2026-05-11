@@ -218,7 +218,7 @@ export async function parseExcelSiteFile(file: File): Promise<ExcelSiteParseResu
         endTime,
         requiredPeople,
         memo:        memo || '',
-        source:      'csv',
+        source:      'excel',
       });
       cursor.setDate(cursor.getDate() + 1);
     }

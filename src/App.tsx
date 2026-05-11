@@ -34,6 +34,11 @@ function nextMonth(ym: string): string {
   return toYearMonth(new Date(y, m, 1));
 }
 
+/** source が 'manual' でないデータをインポート由来として扱う */
+function isImportedSite(s: WorkSite): boolean {
+  return s.source === 'csv' || s.source === 'excel';
+}
+
 export default function App() {
   const [activeTab,   setActiveTab]   = useState<Tab>('dashboard');
   const [staff,       setStaff]       = useState<Staff[]>(() => storage.loadStaff());
@@ -94,7 +99,6 @@ export default function App() {
     setWorkSites(newSites);
   }
 
-  // 当月分だけ再生成し、他月の assignment は保持する
   function handleGenerateShifts(newMonthlyAssignments: ShiftAssignment[]) {
     const monthSiteIds = new Set(monthlyWorkSites.map((s) => s.id));
     setAssignments((prev) => [
@@ -103,10 +107,40 @@ export default function App() {
     ]);
   }
 
-  // 当月分のシフトのみ削除する（他月は保持）
   function handleClearMonthlyShifts() {
     const monthSiteIds = new Set(monthlyWorkSites.map((s) => s.id));
     setAssignments((prev) => prev.filter((a) => !monthSiteIds.has(a.siteId)));
+  }
+
+  /** バッチ単位削除。source === 'manual' は絶対に削除しない。 */
+  function handleDeleteImportBatch(importBatchId: string) {
+    const batchIds = new Set(
+      workSites
+        .filter((s) => s.importBatchId === importBatchId && s.source !== 'manual')
+        .map((s) => s.id)
+    );
+    if (batchIds.size > 0) {
+      setAssignments((prev) => prev.filter((a) => !batchIds.has(a.siteId)));
+    }
+    setWorkSites((prev) =>
+      prev.filter((s) => !(s.importBatchId === importBatchId && s.source !== 'manual'))
+    );
+  }
+
+  /** 再インポート：旧バッチを削除し新データを追加する。手動データは保護。 */
+  function handleReimportBatch(oldBatchId: string, newSites: WorkSite[]) {
+    const oldBatchSiteIds = new Set(
+      workSites
+        .filter((s) => s.importBatchId === oldBatchId && s.source !== 'manual')
+        .map((s) => s.id)
+    );
+    setAssignments((prev) => prev.filter((a) => !oldBatchSiteIds.has(a.siteId)));
+    setWorkSites((prev) => {
+      const remaining = prev.filter(
+        (s) => !(s.importBatchId === oldBatchId && s.source !== 'manual')
+      );
+      return [...remaining, ...newSites];
+    });
   }
 
   return (
@@ -195,14 +229,18 @@ export default function App() {
             staff={staff}
             workSites={workSites}
             currentSiteCount={workSites.filter((s) => !s.isPlaceholder).length}
-            csvSiteCount={workSites.filter((s) => s.source === 'csv').length}
+            csvSiteCount={workSites.filter((s) => isImportedSite(s)).length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
             onImportSites={(imported, overwrite) => {
               if (overwrite) {
-                setAssignments([]);
+                // 上書きモード: 手動データは保持しインポート済みのみ削除
+                const overwriteIds = new Set(
+                  workSites.filter((s) => isImportedSite(s)).map((s) => s.id)
+                );
+                setAssignments((prev) => prev.filter((a) => !overwriteIds.has(a.siteId)));
               }
               setWorkSites((prev) => {
-                const base = overwrite ? prev.filter((s) => s.source !== 'csv') : prev;
+                const base = overwrite ? prev.filter((s) => !isImportedSite(s)) : prev;
                 return [...base, ...imported];
               });
             }}
@@ -215,14 +253,16 @@ export default function App() {
               )
             }
             onDeleteCsvSites={() => {
-              const csvIds = new Set(
-                workSites.filter((s) => s.source === 'csv').map((s) => s.id)
+              const importedIds = new Set(
+                workSites.filter((s) => isImportedSite(s)).map((s) => s.id)
               );
-              if (csvIds.size > 0) {
-                setAssignments((prev) => prev.filter((a) => !csvIds.has(a.siteId)));
+              if (importedIds.size > 0) {
+                setAssignments((prev) => prev.filter((a) => !importedIds.has(a.siteId)));
               }
-              setWorkSites((prev) => prev.filter((s) => s.source !== 'csv'));
+              setWorkSites((prev) => prev.filter((s) => !isImportedSite(s)));
             }}
+            onDeleteImportBatch={handleDeleteImportBatch}
+            onReimportBatch={handleReimportBatch}
             selectedMonth={selectedMonth}
           />
         )}
