@@ -178,6 +178,20 @@ export function buildNormalizedSiteKey(
 }
 
 /**
+ * 会場同一性判定の基準キーを生成する。
+ * importDiff / 再インポート判定 / 重複除外 に使う。
+ * normalizedSiteKey と同一アルゴリズムだが用途を分離（概念的独立）。
+ * displaySiteName / rawSiteName は絶対に使わない。
+ */
+export function buildSiteIdentityKey(
+  siteName: string,
+  subSiteName?: string,
+  clientName?: string
+): string {
+  return buildNormalizedSiteKey(siteName, subSiteName, clientName);
+}
+
+/**
  * CSV/Excel 取込した WorkSite に normalize を適用して返す。
  * groupId 付与前の `buildCsvImportGroups` / `applySiteImport` で使用。
  *
@@ -186,7 +200,8 @@ export function buildNormalizedSiteKey(
  * - siteName         : 親会場名のみ（displaySiteName ではない）
  * - subSiteName      : サブ会場名（独立フィールド）
  * - displaySiteName  : 画面・Excel 表示用（buildDisplaySiteName で生成）
- * - normalizedSiteKey: グルーピング・重複判定用の比較キー（buildNormalizedSiteKey で生成）
+ * - normalizedSiteKey: 表記ゆれ吸収・類似候補検索用の内部比較キー
+ * - siteIdentityKey  : 会場同一性判定の基準キー（importDiff / 再インポート判定）
  */
 export function applySiteNormalize(site: WorkSite): WorkSite {
   const rawSiteName = site.rawSiteName ?? site.siteName;
@@ -198,6 +213,7 @@ export function applySiteNormalize(site: WorkSite): WorkSite {
   const subSiteName = site.subSiteName?.trim() || undefined;
   const displaySiteName = buildDisplaySiteName(siteNameFinal, subSiteName, clientName);
   const normalizedSiteKey = buildNormalizedSiteKey(siteNameFinal, subSiteName, clientName);
+  const siteIdentityKey   = buildSiteIdentityKey(siteNameFinal, subSiteName, clientName);
   return {
     ...site,
     siteName: siteNameFinal,
@@ -206,6 +222,7 @@ export function applySiteNormalize(site: WorkSite): WorkSite {
     displaySiteName,
     clientName,
     normalizedSiteKey,
+    siteIdentityKey,
   };
 }
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Staff, WorkSite, ShiftAssignment } from './types';
+import { Staff, WorkSite, ShiftAssignment, ImportLog } from './types';
 import { storage } from './utils/storage';
 import Dashboard from './components/Dashboard';
 import StaffManager from './components/StaffManager';
@@ -44,6 +44,7 @@ export default function App() {
   const [staff,       setStaff]       = useState<Staff[]>(() => storage.loadStaff());
   const [workSites,   setWorkSites]   = useState<WorkSite[]>(() => storage.loadWorkSites());
   const [assignments, setAssignments] = useState<ShiftAssignment[]>(() => storage.loadAssignments());
+  const [importLogs,  setImportLogs]  = useState<ImportLog[]>(() => storage.loadImportLogs());
 
   const [selectedMonth, setSelectedMonth] = useState<string>(() => {
     const sites = storage.loadWorkSites().filter((s) => !s.isPlaceholder && s.date);
@@ -56,6 +57,7 @@ export default function App() {
   useEffect(() => { storage.saveStaff(staff); },         [staff]);
   useEffect(() => { storage.saveWorkSites(workSites); },  [workSites]);
   useEffect(() => { storage.saveAssignments(assignments); }, [assignments]);
+  useEffect(() => { storage.saveImportLogs(importLogs); }, [importLogs]);
 
   const monthlyWorkSites = useMemo(
     () => workSites.filter((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth)),
@@ -77,6 +79,11 @@ export default function App() {
     setStaff([]);
     setWorkSites([]);
     setAssignments([]);
+    setImportLogs([]);
+  }
+
+  function handleAddImportLog(log: ImportLog) {
+    setImportLogs((prev) => [...prev, log]);
   }
 
   function handleStaffChange(newStaff: Staff[]) {
@@ -112,35 +119,37 @@ export default function App() {
     setAssignments((prev) => prev.filter((a) => !monthSiteIds.has(a.siteId)));
   }
 
-  /** バッチ単位削除。source === 'manual' は絶対に削除しない。 */
+  /** バッチ単位削除。source === 'manual' または isManuallyEdited === true は保護する。 */
   function handleDeleteImportBatch(importBatchId: string) {
     const batchIds = new Set(
       workSites
-        .filter((s) => s.importBatchId === importBatchId && s.source !== 'manual')
+        .filter((s) => s.importBatchId === importBatchId && s.source !== 'manual' && !s.isManuallyEdited)
         .map((s) => s.id)
     );
     if (batchIds.size > 0) {
       setAssignments((prev) => prev.filter((a) => !batchIds.has(a.siteId)));
     }
     setWorkSites((prev) =>
-      prev.filter((s) => !(s.importBatchId === importBatchId && s.source !== 'manual'))
+      prev.filter((s) => !(s.importBatchId === importBatchId && s.source !== 'manual' && !s.isManuallyEdited))
     );
+    setImportLogs((prev) => prev.filter((l) => l.importBatchId !== importBatchId));
   }
 
-  /** 再インポート：旧バッチを削除し新データを追加する。手動データは保護。 */
-  function handleReimportBatch(oldBatchId: string, newSites: WorkSite[]) {
+  /** 再インポート：旧バッチを削除し新データを追加する。手動データ・手動編集済みは保護。 */
+  function handleReimportBatch(oldBatchId: string, newSites: WorkSite[], newLog: ImportLog) {
     const oldBatchSiteIds = new Set(
       workSites
-        .filter((s) => s.importBatchId === oldBatchId && s.source !== 'manual')
+        .filter((s) => s.importBatchId === oldBatchId && s.source !== 'manual' && !s.isManuallyEdited)
         .map((s) => s.id)
     );
     setAssignments((prev) => prev.filter((a) => !oldBatchSiteIds.has(a.siteId)));
     setWorkSites((prev) => {
       const remaining = prev.filter(
-        (s) => !(s.importBatchId === oldBatchId && s.source !== 'manual')
+        (s) => !(s.importBatchId === oldBatchId && s.source !== 'manual' && !s.isManuallyEdited)
       );
       return [...remaining, ...newSites];
     });
+    setImportLogs((prev) => [...prev.filter((l) => l.importBatchId !== oldBatchId), newLog]);
   }
 
   return (
@@ -228,6 +237,7 @@ export default function App() {
           <CsvImporter
             staff={staff}
             workSites={workSites}
+            importLogs={importLogs}
             currentSiteCount={workSites.filter((s) => !s.isPlaceholder).length}
             csvSiteCount={workSites.filter((s) => isImportedSite(s)).length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
@@ -244,6 +254,7 @@ export default function App() {
                 return [...base, ...imported];
               });
             }}
+            onAddImportLog={handleAddImportLog}
             onApplyDaysOff={(updates) =>
               setStaff((prev) =>
                 prev.map((s) => {

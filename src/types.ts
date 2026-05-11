@@ -32,17 +32,28 @@ export interface WorkSite {
    */
   displaySiteName?: string;
   /**
-   * グルーピング・重複判定用の内部比較キー。buildNormalizedSiteKey() で生成。
+   * 表記ゆれ吸収・類似候補検索用の内部キー。buildNormalizedSiteKey() で生成。
    * clientName + siteName + subSiteName を正規化・エイリアス変換して結合する。
    * displaySiteName は使わない。
    */
   normalizedSiteKey?: string;
+  /**
+   * 会場同一性判定の基準キー。buildSiteIdentityKey() で生成。
+   * importDiff / 再インポート判定 / 重複除外の基準として使う。
+   * normalizedSiteKey と同じアルゴリズムだが用途が異なる（概念的分離）。
+   * displaySiteName / rawSiteName は絶対に使わない。
+   */
+  siteIdentityKey?: string;
   startTime: string;
   endTime: string;
   requiredPeople: number;
   memo: string;
   isPlaceholder?: boolean;
   source?: 'manual' | 'csv' | 'excel';
+  /** ユーザーが現場管理タブで手動編集した場合 true。再インポート・バッチ削除から保護する。 */
+  isManuallyEdited?: boolean;
+  /** 手動編集日時（ISO8601）。isManuallyEdited: true と同時に付与する。 */
+  manualEditedAt?: string;
   /** 取り込み元ファイル名（例: '会期リスト2026-05.xlsx'）。Supabase移行後も保持する。 */
   sourceFileName?: string;
   /** 取り込み日時（ISO8601）。バッチ一覧表示・差分管理に使用。 */
@@ -75,4 +86,26 @@ export interface NormalizedShiftRow {
   rawSiteName?: string;
   /** 表記ゆれ吸収済みの同一性判定キー。normalizeSiteIdentity() で生成 */
   normalizedSiteKey?: string;
+}
+
+/**
+ * インポート操作1回分のログ。localStorage に永続化する。
+ * 初回インポート・再インポートの両方で生成する。
+ */
+export interface ImportLog {
+  id: string;
+  importBatchId: string;
+  source: 'csv' | 'excel';
+  sourceFileName?: string;
+  importedAt: string;
+  /** パース後の有効行数 */
+  rowCount: number;
+  /** 実際にストアに追加したWorkSite数（日単位） */
+  importedSiteCount: number;
+  skippedCount?: number;
+  addedCount?: number;
+  changedCount?: number;
+  deletedCount?: number;
+  /** source==='manual' または isManuallyEdited===true により保護された件数 */
+  protectedCount?: number;
 }

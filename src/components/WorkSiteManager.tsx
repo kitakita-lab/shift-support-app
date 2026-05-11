@@ -285,7 +285,10 @@ function computeGroupLabel(siteName: string, clientName: string, sessions: Sessi
   return `${label}：複数会期`;
 }
 
-function buildSessionSites(state: SessionEditorState): WorkSite[] {
+function buildSessionSites(
+  state: SessionEditorState,
+  editMeta?: { isManuallyEdited?: boolean; manualEditedAt?: string }
+): WorkSite[] {
   const { groupId, clientName, siteName, sessions } = state;
   const groupLabel = computeGroupLabel(siteName, clientName, sessions);
   const sites: WorkSite[] = [];
@@ -306,6 +309,7 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
         requiredPeople: normalizeRequiredPeople(session.requiredPeople),
         memo:           session.memo,
         source:         'manual',
+        ...editMeta,
       });
     }
   }
@@ -318,6 +322,7 @@ function buildSessionSites(state: SessionEditorState): WorkSite[] {
       requiredPeople: 0, memo: '',
       isPlaceholder: true,
       source:         'manual',
+      ...editMeta,
     }];
   }
   return sites;
@@ -704,7 +709,10 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
 
   function applySessionEditor() {
     if (!sessionEditor) return;
-    const newSites  = buildSessionSites(sessionEditor);
+    const editMeta = sessionEditor.isExistingGroup
+      ? { isManuallyEdited: true as const, manualEditedAt: new Date().toISOString() }
+      : undefined;
+    const newSites  = buildSessionSites(sessionEditor, editMeta);
     const remaining = sessionEditor.isExistingGroup
       ? workSites.filter((s) => s.groupId !== sessionEditor.groupId)
       : workSites.filter((s) => !sessionEditor.sourceIds.includes(s.id));
