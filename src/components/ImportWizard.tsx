@@ -12,28 +12,33 @@ import {
   autoDetectMapping,
   applyMapping,
 } from '../utils/rawImport';
-import { applySiteNormalize } from '../utils/shiftNormalize';
+import { applySiteNormalize, buildSiteIdentityKey, cleanSiteName } from '../utils/shiftNormalize';
 
 // ── Types ─────────────────────────────────────────────────────
 
 interface ExistingGroup {
-  groupId:     string;
-  siteName:    string;
-  subSiteName?: string;
-  clientName?: string;
+  groupId:          string;
+  siteName:         string;
+  subSiteName?:     string;
+  clientName?:      string;
+  siteIdentityKey?: string;
 }
 
 interface ExistingVenueCandidate extends ExistingGroup {
-  score: number;
+  score:           number;
+  /** clientName が片方だけ空で一致が不確かな場合 true */
+  isLowConfidence: boolean;
 }
 
 interface VenueDecision {
-  rawKey:        string;
-  rawSiteName:   string;
+  rawKey:         string;
+  rawSiteName:    string;
   subSiteNameRaw: string;
-  clientName:    string;
-  sessionCount:  number;
-  candidates:    ExistingVenueCandidate[];
+  clientName:     string;
+  sessionCount:   number;
+  candidates:     ExistingVenueCandidate[];
+  /** siteIdentityKey が完全一致した既存グループ。null = 重複なし */
+  exactDuplicate: ExistingGroup | null;
   /**
    * null = まだ未確定（ユーザーが選択していない）
    * 'new'      = 新規会場として登録
@@ -84,24 +89,55 @@ function bigramSim(a: string, b: string): number {
 
 // 類似度閾値。低すぎると「イオン苗穂」と「イオン発寒」のような別会場が候補に出る。
 // 正規化一致は強制スコア 1.0 なので完全一致は必ず候補に出る。
-const CANDIDATE_THRESHOLD = 0.5;
+const CANDIDATE_THRESHOLD = 0.7;
 
 function findCandidates(
-  rawSiteName: string,
+  rawSiteName:    string,
   subSiteNameRaw: string,
-  groups: ExistingGroup[],
+  clientName:     string,
+  groups:         ExistingGroup[],
 ): ExistingVenueCandidate[] {
-  const normRaw = simpleNorm(rawSiteName + subSiteNameRaw);
-  return groups
-    .map((g) => {
-      const normGroup = simpleNorm(g.siteName + (g.subSiteName ?? ''));
-      // 正規化後が完全一致なら score 1.0 として必ず候補に出す
-      const score = normRaw === normGroup ? 1.0 : bigramSim(normRaw, normGroup);
-      return { ...g, score };
-    })
-    .filter((c) => c.score >= CANDIDATE_THRESHOLD)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 3);
+  // rawSiteName にはクリーニング前の汚染文字列が含まれる可能性があるため
+  // cleanSiteName を適用してから類似度を計算する
+  const cleaned    = cleanSiteName(rawSiteName);
+  const normRaw    = simpleNorm(cleaned + subSiteNameRaw);
+  const hasClient  = clientName.trim() !== '';
+
+  const results: ExistingVenueCandidate[] = [];
+  for (const g of groups) {
+    const gHasClient = (g.clientName?.trim() ?? '') !== '';
+
+    // clientName が両方存在して不一致 → 別クライアントの同名会場なので候補に出さない
+    if (hasClient && gHasClient && clientName.trim() !== (g.clientName ?? '').trim()) continue;
+
+    // 片方だけ空 → 一致が不確かなため低信頼候補として扱う
+    const isLowConfidence = hasClient !== gHasClient;
+
+    const normGroup = simpleNorm(g.siteName + (g.subSiteName ?? ''));
+    const score = normRaw === normGroup ? 1.0 : bigramSim(normRaw, normGroup);
+    if (score < CANDIDATE_THRESHOLD) continue;
+
+    results.push({ ...g, score, isLowConfidence });
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, 3);
+}
+
+/**
+ * インポート候補行から siteIdentityKey を事前計算する。
+ * applySiteNormalize と同じロジックを適用して、既存データとの照合に使う。
+ */
+function computeIncomingIdentityKey(
+  rawSiteName:    string,
+  subSiteNameRaw: string,
+  clientName:     string,
+): string {
+  const cleaned         = cleanSiteName(rawSiteName);
+  const m               = cleaned.match(/[（(]([^）)]+)[）)]$/);
+  const extractedClient = m ? m[1].trim() : undefined;
+  const resolvedClient  = clientName.trim() || extractedClient || undefined;
+  const siteNameFinal   = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
+  const subSite         = subSiteNameRaw.trim() || undefined;
+  return buildSiteIdentityKey(siteNameFinal, subSite, resolvedClient);
 }
 
 function getExistingGroups(workSites: WorkSite[]): ExistingGroup[] {
@@ -110,10 +146,11 @@ function getExistingGroups(workSites: WorkSite[]): ExistingGroup[] {
     if (!site.groupId || site.isPlaceholder) continue;
     if (!seen.has(site.groupId)) {
       seen.set(site.groupId, {
-        groupId:     site.groupId,
-        siteName:    site.siteName,
-        subSiteName: site.subSiteName,
-        clientName:  site.clientName,
+        groupId:          site.groupId,
+        siteName:         site.siteName,
+        subSiteName:      site.subSiteName,
+        clientName:       site.clientName,
+        siteIdentityKey:  site.siteIdentityKey,
       });
     }
   }
@@ -122,8 +159,14 @@ function getExistingGroups(workSites: WorkSite[]): ExistingGroup[] {
 
 function buildVenueDecisions(
   parsedRows: ParsedSessionRow[],
-  groups: ExistingGroup[],
+  groups:     ExistingGroup[],
 ): VenueDecision[] {
+  // siteIdentityKey → ExistingGroup の高速ルックアップマップ
+  const identityMap = new Map<string, ExistingGroup>();
+  for (const g of groups) {
+    if (g.siteIdentityKey) identityMap.set(g.siteIdentityKey, g);
+  }
+
   const seen = new Map<string, VenueDecision>();
   for (const row of parsedRows) {
     if (row.errors.length > 0) continue;
@@ -132,14 +175,25 @@ function buildVenueDecisions(
       seen.get(rawKey)!.sessionCount++;
       continue;
     }
+
+    const incomingKey    = computeIncomingIdentityKey(row.rawSiteName, row.subSiteNameRaw, row.clientName);
+    const exactDuplicate = identityMap.get(incomingKey) ?? null;
+    const candidates     = findCandidates(row.rawSiteName, row.subSiteNameRaw, row.clientName, groups);
+
+    // 重複がある場合はデフォルトで「既存に紐付ける」を選択状態にする
+    const defaultChoice: VenueDecision['choice'] = exactDuplicate
+      ? { kind: 'existing', groupId: exactDuplicate.groupId, siteName: exactDuplicate.siteName, subSiteName: exactDuplicate.subSiteName ?? '' }
+      : { kind: 'new',      siteName: row.rawSiteName, subSiteName: row.subSiteNameRaw };
+
     seen.set(rawKey, {
       rawKey,
-      rawSiteName:   row.rawSiteName,
+      rawSiteName:    row.rawSiteName,
       subSiteNameRaw: row.subSiteNameRaw,
-      clientName:    row.clientName,
-      sessionCount:  1,
-      candidates:    findCandidates(row.rawSiteName, row.subSiteNameRaw, groups),
-      choice: { kind: 'new', siteName: row.rawSiteName, subSiteName: row.subSiteNameRaw },
+      clientName:     row.clientName,
+      sessionCount:   1,
+      candidates,
+      exactDuplicate,
+      choice:         defaultChoice,
     });
   }
   return [...seen.values()];
@@ -307,19 +361,20 @@ export default function ImportWizard({ existingWorkSites, onImportSites, onAddIm
 
   function handleConfirmNoCandidates() {
     const targets = decisions.filter(
-      (d) => d.candidates.length === 0 && d.choice?.kind !== 'skip',
+      (d) => d.candidates.length === 0 && !d.exactDuplicate && d.choice?.kind !== 'skip',
     );
     if (targets.length === 0) return;
     if (
       !window.confirm(
         `候補なしの ${targets.length}件を新規会場として確定します。\n` +
-        `既存候補がある会場・スキップ設定済みは対象外です。\nよろしいですか？`,
+        `既存候補・重複・スキップ設定済みは対象外です。\nよろしいですか？`,
       )
     ) return;
     setDecisions((prev) =>
       prev.map((d) => {
-        if (d.candidates.length > 0)    return d; // 候補ありは個別確認が必要
-        if (d.choice?.kind === 'skip')  return d; // ユーザーが明示的にスキップした行は保持
+        if (d.candidates.length > 0)   return d; // 候補ありは個別確認が必要
+        if (d.exactDuplicate)          return d; // 重複ありは個別確認が必要
+        if (d.choice?.kind === 'skip') return d; // ユーザーが明示的にスキップした行は保持
         return {
           ...d,
           choice: {
@@ -367,9 +422,10 @@ export default function ImportWizard({ existingWorkSites, onImportSites, onAddIm
   const validRowCount     = parsedRows.filter((r) => r.errors.length === 0).length;
   const errorRowCount     = parsedRows.filter((r) => r.errors.length > 0).length;
   const noCandidateCount  = decisions.filter(
-    (d) => d.candidates.length === 0 && d.choice?.kind !== 'skip',
+    (d) => d.candidates.length === 0 && !d.exactDuplicate && d.choice?.kind !== 'skip',
   ).length;
-  const hasCandidateCount = decisions.filter((d) => d.candidates.length > 0).length;
+  const hasCandidateCount = decisions.filter((d) => d.candidates.length > 0 && !d.exactDuplicate).length;
+  const duplicateCount    = decisions.filter((d) => d.exactDuplicate !== null).length;
   const skipCount         = decisions.filter((d) => d.choice?.kind === 'skip').length;
   // 取り込む（スキップ以外の）行数
   const importableRowCount = parsedRows.filter((r) => {
@@ -523,6 +579,11 @@ export default function ImportWizard({ existingWorkSites, onImportSites, onAddIm
             <span className="import-summary__ok">
               会場 {decisions.length}件・有効行 {validRowCount}行
             </span>
+            {duplicateCount > 0 && (
+              <span className="wiz-badge wiz-badge--danger" style={{ marginLeft: 8 }}>
+                既存と重複 {duplicateCount}件
+              </span>
+            )}
             {hasCandidateCount > 0 && (
               <span className="wiz-badge wiz-badge--warning" style={{ marginLeft: 8 }}>
                 既存候補あり {hasCandidateCount}件
@@ -543,9 +604,9 @@ export default function ImportWizard({ existingWorkSites, onImportSites, onAddIm
               <button className="btn btn--ghost btn--sm" onClick={handleConfirmNoCandidates}>
                 候補なし {noCandidateCount}件を新規として確定
               </button>
-              {hasCandidateCount > 0 && (
+              {(hasCandidateCount > 0 || duplicateCount > 0) && (
                 <span className="wiz-hint">
-                  ※ 既存候補がある {hasCandidateCount}件は個別に選択してください
+                  ※ 既存候補・重複がある件は個別に選択してください
                 </span>
               )}
             </div>
@@ -593,13 +654,32 @@ interface VenueDecisionCardProps {
 }
 
 function VenueDecisionCard({ decision, onChoiceChange, onNameChange }: VenueDecisionCardProps) {
-  const hasCandidates = decision.candidates.length > 0;
-  const isNew      = decision.choice?.kind === 'new';
-  const isExisting = decision.choice?.kind === 'existing';
-  const isSkip     = decision.choice?.kind === 'skip';
+  const { exactDuplicate, candidates } = decision;
+  const hasDuplicate   = exactDuplicate !== null;
+  const hasCandidates  = candidates.length > 0;
+  const isNew          = decision.choice?.kind === 'new';
+  const isExisting     = decision.choice?.kind === 'existing';
+  const isSkip         = decision.choice?.kind === 'skip';
+
+  // 既存紐付けのプルダウン選択肢: exactDuplicate を先頭に、候補（重複除き）を続ける
+  const allOptions: (ExistingVenueCandidate | (ExistingGroup & { score: number; isLowConfidence: boolean }))[] = [
+    ...(exactDuplicate ? [{ ...exactDuplicate, score: 1.0, isLowConfidence: false }] : []),
+    ...candidates.filter((c) => !exactDuplicate || c.groupId !== exactDuplicate.groupId),
+  ];
+
+  function handleExistingSelect(groupId: string) {
+    const found = allOptions.find((c) => c.groupId === groupId);
+    if (found) onChoiceChange({ kind: 'existing', groupId: found.groupId, siteName: found.siteName, subSiteName: found.subSiteName ?? '' });
+  }
+
+  const cardClass = [
+    'wiz-venue-card',
+    hasDuplicate  ? 'wiz-venue-card--duplicate'   : '',
+    !hasDuplicate && hasCandidates ? 'wiz-venue-card--candidates' : '',
+  ].filter(Boolean).join(' ');
 
   return (
-    <div className={`wiz-venue-card${hasCandidates ? ' wiz-venue-card--candidates' : ''}`}>
+    <div className={cardClass}>
       <div className="wiz-venue-card__header">
         <div className="wiz-venue-card__name">
           {decision.rawSiteName}
@@ -612,102 +692,174 @@ function VenueDecisionCard({ decision, onChoiceChange, onNameChange }: VenueDeci
             <span className="wiz-venue-card__client">{decision.clientName}</span>
           )}
           <span className="wiz-venue-card__count">{decision.sessionCount}会期</span>
-          {hasCandidates && <span className="wiz-badge wiz-badge--warning">候補あり</span>}
+          {hasDuplicate  && <span className="wiz-badge wiz-badge--danger">既存と重複</span>}
+          {!hasDuplicate && hasCandidates && <span className="wiz-badge wiz-badge--warning">候補あり</span>}
         </div>
       </div>
 
-      <div className="wiz-venue-card__choices">
-        {/* New venue option */}
-        <label className="wiz-radio-label">
-          <input
-            type="radio"
-            checked={isNew}
-            onChange={() =>
-              onChoiceChange({
-                kind:        'new',
-                siteName:    decision.rawSiteName,
-                subSiteName: decision.subSiteNameRaw,
-              })
-            }
-          />
-          新規として登録
-        </label>
-
-        {isNew && decision.choice?.kind === 'new' && (
-          <div className="wiz-venue-card__edit">
-            <input
-              type="text"
-              className="form-input"
-              placeholder="会場名"
-              value={decision.choice.siteName}
-              onChange={(e) => onNameChange('siteName', e.target.value)}
-            />
-            <input
-              type="text"
-              className="form-input"
-              placeholder="サブ会場名（任意）"
-              value={decision.choice.subSiteName}
-              onChange={(e) => onNameChange('subSiteName', e.target.value)}
-            />
+      {/* 重複警告バナー */}
+      {hasDuplicate && (
+        <div className="wiz-duplicate-warning">
+          既存データに一致する会場があります。新規登録すると重複します。
+          <div className="wiz-duplicate-warning__existing">
+            既存：{exactDuplicate.siteName}
+            {exactDuplicate.subSiteName ? `（${exactDuplicate.subSiteName}）` : ''}
+            {exactDuplicate.clientName  ? `　${exactDuplicate.clientName}`    : ''}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Existing venue option */}
-        {hasCandidates && (
+      <div className="wiz-venue-card__choices">
+        {hasDuplicate ? (
+          // ── 重複あり：既存紐付け → 取り込まない → それでも新規 の順で表示 ──
           <>
             <label className="wiz-radio-label">
               <input
                 type="radio"
                 checked={isExisting}
-                onChange={() =>
-                  onChoiceChange({
-                    kind:        'existing',
-                    groupId:     decision.candidates[0].groupId,
-                    siteName:    decision.candidates[0].siteName,
-                    subSiteName: decision.candidates[0].subSiteName ?? '',
-                  })
-                }
+                onChange={() => handleExistingSelect(exactDuplicate.groupId)}
               />
-              既存の会場に紐付け
+              既存の会場に紐付ける
             </label>
 
-            {isExisting && decision.choice?.kind === 'existing' && (
+            {isExisting && decision.choice?.kind === 'existing' && allOptions.length > 0 && (
               <select
                 className="form-input"
                 value={decision.choice.groupId}
-                onChange={(e) => {
-                  const cand = decision.candidates.find((c) => c.groupId === e.target.value);
-                  if (cand)
-                    onChoiceChange({
-                      kind:        'existing',
-                      groupId:     cand.groupId,
-                      siteName:    cand.siteName,
-                      subSiteName: cand.subSiteName ?? '',
-                    });
-                }}
+                onChange={(e) => handleExistingSelect(e.target.value)}
               >
-                {decision.candidates.map((c) => (
+                {allOptions.map((c) => (
                   <option key={c.groupId} value={c.groupId}>
                     {c.siteName}
-                    {c.subSiteName ? `（${c.subSiteName}）` : ''}
-                    {c.clientName  ? `　${c.clientName}`    : ''}
-                    　（類似度 {Math.round(c.score * 100)}%）
+                    {c.subSiteName  ? `（${c.subSiteName}）` : ''}
+                    {c.clientName   ? `　${c.clientName}`    : ''}
+                    {'score' in c && c.score < 1.0
+                      ? `　（類似度 ${Math.round(c.score * 100)}%${'isLowConfidence' in c && c.isLowConfidence ? '・クライアント不明' : ''}）`
+                      : '　（完全一致）'}
                   </option>
                 ))}
               </select>
             )}
+
+            <label className="wiz-radio-label">
+              <input
+                type="radio"
+                checked={isSkip}
+                onChange={() => onChoiceChange({ kind: 'skip' })}
+              />
+              取り込まない
+            </label>
+
+            <label className="wiz-radio-label wiz-radio-label--warning">
+              <input
+                type="radio"
+                checked={isNew}
+                onChange={() =>
+                  onChoiceChange({ kind: 'new', siteName: decision.rawSiteName, subSiteName: decision.subSiteNameRaw })
+                }
+              />
+              それでも新規登録（重複します）
+            </label>
+
+            {isNew && decision.choice?.kind === 'new' && (
+              <div className="wiz-venue-card__edit">
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="会場名"
+                  value={decision.choice.siteName}
+                  onChange={(e) => onNameChange('siteName', e.target.value)}
+                />
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="サブ会場名（任意）"
+                  value={decision.choice.subSiteName}
+                  onChange={(e) => onNameChange('subSiteName', e.target.value)}
+                />
+              </div>
+            )}
+          </>
+        ) : (
+          // ── 重複なし：新規 → 既存候補（あれば） → 取り込まない の順 ──
+          <>
+            <label className="wiz-radio-label">
+              <input
+                type="radio"
+                checked={isNew}
+                onChange={() =>
+                  onChoiceChange({ kind: 'new', siteName: decision.rawSiteName, subSiteName: decision.subSiteNameRaw })
+                }
+              />
+              新規として登録
+            </label>
+
+            {isNew && decision.choice?.kind === 'new' && (
+              <div className="wiz-venue-card__edit">
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="会場名"
+                  value={decision.choice.siteName}
+                  onChange={(e) => onNameChange('siteName', e.target.value)}
+                />
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="サブ会場名（任意）"
+                  value={decision.choice.subSiteName}
+                  onChange={(e) => onNameChange('subSiteName', e.target.value)}
+                />
+              </div>
+            )}
+
+            {hasCandidates && (
+              <>
+                <label className="wiz-radio-label">
+                  <input
+                    type="radio"
+                    checked={isExisting}
+                    onChange={() =>
+                      onChoiceChange({
+                        kind:        'existing',
+                        groupId:     candidates[0].groupId,
+                        siteName:    candidates[0].siteName,
+                        subSiteName: candidates[0].subSiteName ?? '',
+                      })
+                    }
+                  />
+                  既存の会場に紐付け
+                </label>
+
+                {isExisting && decision.choice?.kind === 'existing' && (
+                  <select
+                    className="form-input"
+                    value={decision.choice.groupId}
+                    onChange={(e) => handleExistingSelect(e.target.value)}
+                  >
+                    {candidates.map((c) => (
+                      <option key={c.groupId} value={c.groupId}>
+                        {c.siteName}
+                        {c.subSiteName ? `（${c.subSiteName}）` : ''}
+                        {c.clientName  ? `　${c.clientName}`    : ''}
+                        　（類似度 {Math.round(c.score * 100)}%{c.isLowConfidence ? '・クライアント不明' : ''}）
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </>
+            )}
+
+            <label className="wiz-radio-label">
+              <input
+                type="radio"
+                checked={isSkip}
+                onChange={() => onChoiceChange({ kind: 'skip' })}
+              />
+              取り込まない
+            </label>
           </>
         )}
-
-        {/* Skip option */}
-        <label className="wiz-radio-label">
-          <input
-            type="radio"
-            checked={isSkip}
-            onChange={() => onChoiceChange({ kind: 'skip' })}
-          />
-          取り込まない
-        </label>
       </div>
     </div>
   );
