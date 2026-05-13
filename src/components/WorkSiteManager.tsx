@@ -1,8 +1,8 @@
 import { useRef, useState, useMemo } from 'react';
-import { WorkSite } from '../types';
+import { WorkSite, ImportLog } from '../types';
 import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
 import { formatSiteLabel } from '../utils/siteUtils';
-import { normalizeSiteIdentity, applySiteNormalize } from '../utils/shiftNormalize';
+import { buildNormalizedSiteKey, normalizeImportedWorkSites } from '../utils/shiftNormalize';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
@@ -90,7 +90,9 @@ function peakColorClass(peak: number, avg: number): 'high' | 'medium' | 'normal'
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
+    // normalizedSiteKey は normalizeImportedWorkSites 後に必ず付与される。
+    // フォールバックは subSiteName も含む buildNormalizedSiteKey を使う（normalizeSiteIdentity は subSiteName を無視するため不可）。
+    const key = site.normalizedSiteKey ?? buildNormalizedSiteKey(site.siteName, site.subSiteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -122,12 +124,14 @@ function buildCsvImportGroups(sites: WorkSite[], sourceFileName?: string): WorkS
   const pad = (n: number) => String(n).padStart(2, '0');
   const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-  const normalizedSites = sites.map(applySiteNormalize);
+  const normalizedSites = normalizeImportedWorkSites(sites);
 
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of normalizedSites) {
     // applySiteNormalize 後は normalizedSiteKey が保証されているが、型上 optional なので fallback
-    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
+    // normalizedSiteKey は normalizeImportedWorkSites 後に必ず付与される。
+    // フォールバックは subSiteName も含む buildNormalizedSiteKey を使う（normalizeSiteIdentity は subSiteName を無視するため不可）。
+    const key = site.normalizedSiteKey ?? buildNormalizedSiteKey(site.siteName, site.subSiteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -173,6 +177,32 @@ function buildCsvImportGroups(sites: WorkSite[], sourceFileName?: string): WorkS
   return result;
 }
 
+// ─── 重複チェック ──────────────────────────────────────────
+
+function countDuplicateVenues(
+  incomingSites: WorkSite[],
+  effectiveExisting: WorkSite[],
+): { duplicateCount: number; hasManualDuplicate: boolean } {
+  const existingKeyToSite = new Map<string, WorkSite>();
+  for (const s of effectiveExisting) {
+    if (s.siteIdentityKey) existingKeyToSite.set(s.siteIdentityKey, s);
+  }
+  const checkedKeys = new Set<string>();
+  let duplicateCount = 0;
+  let hasManualDuplicate = false;
+  for (const site of incomingSites) {
+    const key = site.siteIdentityKey;
+    if (!key || checkedKeys.has(key)) continue;
+    checkedKeys.add(key);
+    const existing = existingKeyToSite.get(key);
+    if (existing) {
+      duplicateCount++;
+      if (existing.source === 'manual' || existing.isManuallyEdited) hasManualDuplicate = true;
+    }
+  }
+  return { duplicateCount, hasManualDuplicate };
+}
+
 // ─── SessionForm (会期) ────────────────────────────────────
 
 interface SessionForm {
@@ -189,6 +219,7 @@ interface SessionEditorState {
   groupId: string;
   clientName: string;
   siteName: string;
+  subSiteName: string;
   sessions: SessionForm[];
   isExistingGroup: boolean;
   sourceIds: string[];
@@ -289,7 +320,8 @@ function buildSessionSites(
   state: SessionEditorState,
   editMeta?: { isManuallyEdited?: boolean; manualEditedAt?: string }
 ): WorkSite[] {
-  const { groupId, clientName, siteName, sessions } = state;
+  const { groupId, clientName, siteName, subSiteName, sessions } = state;
+  const subSiteNameVal = subSiteName.trim() || undefined;
   const groupLabel = computeGroupLabel(siteName, clientName, sessions);
   const sites: WorkSite[] = [];
   for (const session of sessions) {
@@ -304,6 +336,7 @@ function buildSessionSites(
         date,
         clientName,
         siteName,
+        subSiteName:    subSiteNameVal,
         startTime:      session.startTime,
         endTime:        session.endTime,
         requiredPeople: normalizeRequiredPeople(session.requiredPeople),
@@ -317,7 +350,7 @@ function buildSessionSites(
     return [{
       id: createId(), groupId,
       groupLabel: `${formatSiteLabel(siteName, clientName)}：会期なし`,
-      date: '', clientName, siteName,
+      date: '', clientName, siteName, subSiteName: subSiteNameVal,
       startTime: '', endTime: '',
       requiredPeople: 0, memo: '',
       isPlaceholder: true,
@@ -450,17 +483,19 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
 interface Props {
   workSites: WorkSite[];
   onChange: (workSites: WorkSite[]) => void;
+  onAddImportLog: (log: ImportLog) => void;
   selectedMonth: string;
 }
 
 // ─── component ─────────────────────────────────────────────
 
-export default function WorkSiteManager({ workSites, onChange, selectedMonth }: Props) {
+export default function WorkSiteManager({ workSites, onChange, onAddImportLog, selectedMonth }: Props) {
   // ── 新規現場登録フォーム
-  const [newClientName, setNewClientName] = useState('');
-  const [newSiteName, setNewSiteName]     = useState('');
-  const [newSessions, setNewSessions]     = useState<SessionForm[]>([emptySession()]);
-  const [successMsg, setSuccessMsg]       = useState('');
+  const [newClientName,  setNewClientName]  = useState('');
+  const [newSiteName,    setNewSiteName]    = useState('');
+  const [newSubSiteName, setNewSubSiteName] = useState('');
+  const [newSessions,    setNewSessions]    = useState<SessionForm[]>([emptySession()]);
+  const [successMsg,     setSuccessMsg]     = useState('');
 
   // ── 会期エディタ・アコーディオン
   const [sessionEditor,      setSessionEditor]      = useState<SessionEditorState | null>(null);
@@ -562,13 +597,14 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
   function handleNewSiteSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!isReady) return;
-    const groupId    = createId();
-    const groupLabel = computeGroupLabel(newSiteName, newClientName, newSessions);
-    const newSites: WorkSite[] = [];
+    const groupId       = createId();
+    const groupLabel    = computeGroupLabel(newSiteName, newClientName, newSessions);
+    const subSiteNameVal = newSubSiteName.trim() || undefined;
+    const rawSites: WorkSite[] = [];
     for (const session of newSessions) {
       const sessionId = session.id;
       for (const date of calcDateRange(session.startDate, session.endDate)) {
-        newSites.push({
+        rawSites.push({
           id: createId(),
           groupId,
           groupLabel,
@@ -576,6 +612,7 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
           date,
           clientName:     newClientName,
           siteName:       newSiteName,
+          subSiteName:    subSiteNameVal,
           startTime:      session.startTime,
           endTime:        session.endTime,
           requiredPeople: normalizeRequiredPeople(session.requiredPeople),
@@ -584,10 +621,13 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
         });
       }
     }
+    // displaySiteName / normalizedSiteKey / siteIdentityKey を手動登録時にも付与する
+    const newSites = normalizeImportedWorkSites(rawSites);
     onChange([...workSites, ...newSites]);
     setSuccessMsg(`${newSites.length}件の現場を登録しました`);
     setNewClientName('');
     setNewSiteName('');
+    setNewSubSiteName('');
     setNewSessions([emptySession()]);
     setTimeout(() => setSuccessMsg(''), 4000);
   }
@@ -669,8 +709,9 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
   function openGroupSessionEditor(groupId: string, sites: WorkSite[]) {
     setSessionEditor({
       groupId,
-      clientName: sites[0]?.clientName ?? '',
-      siteName: sites[0]?.siteName ?? '',
+      clientName:  sites[0]?.clientName  ?? '',
+      siteName:    sites[0]?.siteName    ?? '',
+      subSiteName: sites[0]?.subSiteName ?? '',
       sessions: deriveSessionsFromSites(sites),
       isExistingGroup: true,
       sourceIds: [],
@@ -680,8 +721,9 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
   function openGroupSessionEditorWithNewSession(groupId: string, sites: WorkSite[]) {
     setSessionEditor({
       groupId,
-      clientName: sites[0]?.clientName ?? '',
-      siteName: sites[0]?.siteName ?? '',
+      clientName:  sites[0]?.clientName  ?? '',
+      siteName:    sites[0]?.siteName    ?? '',
+      subSiteName: sites[0]?.subSiteName ?? '',
       sessions: [...deriveSessionsFromSites(sites), emptySession()],
       isExistingGroup: true,
       sourceIds: [],
@@ -690,9 +732,10 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
 
   function openSiteSessionEditor(site: WorkSite) {
     setSessionEditor({
-      groupId:  createId(),
-      clientName: site.clientName ?? '',
-      siteName: site.siteName,
+      groupId:     createId(),
+      clientName:  site.clientName  ?? '',
+      siteName:    site.siteName,
+      subSiteName: site.subSiteName ?? '',
       sessions: [{
         id:             createId(),
         startDate:      site.date,
@@ -712,7 +755,8 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
     const editMeta = sessionEditor.isExistingGroup
       ? { isManuallyEdited: true as const, manualEditedAt: new Date().toISOString() }
       : undefined;
-    const newSites  = buildSessionSites(sessionEditor, editMeta);
+    // displaySiteName / normalizedSiteKey / siteIdentityKey を確定させる
+    const newSites  = normalizeImportedWorkSites(buildSessionSites(sessionEditor, editMeta));
     const remaining = sessionEditor.isExistingGroup
       ? workSites.filter((s) => s.groupId !== sessionEditor.groupId)
       : workSites.filter((s) => !sessionEditor.sourceIds.includes(s.id));
@@ -768,11 +812,47 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
 
   function handleModalImport() {
     if (!csvModalPreview?.valid.length) return;
+
+    // 重複チェック: overwrite モードでは CSV 由来は置換対象なので除外して判定する
+    // buildCsvImportGroups が内部で normalize するため、検査専用に正規化する
+    const normalizedForCheck = normalizeImportedWorkSites(csvModalPreview.valid);
+    const effectiveExisting = csvModalOverwrite
+      ? workSites.filter((s) => s.source !== 'csv')
+      : workSites;
+    const { duplicateCount, hasManualDuplicate } = countDuplicateVenues(
+      normalizedForCheck,
+      effectiveExisting,
+    );
+    if (duplicateCount > 0) {
+      const manualWarning = hasManualDuplicate
+        ? '\n⚠️ 手動登録済みの会場が含まれています。上書きされる可能性があります。'
+        : '';
+      const ok = window.confirm(
+        `既存の会場と重複する会場が ${duplicateCount} 件あります。${manualWarning}\n\n取り込みを続けますか？`,
+      );
+      if (!ok) return;
+    }
+
     const groups = buildCsvImportGroups(csvModalPreview.valid, csvModalPreview.fileName);
     const base = csvModalOverwrite
       ? workSites.filter((s) => s.source !== 'csv')
       : workSites;
     onChange([...base, ...groups]);
+
+    // ImportLog を発行（バッチID・取込日時は buildCsvImportGroups が各サイトに付与済み）
+    const batchId    = groups[0]?.importBatchId ?? createId();
+    const importedAt = groups[0]?.importedAt    ?? new Date().toISOString();
+    onAddImportLog({
+      id:                createId(),
+      importBatchId:     batchId,
+      source:            'csv',
+      sourceFileName:    csvModalPreview.fileName,
+      importedAt,
+      rowCount:          csvModalPreview.valid.length,
+      importedSiteCount: groups.length,
+      addedCount:        groups.length,
+    });
+
     closeCsvModal();
   }
 
@@ -809,7 +889,13 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
             開始日
             <input type="date" className="form-input form-input--short"
               value={session.startDate}
-              onChange={(e) => onUpdate(session.id, { startDate: e.target.value })} />
+              onChange={(e) => {
+                const newStart = e.target.value;
+                // 終了日が未入力の場合は開始日と同日を自動補完（単発案件の入力を簡略化）
+                const patch: Partial<SessionForm> = { startDate: newStart };
+                if (newStart && !session.endDate) patch.endDate = newStart;
+                onUpdate(session.id, patch);
+              }} />
           </label>
           <label className="edit-panel__field">
             終了日
@@ -880,6 +966,16 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
               setSessionEditor((prev) => prev ? { ...prev, siteName: v } : prev);
             }} />
         </label>
+        <label className="edit-panel__field edit-panel__field--wide">
+          サブ会場名（区画・売場）
+          <input type="text" className="form-input"
+            value={sessionEditor.subSiteName}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSessionEditor((prev) => prev ? { ...prev, subSiteName: v } : prev);
+            }}
+            placeholder="2階ドラッグ側、センターコート 等（省略可）" />
+        </label>
       </div>
 
       {sessionEditor.sessions.map((session, idx) =>
@@ -932,6 +1028,13 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
             <input className="form-input" type="text" value={newSiteName}
               onChange={(e) => setNewSiteName(e.target.value)}
               placeholder="〇〇倉庫" required />
+          </div>
+
+          <div className="form-row">
+            <label className="form-label">サブ会場名</label>
+            <input className="form-input" type="text" value={newSubSiteName}
+              onChange={(e) => setNewSubSiteName(e.target.value)}
+              placeholder="2階ドラッグ側、センターコート 等（省略可）" />
           </div>
 
           {newSessions.map((session, idx) =>
@@ -1050,6 +1153,12 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
                       <span className="venue-chevron">{isVenueOpen ? '▲' : '▼'}</span>
                     </button>
                     <div className="site-actions">
+                      {!isEditingSession && (
+                        <button className="btn btn--sm btn--secondary"
+                          onClick={() => openGroupSessionEditorWithNewSession(groupId, sites)}>
+                          ＋会期を追加
+                        </button>
+                      )}
                       <button className="btn btn--sm btn--secondary"
                         onClick={() => isEditingSession
                           ? setSessionEditor(null)

@@ -16,32 +16,48 @@ export interface WorkSite {
   groupLabel?: string;
   sessionId?: string;
   date: string;
+  /**
+   * クライアント（発注元）名。
+   * 取得優先順位: (1) ファイルの clientName 列 → (2) ウィザード Step2 のデフォルト値 →
+   * (3) siteName 括弧から自動抽出（applySiteNormalize 内）。
+   * 内部キー生成に使うため、表記ゆれを吸収したい場合は SITE_NAME_ALIAS_DICT で対応する。
+   */
   clientName?: string;
+  /**
+   * 親会場名。cleanSiteName() 適用後の値のみを格納する。
+   * subSiteName を混ぜない。displaySiteName でもない。
+   * 例: "Bivi新札幌"（"Bivi新札幌（2階ドラッグ側）" は不可）
+   */
   siteName: string;
-  /** 取り込み元の原文。変換前の確認・復元用。normalize後も上書きしない。 */
+  /**
+   * 取り込み元ファイルの原文。復元・監査用。
+   * applySiteNormalize 後も絶対に上書きしない。候補検索・キー生成には使わない。
+   */
   rawSiteName?: string;
   /**
-   * 物理的な区画・売場名。例: 2階ドラッグ側、センターコート
-   * siteName に混ぜない。空欄可。
+   * 物理的な区画・売場名。例: 2階ドラッグ側、センターコート。
+   * siteName に混ぜない。独立フィールドとして管理する。空欄可。
    */
   subSiteName?: string;
   /**
    * UI表示・Excel表示専用。buildDisplaySiteName() で生成。
    * 例: "Bivi新札幌（2階ドラッグ側）"
-   * 内部グルーピングキー・重複判定には使わない。
+   * 内部グルーピングキー・重複判定・候補検索には絶対に使わない。
    */
   displaySiteName?: string;
   /**
    * 表記ゆれ吸収・類似候補検索用の内部キー。buildNormalizedSiteKey() で生成。
-   * clientName + siteName + subSiteName を正規化・エイリアス変換して結合する。
-   * displaySiteName は使わない。
+   * キー構造: normalize(clientName) + "\0" + normalize(siteName) + "\0" + normalize(subSiteName)
+   * displaySiteName / rawSiteName は使わない。
+   * SITE_NAME_ALIAS_DICT を追加・変更した場合は既存データのキーを再生成すること。
    */
   normalizedSiteKey?: string;
   /**
-   * 会場同一性判定の基準キー。buildSiteIdentityKey() で生成。
-   * importDiff / 再インポート判定 / 重複除外の基準として使う。
-   * normalizedSiteKey と同じアルゴリズムだが用途が異なる（概念的分離）。
+   * 会場同一性判定の安定キー。buildSiteIdentityKey() で生成。
+   * importDiff / 再インポート判定 / 重複除外の唯一の基準として使う。
+   * normalizedSiteKey と同じアルゴリズムだが用途を概念的に分離している。
    * displaySiteName / rawSiteName は絶対に使わない。
+   * SITE_NAME_ALIAS_DICT を変更した場合は既存データとの不整合が生じるため注意。
    */
   siteIdentityKey?: string;
   startTime: string;

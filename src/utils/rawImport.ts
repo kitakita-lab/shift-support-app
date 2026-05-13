@@ -187,6 +187,10 @@ export function applyMapping(
     const rawSiteName    = get(row, mapping.siteName);
     const subSiteNameRaw = get(row, mapping.subSiteName);
     const clientNameFile = get(row, mapping.clientName);
+    // clientName 優先順位（この時点での確定）:
+    //   1. ファイル内の clientName 列 (clientNameFile)
+    //   2. ウィザード Step2 でユーザーが入力したデフォルト値 (fallbackClientName)
+    //   3. siteName 括弧からの自動抽出 → applySiteNormalize 内で後から適用
     const clientName     = clientNameFile.trim() || fallbackClientName;
 
     if (!rawSiteName) errors.push('会場名が空です');

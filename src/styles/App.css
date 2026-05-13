@@ -2437,6 +2437,11 @@ details[open] .paste-details__summary::before {
   background: #fffbeb;
 }
 
+.wiz-venue-card--duplicate {
+  border-color: #f87171;
+  background: #fff5f5;
+}
+
 .wiz-venue-card__header {
   display: flex;
   justify-content: space-between;
@@ -2487,6 +2492,11 @@ details[open] .paste-details__summary::before {
   color: #92400e;
 }
 
+.wiz-badge--danger {
+  background: #fecaca;
+  color: #991b1b;
+}
+
 .wiz-venue-card__choices {
   display: flex;
   flex-direction: column;
@@ -2499,6 +2509,28 @@ details[open] .paste-details__summary::before {
   gap: 6px;
   font-size: 13px;
   cursor: pointer;
+}
+
+.wiz-radio-label--warning {
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.wiz-duplicate-warning {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #991b1b;
+  line-height: 1.5;
+}
+
+.wiz-duplicate-warning__existing {
+  margin-top: 4px;
+  font-weight: 600;
+  color: #7f1d1d;
 }
 
 .wiz-venue-card__edit {
