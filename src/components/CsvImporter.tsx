@@ -636,6 +636,30 @@ export default function CsvImporter({
 
   // ── Import / apply handlers ──────────────────────────────────
 
+  function countDuplicateVenues(
+    incomingSites: WorkSite[],
+    effectiveExisting: WorkSite[],
+  ): { duplicateCount: number; hasManualDuplicate: boolean } {
+    const existingKeyToSite = new Map<string, WorkSite>();
+    for (const s of effectiveExisting) {
+      if (s.siteIdentityKey) existingKeyToSite.set(s.siteIdentityKey, s);
+    }
+    const checkedKeys = new Set<string>();
+    let duplicateCount = 0;
+    let hasManualDuplicate = false;
+    for (const site of incomingSites) {
+      const key = site.siteIdentityKey;
+      if (!key || checkedKeys.has(key)) continue;
+      checkedKeys.add(key);
+      const existing = existingKeyToSite.get(key);
+      if (existing) {
+        duplicateCount++;
+        if (existing.source === 'manual' || existing.isManuallyEdited) hasManualDuplicate = true;
+      }
+    }
+    return { duplicateCount, hasManualDuplicate };
+  }
+
   function handleImportStaff() {
     if (!staffPreview?.valid.length) return;
     let nextNo = parseInt(nextStaffNo(staff), 10);
@@ -654,7 +678,27 @@ export default function CsvImporter({
     validSites: WorkSite[],
     sourceFileName?: string,
     sourceType: 'csv' | 'excel' = 'csv',
-  ): { venueCount: number; sessionCount: number } {
+  ): { venueCount: number; sessionCount: number } | null {
+    // 重複チェック: overwrite モードでは手動登録のみを保護対象とする
+    // buildSiteGroups が内部で normalize するため、ここでは検査専用に正規化する
+    const normalizedForCheck = normalizeImportedWorkSites(validSites);
+    const effectiveExisting = overwriteMode
+      ? workSites.filter((s) => s.source === 'manual' || s.isManuallyEdited)
+      : workSites;
+    const { duplicateCount, hasManualDuplicate } = countDuplicateVenues(
+      normalizedForCheck,
+      effectiveExisting,
+    );
+    if (duplicateCount > 0) {
+      const manualWarning = hasManualDuplicate
+        ? '\n⚠️ 手動登録済みの会場が含まれています。上書きされる可能性があります。'
+        : '';
+      const ok = window.confirm(
+        `既存の会場と重複する会場が ${duplicateCount} 件あります。${manualWarning}\n\n取り込みを続けますか？`,
+      );
+      if (!ok) return null;
+    }
+
     const { sites, venueCount, sessionCount, importBatchId, importedAt } =
       buildSiteGroups(validSites, sourceFileName);
     onImportSites(sites, overwriteMode);
@@ -673,10 +717,11 @@ export default function CsvImporter({
 
   function handleImportSites() {
     if (!sitePreview?.valid.length) return;
-    const { venueCount, sessionCount } = applySiteImport(sitePreview.valid, sitePreview.fileName);
+    const result = applySiteImport(sitePreview.valid, sitePreview.fileName);
+    if (!result) return;
     clearSitePreview();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
-    setSiteSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
+    setSiteSuccess(`${result.venueCount}現場・${result.sessionCount}会期を追加しました${modeLabel}`);
     setTimeout(() => setSiteSuccess(''), 5000);
   }
 
@@ -694,19 +739,21 @@ export default function CsvImporter({
 
   function handleImportPasteSites() {
     if (!pasteSitePreview?.valid.length) return;
-    const { venueCount, sessionCount } = applySiteImport(pasteSitePreview.valid, 'CSV貼り付け');
+    const result = applySiteImport(pasteSitePreview.valid, 'CSV貼り付け');
+    if (!result) return;
     clearPasteSiteText();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
-    setPasteSiteSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
+    setPasteSiteSuccess(`${result.venueCount}現場・${result.sessionCount}会期を追加しました${modeLabel}`);
     setTimeout(() => setPasteSiteSuccess(''), 5000);
   }
 
   function handleImportExcel() {
     if (!excelPreview?.valid.length) return;
-    const { venueCount, sessionCount } = applySiteImport(excelPreview.valid, excelFileName, 'excel');
+    const result = applySiteImport(excelPreview.valid, excelFileName, 'excel');
+    if (!result) return;
     clearExcelPreview();
     const modeLabel = overwriteMode ? '（既存CSVデータを置換）' : '';
-    setExcelSuccess(`${venueCount}現場・${sessionCount}会期を追加しました${modeLabel}`);
+    setExcelSuccess(`${result.venueCount}現場・${result.sessionCount}会期を追加しました${modeLabel}`);
     setTimeout(() => setExcelSuccess(''), 5000);
   }
 
