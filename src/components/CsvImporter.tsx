@@ -14,7 +14,7 @@ import {
   SiteParseResult,
   DaysOffRow,
 } from '../utils/csvImport';
-import { normalizeShiftRow, normalizeSiteIdentity, applySiteNormalize } from '../utils/shiftNormalize';
+import { normalizeShiftRow, buildNormalizedSiteKey, normalizeImportedWorkSites } from '../utils/shiftNormalize';
 import { diffImportBatch, ImportDiffResult } from '../utils/importDiff';
 import { nextStaffNo } from '../utils/staffUtils';
 import { formatSiteLabel } from '../utils/siteUtils';
@@ -329,7 +329,9 @@ function parseSiteDate(s: string): Date {
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
+    // normalizedSiteKey は normalizeImportedWorkSites 後に必ず付与される。
+    // フォールバックは subSiteName も含む buildNormalizedSiteKey を使う（normalizeSiteIdentity は subSiteName を無視するため不可）。
+    const key = site.normalizedSiteKey ?? buildNormalizedSiteKey(site.siteName, site.subSiteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -573,11 +575,13 @@ export default function CsvImporter({
     const pad = (n: number) => String(n).padStart(2, '0');
     const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-    const normalizedSites = validSites.map(applySiteNormalize);
+    const normalizedSites = normalizeImportedWorkSites(validSites);
 
     const bySiteKey = new Map<string, WorkSite[]>();
     for (const site of normalizedSites) {
-      const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
+      // normalizedSiteKey は normalizeImportedWorkSites 後に必ず付与される。
+    // フォールバックは subSiteName も含む buildNormalizedSiteKey を使う（normalizeSiteIdentity は subSiteName を無視するため不可）。
+    const key = site.normalizedSiteKey ?? buildNormalizedSiteKey(site.siteName, site.subSiteName, site.clientName);
       if (!bySiteKey.has(key)) bySiteKey.set(key, []);
       bySiteKey.get(key)!.push(site);
     }

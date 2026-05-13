@@ -192,15 +192,40 @@ export function buildSiteIdentityKey(
 }
 
 /**
- * CSV/Excel 取込した WorkSite に normalize を適用して返す。
- * groupId 付与前の `buildCsvImportGroups` / `applySiteImport` で使用。
+ * インポート由来の WorkSite[] を一括で正規化する共通ゲートウェイ関数。
+ *
+ * CSV / Excel / ウィザード / 貼り付けなど、すべてのインポート経路でこの関数を通すこと。
+ * 直接 applySiteNormalize を呼ぶ代わりにこちらを使う。
+ *
+ * 保証する不変条件:
+ * - rawSiteName      : 元ファイルの文字列を保持。以降は絶対に上書きしない
+ * - siteName         : cleanSiteName 後の親会場名のみ（subSiteName / displaySiteName ではない）
+ * - subSiteName      : 独立フィールド。siteName に混在させない
+ * - clientName       : 優先順位 → ファイル列 > ウィザード fallback > 括弧抽出
+ * - displaySiteName  : UI 表示専用。内部キー・グルーピング・重複判定には使わない
+ * - normalizedSiteKey: clientName + siteName + subSiteName の正規化キー（候補検索用）
+ * - siteIdentityKey  : 同上（再インポート・重複検知・importDiff の唯一の基準）
+ */
+export function normalizeImportedWorkSites(sites: WorkSite[]): WorkSite[] {
+  return sites.map(applySiteNormalize);
+}
+
+/**
+ * WorkSite 1件に normalize を適用して返す。
+ * 複数件を処理する場合は normalizeImportedWorkSites() を使うこと。
+ *
+ * clientName の確定優先順位:
+ *   1. site.clientName（ファイルの clientName 列 or ウィザード Step2 の fallback 値）
+ *   2. siteName 括弧からの自動抽出（例: "渋谷（ABC社）" → "ABC社"）
+ *   3. '' （空文字）
+ * ※ site.clientName が設定済みであれば括弧抽出は行われない。
  *
  * フィールドの役割:
- * - rawSiteName      : 元の siteName を保存（原本確認・再処理用）。既に設定済みなら上書きしない
+ * - rawSiteName      : 元の siteName を保存。既に設定済みなら上書きしない
  * - siteName         : 親会場名のみ（displaySiteName ではない）
  * - subSiteName      : サブ会場名（独立フィールド）
- * - displaySiteName  : 画面・Excel 表示用（buildDisplaySiteName で生成）
- * - normalizedSiteKey: 表記ゆれ吸収・類似候補検索用の内部比較キー
+ * - displaySiteName  : 画面・Excel 表示用。内部キーに使わない
+ * - normalizedSiteKey: 表記ゆれ吸収・類似候補検索用キー
  * - siteIdentityKey  : 会場同一性判定の基準キー（importDiff / 再インポート判定）
  */
 export function applySiteNormalize(site: WorkSite): WorkSite {
@@ -208,6 +233,7 @@ export function applySiteNormalize(site: WorkSite): WorkSite {
   const cleaned = cleanSiteName(site.siteName);
   const m = cleaned.match(/[（(]([^）)]+)[）)]$/);
   const extractedClient = m ? m[1].trim() : undefined;
+  // clientName 優先順位: ファイル列/fallback (site.clientName) > 括弧抽出 > ''
   const clientName = site.clientName?.trim() || extractedClient || '';
   const siteNameFinal = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
   const subSiteName = site.subSiteName?.trim() || undefined;

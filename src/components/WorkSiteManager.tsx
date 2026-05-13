@@ -2,7 +2,7 @@ import { useRef, useState, useMemo } from 'react';
 import { WorkSite } from '../types';
 import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
 import { formatSiteLabel } from '../utils/siteUtils';
-import { normalizeSiteIdentity, applySiteNormalize } from '../utils/shiftNormalize';
+import { buildNormalizedSiteKey, normalizeImportedWorkSites } from '../utils/shiftNormalize';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
@@ -90,7 +90,9 @@ function peakColorClass(peak: number, avg: number): 'high' | 'medium' | 'normal'
 function countImportSessions(sites: WorkSite[]): { sessionCount: number; venueCount: number } {
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of sites) {
-    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
+    // normalizedSiteKey は normalizeImportedWorkSites 後に必ず付与される。
+    // フォールバックは subSiteName も含む buildNormalizedSiteKey を使う（normalizeSiteIdentity は subSiteName を無視するため不可）。
+    const key = site.normalizedSiteKey ?? buildNormalizedSiteKey(site.siteName, site.subSiteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }
@@ -122,12 +124,14 @@ function buildCsvImportGroups(sites: WorkSite[], sourceFileName?: string): WorkS
   const pad = (n: number) => String(n).padStart(2, '0');
   const importLabel = `CSV取込：${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-  const normalizedSites = sites.map(applySiteNormalize);
+  const normalizedSites = normalizeImportedWorkSites(sites);
 
   const bySiteKey = new Map<string, WorkSite[]>();
   for (const site of normalizedSites) {
     // applySiteNormalize 後は normalizedSiteKey が保証されているが、型上 optional なので fallback
-    const key = site.normalizedSiteKey ?? normalizeSiteIdentity(site.siteName, site.clientName);
+    // normalizedSiteKey は normalizeImportedWorkSites 後に必ず付与される。
+    // フォールバックは subSiteName も含む buildNormalizedSiteKey を使う（normalizeSiteIdentity は subSiteName を無視するため不可）。
+    const key = site.normalizedSiteKey ?? buildNormalizedSiteKey(site.siteName, site.subSiteName, site.clientName);
     if (!bySiteKey.has(key)) bySiteKey.set(key, []);
     bySiteKey.get(key)!.push(site);
   }

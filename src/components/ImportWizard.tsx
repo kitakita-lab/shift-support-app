@@ -12,7 +12,7 @@ import {
   autoDetectMapping,
   applyMapping,
 } from '../utils/rawImport';
-import { applySiteNormalize, buildSiteIdentityKey, cleanSiteName } from '../utils/shiftNormalize';
+import { normalizeImportedWorkSites, buildSiteIdentityKey, cleanSiteName } from '../utils/shiftNormalize';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -226,13 +226,14 @@ function buildImportSites(
   const decisionMap = new Map<string, VenueDecision>();
   for (const d of decisions) decisionMap.set(d.rawKey, d);
 
-  const result: WorkSite[] = [];
+  // ① まず正規化前の WorkSite を収集する
+  const raw: WorkSite[] = [];
   for (const row of parsedRows) {
     if (row.errors.length > 0) continue;
     const rawKey   = `${row.rawSiteName}\0${row.subSiteNameRaw}`;
     const decision = decisionMap.get(rawKey);
     if (!decision?.choice) continue;
-    if (decision.choice.kind === 'skip') continue; // 取り込まない
+    if (decision.choice.kind === 'skip') continue;
 
     const { choice, clientName } = decision;
     const groupId     = choice.kind === 'existing' ? choice.groupId : crypto.randomUUID();
@@ -246,30 +247,29 @@ function buildImportSites(
     const sessionId   = crypto.randomUUID();
 
     for (const date of expandDateRange(row.startDate, row.endDate)) {
-      result.push(
-        applySiteNormalize({
-          id:             crypto.randomUUID(),
-          groupId,
-          groupLabel,
-          sessionId,
-          date,
-          clientName:     clientName?.trim() || undefined,
-          siteName,
-          subSiteName,
-          rawSiteName:    row.rawSiteName,
-          startTime:      row.startTime,
-          endTime:        row.endTime,
-          requiredPeople: row.requiredPeople ?? 1,
-          memo:           row.memo,
-          source:         'csv',
-          importBatchId,
-          importedAt,
-          sourceFileName: sourceFileName || undefined,
-        }),
-      );
+      raw.push({
+        id:             crypto.randomUUID(),
+        groupId,
+        groupLabel,
+        sessionId,
+        date,
+        clientName:     clientName?.trim() || undefined,
+        siteName,
+        subSiteName,
+        rawSiteName:    row.rawSiteName, // 元ファイルの原文を保持
+        startTime:      row.startTime,
+        endTime:        row.endTime,
+        requiredPeople: row.requiredPeople ?? 1,
+        memo:           row.memo,
+        source:         'csv',
+        importBatchId,
+        importedAt,
+        sourceFileName: sourceFileName || undefined,
+      });
     }
   }
-  return result;
+  // ② 共通ゲートウェイで一括正規化（siteName / normalizedSiteKey / siteIdentityKey 等を確定）
+  return normalizeImportedWorkSites(raw);
 }
 
 // ── Constants ─────────────────────────────────────────────────
