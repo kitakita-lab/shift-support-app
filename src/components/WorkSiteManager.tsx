@@ -219,6 +219,7 @@ interface SessionEditorState {
   groupId: string;
   clientName: string;
   siteName: string;
+  subSiteName: string;
   sessions: SessionForm[];
   isExistingGroup: boolean;
   sourceIds: string[];
@@ -319,7 +320,8 @@ function buildSessionSites(
   state: SessionEditorState,
   editMeta?: { isManuallyEdited?: boolean; manualEditedAt?: string }
 ): WorkSite[] {
-  const { groupId, clientName, siteName, sessions } = state;
+  const { groupId, clientName, siteName, subSiteName, sessions } = state;
+  const subSiteNameVal = subSiteName.trim() || undefined;
   const groupLabel = computeGroupLabel(siteName, clientName, sessions);
   const sites: WorkSite[] = [];
   for (const session of sessions) {
@@ -334,6 +336,7 @@ function buildSessionSites(
         date,
         clientName,
         siteName,
+        subSiteName:    subSiteNameVal,
         startTime:      session.startTime,
         endTime:        session.endTime,
         requiredPeople: normalizeRequiredPeople(session.requiredPeople),
@@ -347,7 +350,7 @@ function buildSessionSites(
     return [{
       id: createId(), groupId,
       groupLabel: `${formatSiteLabel(siteName, clientName)}：会期なし`,
-      date: '', clientName, siteName,
+      date: '', clientName, siteName, subSiteName: subSiteNameVal,
       startTime: '', endTime: '',
       requiredPeople: 0, memo: '',
       isPlaceholder: true,
@@ -488,10 +491,11 @@ interface Props {
 
 export default function WorkSiteManager({ workSites, onChange, onAddImportLog, selectedMonth }: Props) {
   // ── 新規現場登録フォーム
-  const [newClientName, setNewClientName] = useState('');
-  const [newSiteName, setNewSiteName]     = useState('');
-  const [newSessions, setNewSessions]     = useState<SessionForm[]>([emptySession()]);
-  const [successMsg, setSuccessMsg]       = useState('');
+  const [newClientName,  setNewClientName]  = useState('');
+  const [newSiteName,    setNewSiteName]    = useState('');
+  const [newSubSiteName, setNewSubSiteName] = useState('');
+  const [newSessions,    setNewSessions]    = useState<SessionForm[]>([emptySession()]);
+  const [successMsg,     setSuccessMsg]     = useState('');
 
   // ── 会期エディタ・アコーディオン
   const [sessionEditor,      setSessionEditor]      = useState<SessionEditorState | null>(null);
@@ -593,13 +597,14 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   function handleNewSiteSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!isReady) return;
-    const groupId    = createId();
-    const groupLabel = computeGroupLabel(newSiteName, newClientName, newSessions);
-    const newSites: WorkSite[] = [];
+    const groupId       = createId();
+    const groupLabel    = computeGroupLabel(newSiteName, newClientName, newSessions);
+    const subSiteNameVal = newSubSiteName.trim() || undefined;
+    const rawSites: WorkSite[] = [];
     for (const session of newSessions) {
       const sessionId = session.id;
       for (const date of calcDateRange(session.startDate, session.endDate)) {
-        newSites.push({
+        rawSites.push({
           id: createId(),
           groupId,
           groupLabel,
@@ -607,6 +612,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
           date,
           clientName:     newClientName,
           siteName:       newSiteName,
+          subSiteName:    subSiteNameVal,
           startTime:      session.startTime,
           endTime:        session.endTime,
           requiredPeople: normalizeRequiredPeople(session.requiredPeople),
@@ -615,10 +621,13 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
         });
       }
     }
+    // displaySiteName / normalizedSiteKey / siteIdentityKey を手動登録時にも付与する
+    const newSites = normalizeImportedWorkSites(rawSites);
     onChange([...workSites, ...newSites]);
     setSuccessMsg(`${newSites.length}件の現場を登録しました`);
     setNewClientName('');
     setNewSiteName('');
+    setNewSubSiteName('');
     setNewSessions([emptySession()]);
     setTimeout(() => setSuccessMsg(''), 4000);
   }
@@ -700,8 +709,9 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   function openGroupSessionEditor(groupId: string, sites: WorkSite[]) {
     setSessionEditor({
       groupId,
-      clientName: sites[0]?.clientName ?? '',
-      siteName: sites[0]?.siteName ?? '',
+      clientName:  sites[0]?.clientName  ?? '',
+      siteName:    sites[0]?.siteName    ?? '',
+      subSiteName: sites[0]?.subSiteName ?? '',
       sessions: deriveSessionsFromSites(sites),
       isExistingGroup: true,
       sourceIds: [],
@@ -711,8 +721,9 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   function openGroupSessionEditorWithNewSession(groupId: string, sites: WorkSite[]) {
     setSessionEditor({
       groupId,
-      clientName: sites[0]?.clientName ?? '',
-      siteName: sites[0]?.siteName ?? '',
+      clientName:  sites[0]?.clientName  ?? '',
+      siteName:    sites[0]?.siteName    ?? '',
+      subSiteName: sites[0]?.subSiteName ?? '',
       sessions: [...deriveSessionsFromSites(sites), emptySession()],
       isExistingGroup: true,
       sourceIds: [],
@@ -721,9 +732,10 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
 
   function openSiteSessionEditor(site: WorkSite) {
     setSessionEditor({
-      groupId:  createId(),
-      clientName: site.clientName ?? '',
-      siteName: site.siteName,
+      groupId:     createId(),
+      clientName:  site.clientName  ?? '',
+      siteName:    site.siteName,
+      subSiteName: site.subSiteName ?? '',
       sessions: [{
         id:             createId(),
         startDate:      site.date,
@@ -743,7 +755,8 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     const editMeta = sessionEditor.isExistingGroup
       ? { isManuallyEdited: true as const, manualEditedAt: new Date().toISOString() }
       : undefined;
-    const newSites  = buildSessionSites(sessionEditor, editMeta);
+    // displaySiteName / normalizedSiteKey / siteIdentityKey を確定させる
+    const newSites  = normalizeImportedWorkSites(buildSessionSites(sessionEditor, editMeta));
     const remaining = sessionEditor.isExistingGroup
       ? workSites.filter((s) => s.groupId !== sessionEditor.groupId)
       : workSites.filter((s) => !sessionEditor.sourceIds.includes(s.id));
@@ -876,7 +889,13 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
             開始日
             <input type="date" className="form-input form-input--short"
               value={session.startDate}
-              onChange={(e) => onUpdate(session.id, { startDate: e.target.value })} />
+              onChange={(e) => {
+                const newStart = e.target.value;
+                // 終了日が未入力の場合は開始日と同日を自動補完（単発案件の入力を簡略化）
+                const patch: Partial<SessionForm> = { startDate: newStart };
+                if (newStart && !session.endDate) patch.endDate = newStart;
+                onUpdate(session.id, patch);
+              }} />
           </label>
           <label className="edit-panel__field">
             終了日
@@ -947,6 +966,16 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
               setSessionEditor((prev) => prev ? { ...prev, siteName: v } : prev);
             }} />
         </label>
+        <label className="edit-panel__field edit-panel__field--wide">
+          サブ会場名（区画・売場）
+          <input type="text" className="form-input"
+            value={sessionEditor.subSiteName}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSessionEditor((prev) => prev ? { ...prev, subSiteName: v } : prev);
+            }}
+            placeholder="2階ドラッグ側、センターコート 等（省略可）" />
+        </label>
       </div>
 
       {sessionEditor.sessions.map((session, idx) =>
@@ -999,6 +1028,13 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
             <input className="form-input" type="text" value={newSiteName}
               onChange={(e) => setNewSiteName(e.target.value)}
               placeholder="〇〇倉庫" required />
+          </div>
+
+          <div className="form-row">
+            <label className="form-label">サブ会場名</label>
+            <input className="form-input" type="text" value={newSubSiteName}
+              onChange={(e) => setNewSubSiteName(e.target.value)}
+              placeholder="2階ドラッグ側、センターコート 等（省略可）" />
           </div>
 
           {newSessions.map((session, idx) =>
@@ -1117,6 +1153,12 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
                       <span className="venue-chevron">{isVenueOpen ? '▲' : '▼'}</span>
                     </button>
                     <div className="site-actions">
+                      {!isEditingSession && (
+                        <button className="btn btn--sm btn--secondary"
+                          onClick={() => openGroupSessionEditorWithNewSession(groupId, sites)}>
+                          ＋会期を追加
+                        </button>
+                      )}
                       <button className="btn btn--sm btn--secondary"
                         onClick={() => isEditingSession
                           ? setSessionEditor(null)
