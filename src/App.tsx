@@ -211,6 +211,7 @@ export default function App() {
           <WorkSiteManager
             workSites={workSites}
             onChange={handleWorkSiteChange}
+            onAddImportLog={handleAddImportLog}
             selectedMonth={selectedMonth}
           />
         )}

@@ -1,5 +1,5 @@
 import { useRef, useState, useMemo } from 'react';
-import { WorkSite } from '../types';
+import { WorkSite, ImportLog } from '../types';
 import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
 import { formatSiteLabel } from '../utils/siteUtils';
 import { buildNormalizedSiteKey, normalizeImportedWorkSites } from '../utils/shiftNormalize';
@@ -175,6 +175,32 @@ function buildCsvImportGroups(sites: WorkSite[], sourceFileName?: string): WorkS
     }
   }
   return result;
+}
+
+// ─── 重複チェック ──────────────────────────────────────────
+
+function countDuplicateVenues(
+  incomingSites: WorkSite[],
+  effectiveExisting: WorkSite[],
+): { duplicateCount: number; hasManualDuplicate: boolean } {
+  const existingKeyToSite = new Map<string, WorkSite>();
+  for (const s of effectiveExisting) {
+    if (s.siteIdentityKey) existingKeyToSite.set(s.siteIdentityKey, s);
+  }
+  const checkedKeys = new Set<string>();
+  let duplicateCount = 0;
+  let hasManualDuplicate = false;
+  for (const site of incomingSites) {
+    const key = site.siteIdentityKey;
+    if (!key || checkedKeys.has(key)) continue;
+    checkedKeys.add(key);
+    const existing = existingKeyToSite.get(key);
+    if (existing) {
+      duplicateCount++;
+      if (existing.source === 'manual' || existing.isManuallyEdited) hasManualDuplicate = true;
+    }
+  }
+  return { duplicateCount, hasManualDuplicate };
 }
 
 // ─── SessionForm (会期) ────────────────────────────────────
@@ -454,12 +480,13 @@ function groupSitesIntoDisplaySessions(sites: WorkSite[]): DisplaySession[] {
 interface Props {
   workSites: WorkSite[];
   onChange: (workSites: WorkSite[]) => void;
+  onAddImportLog: (log: ImportLog) => void;
   selectedMonth: string;
 }
 
 // ─── component ─────────────────────────────────────────────
 
-export default function WorkSiteManager({ workSites, onChange, selectedMonth }: Props) {
+export default function WorkSiteManager({ workSites, onChange, onAddImportLog, selectedMonth }: Props) {
   // ── 新規現場登録フォーム
   const [newClientName, setNewClientName] = useState('');
   const [newSiteName, setNewSiteName]     = useState('');
@@ -772,11 +799,47 @@ export default function WorkSiteManager({ workSites, onChange, selectedMonth }: 
 
   function handleModalImport() {
     if (!csvModalPreview?.valid.length) return;
+
+    // 重複チェック: overwrite モードでは CSV 由来は置換対象なので除外して判定する
+    // buildCsvImportGroups が内部で normalize するため、検査専用に正規化する
+    const normalizedForCheck = normalizeImportedWorkSites(csvModalPreview.valid);
+    const effectiveExisting = csvModalOverwrite
+      ? workSites.filter((s) => s.source !== 'csv')
+      : workSites;
+    const { duplicateCount, hasManualDuplicate } = countDuplicateVenues(
+      normalizedForCheck,
+      effectiveExisting,
+    );
+    if (duplicateCount > 0) {
+      const manualWarning = hasManualDuplicate
+        ? '\n⚠️ 手動登録済みの会場が含まれています。上書きされる可能性があります。'
+        : '';
+      const ok = window.confirm(
+        `既存の会場と重複する会場が ${duplicateCount} 件あります。${manualWarning}\n\n取り込みを続けますか？`,
+      );
+      if (!ok) return;
+    }
+
     const groups = buildCsvImportGroups(csvModalPreview.valid, csvModalPreview.fileName);
     const base = csvModalOverwrite
       ? workSites.filter((s) => s.source !== 'csv')
       : workSites;
     onChange([...base, ...groups]);
+
+    // ImportLog を発行（バッチID・取込日時は buildCsvImportGroups が各サイトに付与済み）
+    const batchId    = groups[0]?.importBatchId ?? createId();
+    const importedAt = groups[0]?.importedAt    ?? new Date().toISOString();
+    onAddImportLog({
+      id:                createId(),
+      importBatchId:     batchId,
+      source:            'csv',
+      sourceFileName:    csvModalPreview.fileName,
+      importedAt,
+      rowCount:          csvModalPreview.valid.length,
+      importedSiteCount: groups.length,
+      addedCount:        groups.length,
+    });
+
     closeCsvModal();
   }
 
