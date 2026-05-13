@@ -3,6 +3,7 @@ import { WorkSite, ImportLog } from '../types';
 import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
 import { formatSiteLabel } from '../utils/siteUtils';
 import { buildNormalizedSiteKey, normalizeImportedWorkSites } from '../utils/shiftNormalize';
+import SessionDateRangePicker from './SessionDateRangePicker';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
@@ -885,24 +886,14 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
           </button>
         </div>
         <div className="session-edit-card__fields">
-          <label className="edit-panel__field">
-            開始日
-            <input type="date" className="form-input form-input--short"
-              value={session.startDate}
-              onChange={(e) => {
-                const newStart = e.target.value;
-                // 終了日が未入力の場合は開始日と同日を自動補完（単発案件の入力を簡略化）
-                const patch: Partial<SessionForm> = { startDate: newStart };
-                if (newStart && !session.endDate) patch.endDate = newStart;
-                onUpdate(session.id, patch);
-              }} />
-          </label>
-          <label className="edit-panel__field">
-            終了日
-            <input type="date" className="form-input form-input--short"
-              value={session.endDate}
-              onChange={(e) => onUpdate(session.id, { endDate: e.target.value })} />
-          </label>
+          <div className="edit-panel__field edit-panel__field--date-range">
+            期間
+            <SessionDateRangePicker
+              startDate={session.startDate}
+              endDate={session.endDate}
+              onChange={(s, e) => onUpdate(session.id, { startDate: s, endDate: e })}
+            />
+          </div>
           <label className="edit-panel__field">
             開始時間
             <input type="time" className="form-input form-input--short"
