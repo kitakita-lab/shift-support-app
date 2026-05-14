@@ -1423,6 +1423,22 @@ h2 {
   margin-bottom: 10px;
 }
 
+/* 追加中バッジ: 新規会期カード用グリーン強調 */
+.session-edit-card--new {
+  border-color: #10b981;
+  background: #f0fdf4;
+}
+
+.session-edit-card__new-badge {
+  font-size: 12px;
+  font-weight: 700;
+  color: #059669;
+  background: #d1fae5;
+  padding: 2px 10px;
+  border-radius: 12px;
+  letter-spacing: 0.02em;
+}
+
 .session-edit-card--collapsed {
   padding-bottom: 10px;
 }
