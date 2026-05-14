@@ -4,8 +4,9 @@ import { ja } from 'react-day-picker/locale';
 import 'react-day-picker/style.css';
 
 interface Props {
-  startDate: string;
-  endDate:   string;
+  startDate:     string;
+  endDate:       string;
+  currentMonth?: string; // YYYY-MM。startDate が空のときカレンダーの初期表示月に使う
   onChange: (startDate: string, endDate: string) => void;
 }
 
@@ -29,10 +30,30 @@ function fmtJp(dateStr: string): string {
   return `${y}/${m}/${d}（${dow}）`;
 }
 
-export default function SessionDateRangePicker({ startDate, endDate, onChange }: Props) {
+// 初期表示月: startDate > currentMonth > 今月 の優先順
+function resolveDefaultMonth(startDate: string, currentMonth?: string): Date {
+  if (startDate) {
+    const d = toDate(startDate);
+    if (d) return d;
+  }
+  if (currentMonth) {
+    const [y, m] = currentMonth.split('-').map(Number);
+    if (y && m) return new Date(y, m - 1, 1);
+  }
+  return new Date();
+}
+
+export default function SessionDateRangePicker({
+  startDate,
+  endDate,
+  currentMonth,
+  onChange,
+}: Props) {
   const from     = toDate(startDate);
   const to       = toDate(endDate);
   const selected: DateRange = { from, to };
+
+  const defaultMonth = resolveDefaultMonth(startDate, currentMonth);
 
   function handleSelect(range: DateRange | undefined) {
     if (!range || !range.from) {
@@ -64,6 +85,7 @@ export default function SessionDateRangePicker({ startDate, endDate, onChange }:
         onSelect={handleSelect}
         locale={ja}
         numberOfMonths={1}
+        defaultMonth={defaultMonth}
       />
     </div>
   );

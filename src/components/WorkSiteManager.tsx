@@ -503,6 +503,8 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   const [expandedSessions,   setExpandedSessions]   = useState<Set<string>>(new Set());
   const [expandedVenues,     setExpandedVenues]     = useState<Set<string>>(new Set());
   const [detailedDailyKeys,  setDetailedDailyKeys]  = useState<Set<string>>(new Set());
+  // 会期エディタ内でどのセッションカードが展開されているか（IDで管理）
+  const [expandedSessionForms, setExpandedSessionForms] = useState<Set<string>>(new Set());
 
   // ── CSV 取込モーダル
   const [csvModalOpen,      setCsvModalOpen]      = useState(false);
@@ -705,6 +707,14 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     });
   }
 
+  function toggleSessionForm(id: string) {
+    setExpandedSessionForms((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
   // ── 会期エディタ操作 ────────────────────────────────────────
 
   function openGroupSessionEditor(groupId: string, sites: WorkSite[]) {
@@ -717,38 +727,45 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
       isExistingGroup: true,
       sourceIds: [],
     });
+    // 既存会期一覧: 折りたたんで表示（ユーザーが必要なものだけ開く）
+    setExpandedSessionForms(new Set());
   }
 
   function openGroupSessionEditorWithNewSession(groupId: string, sites: WorkSite[]) {
+    const newSess = emptySession();
     setSessionEditor({
       groupId,
       clientName:  sites[0]?.clientName  ?? '',
       siteName:    sites[0]?.siteName    ?? '',
       subSiteName: sites[0]?.subSiteName ?? '',
-      sessions: [...deriveSessionsFromSites(sites), emptySession()],
+      sessions: [...deriveSessionsFromSites(sites), newSess],
       isExistingGroup: true,
       sourceIds: [],
     });
+    // 新しく追加した会期だけ自動展開
+    setExpandedSessionForms(new Set([newSess.id]));
   }
 
   function openSiteSessionEditor(site: WorkSite) {
+    const sess: SessionForm = {
+      id:             createId(),
+      startDate:      site.date,
+      endDate:        site.date,
+      startTime:      site.startTime,
+      endTime:        site.endTime,
+      requiredPeople: site.requiredPeople,
+      memo:           site.memo,
+    };
     setSessionEditor({
       groupId:     createId(),
       clientName:  site.clientName  ?? '',
       siteName:    site.siteName,
       subSiteName: site.subSiteName ?? '',
-      sessions: [{
-        id:             createId(),
-        startDate:      site.date,
-        endDate:        site.date,
-        startTime:      site.startTime,
-        endTime:        site.endTime,
-        requiredPeople: site.requiredPeople,
-        memo:           site.memo,
-      }],
+      sessions: [sess],
       isExistingGroup: false,
       sourceIds: [site.id],
     });
+    setExpandedSessionForms(new Set([sess.id]));
   }
 
   function applySessionEditor() {
@@ -776,10 +793,12 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   }
 
   function addSession() {
+    const newSess = emptySession();
     setSessionEditor((prev) => {
       if (!prev) return prev;
-      return { ...prev, sessions: [...prev.sessions, emptySession()] };
+      return { ...prev, sessions: [...prev.sessions, newSess] };
     });
+    setExpandedSessionForms((prev) => new Set([...prev, newSess.id]));
   }
 
   function removeSession(id: string) {
@@ -870,65 +889,93 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     session: SessionForm,
     idx: number,
     onUpdate: (id: string, patch: Partial<SessionForm>) => void,
-    onRemove: (id: string) => void
+    onRemove: (id: string) => void,
+    collapsible = false,
   ) {
-    const dateError = session.startDate && session.endDate && session.endDate < session.startDate;
+    const dateError  = session.startDate && session.endDate && session.endDate < session.startDate;
+    const isExpanded = !collapsible || expandedSessionForms.has(session.id);
+
+    const dayCount     = calcDayCount(session.startDate, session.endDate);
+    const summaryLabel = session.startDate && session.endDate
+      ? session.startDate === session.endDate
+        ? `${session.startDate.replace(/-/g, '/')}（1日）`
+        : `${session.startDate.replace(/-/g, '/')} 〜 ${session.endDate.replace(/-/g, '/')}（${dayCount}日）`
+      : session.startDate
+      ? `${session.startDate.replace(/-/g, '/')} → 終了日未設定`
+      : '期間未設定';
+
     return (
-      <div key={session.id} className="session-edit-card">
+      <div key={session.id} className={`session-edit-card${!isExpanded ? ' session-edit-card--collapsed' : ''}`}>
         <div className="session-edit-card__title">
-          <span>会期 {idx + 1}</span>
+          {collapsible ? (
+            <button
+              type="button"
+              className="session-edit-card__toggle"
+              onClick={() => toggleSessionForm(session.id)}>
+              <span className="session-edit-card__label">会期 {idx + 1}</span>
+              {!isExpanded && <span className="session-edit-card__summary">{summaryLabel}</span>}
+              <span className="session-edit-card__chevron">{isExpanded ? '▲' : '▼'}</span>
+            </button>
+          ) : (
+            <span>会期 {idx + 1}</span>
+          )}
           <button type="button" className="btn btn--sm btn--danger"
             onClick={() => {
               if (!confirm('この会期を削除します。よろしいですか？')) return;
               onRemove(session.id);
             }}>
-            この会期を削除
+            削除
           </button>
         </div>
-        <div className="session-edit-card__fields">
-          <div className="edit-panel__field edit-panel__field--date-range">
-            期間
-            <SessionDateRangePicker
-              startDate={session.startDate}
-              endDate={session.endDate}
-              onChange={(s, e) => onUpdate(session.id, { startDate: s, endDate: e })}
-            />
-          </div>
-          <label className="edit-panel__field">
-            開始時間
-            <input type="time" className="form-input form-input--short"
-              value={session.startTime}
-              onChange={(e) => onUpdate(session.id, { startTime: e.target.value })} />
-          </label>
-          <label className="edit-panel__field">
-            終了時間
-            <input type="time" className="form-input form-input--short"
-              value={session.endTime}
-              onChange={(e) => onUpdate(session.id, { endTime: e.target.value })} />
-          </label>
-          <label className="edit-panel__field">
-            必要人数
-            <input type="number" min={1} className="form-input form-input--short"
-              value={session.requiredPeople}
-              onChange={(e) => {
-                const raw = e.target.value;
-                if (raw === '') {
-                  onUpdate(session.id, { requiredPeople: '' });
-                } else {
-                  const num = parseInt(raw, 10);
-                  onUpdate(session.id, { requiredPeople: isNaN(num) ? '' : num });
-                }
-              }} />
-          </label>
-          <label className="edit-panel__field edit-panel__field--memo">
-            メモ
-            <input type="text" className="form-input"
-              value={session.memo}
-              onChange={(e) => onUpdate(session.id, { memo: e.target.value })} />
-          </label>
-        </div>
-        {dateError && (
-          <p className="field-error">終了日は開始日以降を指定してください</p>
+        {isExpanded && (
+          <>
+            <div className="session-edit-card__fields">
+              <div className="edit-panel__field edit-panel__field--date-range">
+                期間
+                <SessionDateRangePicker
+                  startDate={session.startDate}
+                  endDate={session.endDate}
+                  currentMonth={selectedMonth}
+                  onChange={(s, e) => onUpdate(session.id, { startDate: s, endDate: e })}
+                />
+              </div>
+              <label className="edit-panel__field">
+                開始時間
+                <input type="time" className="form-input form-input--short"
+                  value={session.startTime}
+                  onChange={(e) => onUpdate(session.id, { startTime: e.target.value })} />
+              </label>
+              <label className="edit-panel__field">
+                終了時間
+                <input type="time" className="form-input form-input--short"
+                  value={session.endTime}
+                  onChange={(e) => onUpdate(session.id, { endTime: e.target.value })} />
+              </label>
+              <label className="edit-panel__field">
+                必要人数
+                <input type="number" min={1} className="form-input form-input--short"
+                  value={session.requiredPeople}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      onUpdate(session.id, { requiredPeople: '' });
+                    } else {
+                      const num = parseInt(raw, 10);
+                      onUpdate(session.id, { requiredPeople: isNaN(num) ? '' : num });
+                    }
+                  }} />
+              </label>
+              <label className="edit-panel__field edit-panel__field--memo">
+                メモ
+                <input type="text" className="form-input"
+                  value={session.memo}
+                  onChange={(e) => onUpdate(session.id, { memo: e.target.value })} />
+              </label>
+            </div>
+            {dateError && (
+              <p className="field-error">終了日は開始日以降を指定してください</p>
+            )}
+          </>
         )}
       </div>
     );
@@ -970,7 +1017,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
       </div>
 
       {sessionEditor.sessions.map((session, idx) =>
-        renderSessionFields(session, idx, updateSession, removeSession)
+        renderSessionFields(session, idx, updateSession, removeSession, true)
       )}
 
       <div className="session-editor__footer">

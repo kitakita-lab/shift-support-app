@@ -340,6 +340,17 @@ body {
   padding-top: 4px;
 }
 
+@media (max-width: 640px) {
+  .form-actions {
+    position: sticky;
+    bottom: 0;
+    background: #fff;
+    padding: 10px 0 2px;
+    border-top: 1px solid #e5e7eb;
+    z-index: 5;
+  }
+}
+
 /* ===== 曜日チェック ===== */
 .weekday-group {
   display: flex;
@@ -1412,6 +1423,10 @@ h2 {
   margin-bottom: 10px;
 }
 
+.session-edit-card--collapsed {
+  padding-bottom: 10px;
+}
+
 .session-edit-card__title {
   display: flex;
   align-items: center;
@@ -1420,6 +1435,50 @@ h2 {
   font-size: 13px;
   font-weight: 600;
   color: #1a56db;
+}
+
+.session-edit-card--collapsed .session-edit-card__title {
+  margin-bottom: 0;
+}
+
+/* 折りたたみトグルボタン */
+.session-edit-card__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  color: inherit;
+}
+
+.session-edit-card__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a56db;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.session-edit-card__summary {
+  font-size: 13px;
+  color: #374151;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-edit-card__chevron {
+  font-size: 10px;
+  color: #6b7280;
+  margin-left: 4px;
+  flex-shrink: 0;
 }
 
 .session-edit-card__fields {
@@ -1450,6 +1509,17 @@ h2 {
   gap: 10px;
   margin-top: 4px;
   flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .session-editor__footer {
+    position: sticky;
+    bottom: 0;
+    background: #fff;
+    padding: 10px 0 2px;
+    border-top: 1px solid #e5e7eb;
+    z-index: 5;
+  }
 }
 
 .session-editor__footer-right {
@@ -2680,17 +2750,18 @@ details[open] .paste-details__summary::before {
   grid-column: 1 / -1;
 }
 
-/* ラベル表示 */
+/* ラベル表示（#4: 視認性強化） */
 .sdrp__label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #1a56db;
-  min-height: 20px;
-  margin-bottom: 4px;
-  padding: 4px 6px;
-  background: #f0f4ff;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1338a8;
+  min-height: 24px;
+  margin-bottom: 6px;
+  padding: 6px 10px;
+  background: #e6edff;
   border-radius: 4px;
-  border-left: 3px solid #1a56db;
+  border-left: 4px solid #1a56db;
+  line-height: 1.4;
 }
 
 /* カレンダーコンテナ */
@@ -2709,8 +2780,8 @@ details[open] .paste-details__summary::before {
   --rdp-day-width:               44px;
   --rdp-day_button-height:       42px;
   --rdp-day_button-width:        42px;
-  --rdp-nav_button-height:       2.5rem;
-  --rdp-nav_button-width:        2.5rem;
+  --rdp-nav_button-height:       2.75rem;
+  --rdp-nav_button-width:        2.75rem;
   width: 100%;
   max-width: 360px;
   margin: 0 auto;
