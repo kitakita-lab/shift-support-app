@@ -506,6 +506,8 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   const [detailedDailyKeys,  setDetailedDailyKeys]  = useState<Set<string>>(new Set());
   // 会期エディタ内でどのセッションカードが展開されているか（IDで管理）
   const [expandedSessionForms, setExpandedSessionForms] = useState<Set<string>>(new Set());
+  // 基本情報（クライアント名・現場名）エリアの開閉
+  const [siteInfoExpanded,   setSiteInfoExpanded]   = useState(false);
 
   // ── CSV 取込モーダル
   const [csvModalOpen,      setCsvModalOpen]      = useState(false);
@@ -730,6 +732,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
       newSessionIds: [],
     });
     setExpandedSessionForms(new Set());
+    setSiteInfoExpanded(false);
   }
 
   function openGroupSessionEditorWithNewSession(groupId: string, sites: WorkSite[]) {
@@ -739,13 +742,13 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
       clientName:  sites[0]?.clientName  ?? '',
       siteName:    sites[0]?.siteName    ?? '',
       subSiteName: sites[0]?.subSiteName ?? '',
-      // 新規会期を先頭に配置
       sessions:    [newSess, ...deriveSessionsFromSites(sites)],
       isExistingGroup: true,
       sourceIds:   [],
       newSessionIds: [newSess.id],
     });
     setExpandedSessionForms(new Set([newSess.id]));
+    setSiteInfoExpanded(false);
   }
 
   function openSiteSessionEditor(site: WorkSite) {
@@ -769,6 +772,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
       newSessionIds: [],
     });
     setExpandedSessionForms(new Set([sess.id]));
+    setSiteInfoExpanded(false);
   }
 
   function applySessionEditor() {
@@ -911,11 +915,18 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     const dateError  = session.startDate && session.endDate && session.endDate < session.startDate;
     const isExpanded = !collapsible || expandedSessionForms.has(session.id);
 
-    const dayCount     = calcDayCount(session.startDate, session.endDate);
-    const summaryLabel = session.startDate && session.endDate
+    const dayCount    = calcDayCount(session.startDate, session.endDate);
+    const timeStr     = session.startTime && session.endTime
+      ? ` ${session.startTime}〜${session.endTime}` : '';
+    const peopleStr   = session.requiredPeople
+      ? ` ${session.requiredPeople}人` : '';
+    const dateRange   = session.startDate && session.endDate
       ? session.startDate === session.endDate
-        ? `${session.startDate.replace(/-/g, '/')}（1日）`
-        : `${session.startDate.replace(/-/g, '/')} 〜 ${session.endDate.replace(/-/g, '/')}（${dayCount}日）`
+        ? session.startDate.replace(/-/g, '/')
+        : `${session.startDate.slice(5).replace('-', '/')}〜${session.endDate.slice(5).replace('-', '/')}`
+      : null;
+    const summaryLabel = dateRange
+      ? `${dateRange}（${dayCount}日）${timeStr}${peopleStr}`
       : session.startDate
       ? `${session.startDate.replace(/-/g, '/')} → 終了日未設定`
       : '期間未設定';
@@ -943,7 +954,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
           ) : (
             <span>会期 {idx + 1}</span>
           )}
-          <button type="button" className="btn btn--sm btn--danger"
+          <button type="button" className="btn btn--sm btn--ghost-danger"
             onClick={() => {
               if (!confirm('この会期を削除します。よろしいですか？')) return;
               onRemove(session.id);
@@ -1009,35 +1020,49 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
 
   const sessionEditorContent = sessionEditor ? (
     <>
-      <div className="session-editor__sitename">
-        <label className="edit-panel__field edit-panel__field--wide">
-          クライアント名
-          <input type="text" className="form-input"
-            value={sessionEditor.clientName}
-            onChange={(e) => {
-              const v = e.target.value;
-              setSessionEditor((prev) => prev ? { ...prev, clientName: v } : prev);
-            }} />
-        </label>
-        <label className="edit-panel__field edit-panel__field--wide">
-          現場名
-          <input type="text" className="form-input"
-            value={sessionEditor.siteName}
-            onChange={(e) => {
-              const v = e.target.value;
-              setSessionEditor((prev) => prev ? { ...prev, siteName: v } : prev);
-            }} />
-        </label>
-        <label className="edit-panel__field edit-panel__field--wide">
-          サブ会場名（区画・売場）
-          <input type="text" className="form-input"
-            value={sessionEditor.subSiteName}
-            onChange={(e) => {
-              const v = e.target.value;
-              setSessionEditor((prev) => prev ? { ...prev, subSiteName: v } : prev);
-            }}
-            placeholder="2階ドラッグ側、センターコート 等（省略可）" />
-        </label>
+      {/* ── 基本情報（折りたたみ可能） ── */}
+      <div className="session-editor__siteinfo">
+        <button
+          type="button"
+          className="session-editor__siteinfo-toggle"
+          onClick={() => setSiteInfoExpanded((v) => !v)}>
+          <span>基本情報を編集</span>
+          <span className="session-editor__siteinfo-chevron">
+            {siteInfoExpanded ? '▲' : '▼'}
+          </span>
+        </button>
+        {siteInfoExpanded && (
+          <div className="session-editor__siteinfo-body">
+            <label className="edit-panel__field edit-panel__field--wide">
+              クライアント名
+              <input type="text" className="form-input"
+                value={sessionEditor.clientName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSessionEditor((prev) => prev ? { ...prev, clientName: v } : prev);
+                }} />
+            </label>
+            <label className="edit-panel__field edit-panel__field--wide">
+              現場名
+              <input type="text" className="form-input"
+                value={sessionEditor.siteName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSessionEditor((prev) => prev ? { ...prev, siteName: v } : prev);
+                }} />
+            </label>
+            <label className="edit-panel__field edit-panel__field--wide">
+              サブ会場名（区画・売場）
+              <input type="text" className="form-input"
+                value={sessionEditor.subSiteName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSessionEditor((prev) => prev ? { ...prev, subSiteName: v } : prev);
+                }}
+                placeholder="2階ドラッグ側、センターコート 等（省略可）" />
+            </label>
+          </div>
+        )}
       </div>
 
       {(() => {
