@@ -640,6 +640,16 @@ body {
   opacity: 1;
 }
 
+/* NGペアチップ（赤系） */
+.site-chip--ng {
+  background: #dc2626 !important;
+  border-color: #dc2626 !important;
+}
+
+.ng-partner-editor {
+  width: 100%;
+}
+
 /* 優先現場エディタ */
 .preferred-editor {
   width: 100%;
@@ -963,6 +973,11 @@ h2 {
     font-size: 12px;
     color: #3730a3;
     white-space: nowrap;
+  }
+
+  .staff-card__chip--ng {
+    background: #fee2e2;
+    color: #b91c1c;
   }
 
   /* ── メモ（補足扱い）── */

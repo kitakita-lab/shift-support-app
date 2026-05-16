@@ -8,6 +8,7 @@ export interface Staff {
   maxConsecutiveDays?: number;
   memo: string;
   preferredWorkSites: string[];
+  ngPartnerIds?: string[];
 }
 
 export interface WorkSite {

@@ -61,15 +61,14 @@ function wouldExceedConsecutive(
  * 絶対条件をすべて満たすか判定する。false を返したスタッフは配置しない。
  *
  * 将来の拡張:
- *   引数に alreadyAssignedIds: string[] を追加し、以下をここに実装する
- *   - NG組み合わせ: alreadyAssignedIds に NG 相手が含まれる場合 return false
  *   - 最低レベル要件: site.requiredLevel && (s.level ?? 1) < site.requiredLevel
  *   - リーダー必須現場: site.requiresLeader かつリーダー未配置なら非リーダーを除外
  */
 function passesHardConstraints(
   s: Staff,
   site: WorkSite,
-  assignedDates: Set<string>
+  assignedDates: Set<string>,
+  alreadyAssignedIds: string[] = []
 ): boolean {
   // 1. 希望休
   if (s.requestedDaysOff.includes(site.date)) return false;
@@ -80,6 +79,8 @@ function passesHardConstraints(
   // 4. 最大連勤
   const consecutiveLimit = s.maxConsecutiveDays ?? DEFAULT_MAX_CONSECUTIVE_DAYS;
   if (wouldExceedConsecutive(assignedDates, site.date, consecutiveLimit)) return false;
+  // 5. NGペア（双方向は UI 側で保証済み。片方向チェックで十分）
+  if (s.ngPartnerIds?.some((id) => alreadyAssignedIds.includes(id))) return false;
   return true;
 }
 
@@ -173,11 +174,16 @@ export function generateShifts(
       .map((s) => ({ s, score: scoreStaffForSite(s, site, assignedDates[s.id]) }))
       .sort((a, b) => compareByScore(a.s, a.score, b.s, b.score));
 
-    // ── Step 3: 上位 requiredPeople 人を選出（最終ソートはstaffNo順）─
-    const assigned = scored
-      .slice(0, site.requiredPeople)
-      .map(({ s }) => s)
-      .sort(compareStaffNo);
+    // ── Step 3: 上位 requiredPeople 人を選出（NGペアをスキップしながら貪欲選出）─
+    const assigned: Staff[] = [];
+    const assignedIds: string[] = [];
+    for (const { s } of scored) {
+      if (assigned.length >= site.requiredPeople) break;
+      if (!passesHardConstraints(s, site, assignedDates[s.id], assignedIds)) continue;
+      assigned.push(s);
+      assignedIds.push(s.id);
+    }
+    assigned.sort(compareStaffNo);
 
     assigned.forEach((s) => assignedDates[s.id].add(site.date));
 
