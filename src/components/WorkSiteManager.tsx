@@ -224,6 +224,7 @@ interface SessionEditorState {
   sessions: SessionForm[];
   isExistingGroup: boolean;
   sourceIds: string[];
+  newSessionIds: string[]; // 今回の編集で追加した会期のID（上部表示・追加中バッジ用）
 }
 
 function normalizeRequiredPeople(v: number | ''): number {
@@ -505,6 +506,8 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   const [detailedDailyKeys,  setDetailedDailyKeys]  = useState<Set<string>>(new Set());
   // 会期エディタ内でどのセッションカードが展開されているか（IDで管理）
   const [expandedSessionForms, setExpandedSessionForms] = useState<Set<string>>(new Set());
+  // 基本情報（クライアント名・現場名）エリアの開閉
+  const [siteInfoExpanded,   setSiteInfoExpanded]   = useState(false);
 
   // ── CSV 取込モーダル
   const [csvModalOpen,      setCsvModalOpen]      = useState(false);
@@ -723,12 +726,13 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
       clientName:  sites[0]?.clientName  ?? '',
       siteName:    sites[0]?.siteName    ?? '',
       subSiteName: sites[0]?.subSiteName ?? '',
-      sessions: deriveSessionsFromSites(sites),
+      sessions:    deriveSessionsFromSites(sites),
       isExistingGroup: true,
-      sourceIds: [],
+      sourceIds:   [],
+      newSessionIds: [],
     });
-    // 既存会期一覧: 折りたたんで表示（ユーザーが必要なものだけ開く）
     setExpandedSessionForms(new Set());
+    setSiteInfoExpanded(false);
   }
 
   function openGroupSessionEditorWithNewSession(groupId: string, sites: WorkSite[]) {
@@ -738,12 +742,13 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
       clientName:  sites[0]?.clientName  ?? '',
       siteName:    sites[0]?.siteName    ?? '',
       subSiteName: sites[0]?.subSiteName ?? '',
-      sessions: [...deriveSessionsFromSites(sites), newSess],
+      sessions:    [newSess, ...deriveSessionsFromSites(sites)],
       isExistingGroup: true,
-      sourceIds: [],
+      sourceIds:   [],
+      newSessionIds: [newSess.id],
     });
-    // 新しく追加した会期だけ自動展開
     setExpandedSessionForms(new Set([newSess.id]));
+    setSiteInfoExpanded(false);
   }
 
   function openSiteSessionEditor(site: WorkSite) {
@@ -761,11 +766,13 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
       clientName:  site.clientName  ?? '',
       siteName:    site.siteName,
       subSiteName: site.subSiteName ?? '',
-      sessions: [sess],
+      sessions:    [sess],
       isExistingGroup: false,
-      sourceIds: [site.id],
+      sourceIds:   [site.id],
+      newSessionIds: [],
     });
     setExpandedSessionForms(new Set([sess.id]));
+    setSiteInfoExpanded(false);
   }
 
   function applySessionEditor() {
@@ -796,7 +803,12 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     const newSess = emptySession();
     setSessionEditor((prev) => {
       if (!prev) return prev;
-      return { ...prev, sessions: [...prev.sessions, newSess] };
+      return {
+        ...prev,
+        // 先頭に追加することで、スクロール不要でフォームが表示される
+        sessions:     [newSess, ...prev.sessions],
+        newSessionIds: [...prev.newSessionIds, newSess.id],
+      };
     });
     setExpandedSessionForms((prev) => new Set([...prev, newSess.id]));
   }
@@ -805,9 +817,16 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     setSessionEditor((prev) => {
       if (!prev) return prev;
       const remaining = prev.sessions.filter((s) => s.id !== id);
+      const newIds    = prev.newSessionIds.filter((nid) => nid !== id);
+      if (remaining.length > 0) {
+        return { ...prev, sessions: remaining, newSessionIds: newIds };
+      }
+      // 全削除時: 空の新規フォームを先頭に置く
+      const fallback = emptySession();
       return {
         ...prev,
-        sessions: remaining.length > 0 ? remaining : [emptySession()],
+        sessions:     [fallback],
+        newSessionIds: [fallback.id],
       };
     });
   }
@@ -891,23 +910,39 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     onUpdate: (id: string, patch: Partial<SessionForm>) => void,
     onRemove: (id: string) => void,
     collapsible = false,
+    isNew = false,
   ) {
     const dateError  = session.startDate && session.endDate && session.endDate < session.startDate;
     const isExpanded = !collapsible || expandedSessionForms.has(session.id);
 
-    const dayCount     = calcDayCount(session.startDate, session.endDate);
-    const summaryLabel = session.startDate && session.endDate
+    const dayCount    = calcDayCount(session.startDate, session.endDate);
+    const timeStr     = session.startTime && session.endTime
+      ? ` ${session.startTime}〜${session.endTime}` : '';
+    const peopleStr   = session.requiredPeople
+      ? ` ${session.requiredPeople}人` : '';
+    const dateRange   = session.startDate && session.endDate
       ? session.startDate === session.endDate
-        ? `${session.startDate.replace(/-/g, '/')}（1日）`
-        : `${session.startDate.replace(/-/g, '/')} 〜 ${session.endDate.replace(/-/g, '/')}（${dayCount}日）`
+        ? session.startDate.replace(/-/g, '/')
+        : `${session.startDate.slice(5).replace('-', '/')}〜${session.endDate.slice(5).replace('-', '/')}`
+      : null;
+    const summaryLabel = dateRange
+      ? `${dateRange}（${dayCount}日）${timeStr}${peopleStr}`
       : session.startDate
       ? `${session.startDate.replace(/-/g, '/')} → 終了日未設定`
       : '期間未設定';
 
+    const cardClass = [
+      'session-edit-card',
+      !isExpanded ? 'session-edit-card--collapsed' : '',
+      isNew       ? 'session-edit-card--new'       : '',
+    ].filter(Boolean).join(' ');
+
     return (
-      <div key={session.id} className={`session-edit-card${!isExpanded ? ' session-edit-card--collapsed' : ''}`}>
+      <div key={session.id} className={cardClass}>
         <div className="session-edit-card__title">
-          {collapsible ? (
+          {isNew ? (
+            <span className="session-edit-card__new-badge">＋ 追加中</span>
+          ) : collapsible ? (
             <button
               type="button"
               className="session-edit-card__toggle"
@@ -919,7 +954,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
           ) : (
             <span>会期 {idx + 1}</span>
           )}
-          <button type="button" className="btn btn--sm btn--danger"
+          <button type="button" className="btn btn--sm btn--ghost-danger"
             onClick={() => {
               if (!confirm('この会期を削除します。よろしいですか？')) return;
               onRemove(session.id);
@@ -985,40 +1020,68 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
 
   const sessionEditorContent = sessionEditor ? (
     <>
-      <div className="session-editor__sitename">
-        <label className="edit-panel__field edit-panel__field--wide">
-          クライアント名
-          <input type="text" className="form-input"
-            value={sessionEditor.clientName}
-            onChange={(e) => {
-              const v = e.target.value;
-              setSessionEditor((prev) => prev ? { ...prev, clientName: v } : prev);
-            }} />
-        </label>
-        <label className="edit-panel__field edit-panel__field--wide">
-          現場名
-          <input type="text" className="form-input"
-            value={sessionEditor.siteName}
-            onChange={(e) => {
-              const v = e.target.value;
-              setSessionEditor((prev) => prev ? { ...prev, siteName: v } : prev);
-            }} />
-        </label>
-        <label className="edit-panel__field edit-panel__field--wide">
-          サブ会場名（区画・売場）
-          <input type="text" className="form-input"
-            value={sessionEditor.subSiteName}
-            onChange={(e) => {
-              const v = e.target.value;
-              setSessionEditor((prev) => prev ? { ...prev, subSiteName: v } : prev);
-            }}
-            placeholder="2階ドラッグ側、センターコート 等（省略可）" />
-        </label>
+      {/* ── 基本情報（折りたたみ可能） ── */}
+      <div className="session-editor__siteinfo">
+        <button
+          type="button"
+          className="session-editor__siteinfo-toggle"
+          onClick={() => setSiteInfoExpanded((v) => !v)}>
+          <span>基本情報を編集</span>
+          <span className="session-editor__siteinfo-chevron">
+            {siteInfoExpanded ? '▲' : '▼'}
+          </span>
+        </button>
+        {siteInfoExpanded && (
+          <div className="session-editor__siteinfo-body">
+            <label className="edit-panel__field edit-panel__field--wide">
+              クライアント名
+              <input type="text" className="form-input"
+                value={sessionEditor.clientName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSessionEditor((prev) => prev ? { ...prev, clientName: v } : prev);
+                }} />
+            </label>
+            <label className="edit-panel__field edit-panel__field--wide">
+              現場名
+              <input type="text" className="form-input"
+                value={sessionEditor.siteName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSessionEditor((prev) => prev ? { ...prev, siteName: v } : prev);
+                }} />
+            </label>
+            <label className="edit-panel__field edit-panel__field--wide">
+              サブ会場名（区画・売場）
+              <input type="text" className="form-input"
+                value={sessionEditor.subSiteName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSessionEditor((prev) => prev ? { ...prev, subSiteName: v } : prev);
+                }}
+                placeholder="2階ドラッグ側、センターコート 等（省略可）" />
+            </label>
+          </div>
+        )}
       </div>
 
-      {sessionEditor.sessions.map((session, idx) =>
-        renderSessionFields(session, idx, updateSession, removeSession, true)
-      )}
+      {(() => {
+        const newSessIds = new Set(sessionEditor.newSessionIds);
+        const newForms  = sessionEditor.sessions.filter((s) => newSessIds.has(s.id));
+        const existing  = sessionEditor.sessions.filter((s) => !newSessIds.has(s.id));
+        return (
+          <>
+            {/* 新規追加会期: 上部・常時展開・追加中バッジ */}
+            {newForms.map((session) =>
+              renderSessionFields(session, 0, updateSession, removeSession, false, true)
+            )}
+            {/* 既存会期: 下部・折りたたみ */}
+            {existing.map((session, idx) =>
+              renderSessionFields(session, idx, updateSession, removeSession, true, false)
+            )}
+          </>
+        );
+      })()}
 
       <div className="session-editor__footer">
         <button type="button" className="btn btn--secondary" onClick={addSession}>
