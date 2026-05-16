@@ -46,13 +46,7 @@ export default function App() {
   const [assignments, setAssignments] = useState<ShiftAssignment[]>(() => storage.loadAssignments());
   const [importLogs,  setImportLogs]  = useState<ImportLog[]>(() => storage.loadImportLogs());
 
-  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
-    const sites = storage.loadWorkSites().filter((s) => !s.isPlaceholder && s.date);
-    if (sites.length > 0) {
-      return sites.map((s) => s.date.slice(0, 7)).sort().reverse()[0];
-    }
-    return toYearMonth(new Date());
-  });
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => toYearMonth(new Date()));
 
   useEffect(() => { storage.saveStaff(staff); },         [staff]);
   useEffect(() => { storage.saveWorkSites(workSites); },  [workSites]);
