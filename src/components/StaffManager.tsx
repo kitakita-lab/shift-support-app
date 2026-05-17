@@ -19,6 +19,7 @@ function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
     maxConsecutiveDays: 5,
     memo: '',
     preferredWorkSites: [],
+    ngPartnerIds: [],
   };
 }
 
@@ -166,6 +167,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   const [editingNos, setEditingNos] = useState<Record<string, string>>({});
   const [addSiteOpen, setAddSiteOpen] = useState(false);
   const [siteSearch, setSiteSearch] = useState('');
+  const [ngPanelOpen, setNgPanelOpen] = useState(false);
   const [consecutiveDaysInput, setConsecutiveDaysInput] = useState<string>(
     String(form.maxConsecutiveDays ?? 5)
   );
@@ -188,6 +190,20 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   useEffect(() => {
     setCurrentMonth(selectedMonth);
   }, [selectedMonth]);
+
+  // NGペア: 自分以外のスタッフ一覧
+  const otherStaff = staff.filter((s) => s.id !== editId);
+  const selectedNgStaff = otherStaff.filter((s) => form.ngPartnerIds?.includes(s.id));
+  const unselectedNgStaff = otherStaff.filter((s) => !form.ngPartnerIds?.includes(s.id));
+
+  function toggleNgPartner(id: string) {
+    setForm((prev) => ({
+      ...prev,
+      ngPartnerIds: prev.ngPartnerIds?.includes(id)
+        ? prev.ngPartnerIds.filter((nid) => nid !== id)
+        : [...(prev.ngPartnerIds ?? []), id],
+    }));
+  }
 
   function togglePreferredSite(name: string) {
     setForm((prev) => ({
@@ -213,16 +229,42 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return;
+
+    const newNgIds = new Set(form.ngPartnerIds ?? []);
+    let updatedStaff: Staff[];
+
     if (editId) {
-      onChange(sortStaff(staff.map((s) => (s.id === editId ? { ...form, id: editId } : s))));
+      const oldNgIds = new Set(staff.find((s) => s.id === editId)?.ngPartnerIds ?? []);
+      const added   = [...newNgIds].filter((id) => !oldNgIds.has(id));
+      const removed = [...oldNgIds].filter((id) => !newNgIds.has(id));
+
+      updatedStaff = staff.map((s) => {
+        if (s.id === editId) return { ...form, id: editId };
+        if (added.includes(s.id))
+          return { ...s, ngPartnerIds: [...new Set([...(s.ngPartnerIds ?? []), editId])] };
+        if (removed.includes(s.id))
+          return { ...s, ngPartnerIds: (s.ngPartnerIds ?? []).filter((id) => id !== editId) };
+        return s;
+      });
       setEditId(null);
     } else {
-      onChange(sortStaff([...staff, { ...form, id: crypto.randomUUID() }]));
+      const newId = crypto.randomUUID();
+      updatedStaff = [
+        ...staff.map((s) =>
+          newNgIds.has(s.id)
+            ? { ...s, ngPartnerIds: [...new Set([...(s.ngPartnerIds ?? []), newId])] }
+            : s
+        ),
+        { ...form, id: newId },
+      ];
     }
+
+    onChange(sortStaff(updatedStaff));
     setForm(emptyForm(staff));
     setConsecutiveDaysInput('5');
     setAddSiteOpen(false);
     setSiteSearch('');
+    setNgPanelOpen(false);
   }
 
   function handleEdit(s: Staff) {
@@ -236,8 +278,10 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
       maxConsecutiveDays: s.maxConsecutiveDays ?? 5,
       memo: s.memo,
       preferredWorkSites: s.preferredWorkSites,
+      ngPartnerIds: s.ngPartnerIds ?? [],
     });
     setConsecutiveDaysInput(String(s.maxConsecutiveDays ?? 5));
+    setNgPanelOpen(false);
   }
 
   function handleDelete(id: string) {
@@ -250,6 +294,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     setConsecutiveDaysInput('5');
     setAddSiteOpen(false);
     setSiteSearch('');
+    setNgPanelOpen(false);
   }
 
   function handleStaffNoChange(id: string, value: string) {
@@ -412,6 +457,68 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
             </div>
           </div>
 
+          <div className="form-row form-row--top">
+            <label className="form-label">NGペア</label>
+            <div className="ng-partner-editor">
+              {otherStaff.length === 0 ? (
+                <span className="preferred-none">他のスタッフが登録されていません</span>
+              ) : (
+                <>
+                  <div className="preferred-selected">
+                    {selectedNgStaff.length === 0 ? (
+                      <span className="preferred-none">なし</span>
+                    ) : (
+                      <div className="site-chips">
+                        {selectedNgStaff.map((s) => (
+                          <span key={s.id} className="site-chip site-chip--selected site-chip--ng">
+                            <span className="site-chip__name">{s.name}</span>
+                            <button
+                              type="button"
+                              className="site-chip__remove"
+                              onClick={() => toggleNgPartner(s.id)}
+                              aria-label={`${s.name}をNG解除`}
+                            >×</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {unselectedNgStaff.length > 0 && (
+                    <div className="preferred-add">
+                      <button
+                        type="button"
+                        className="preferred-add__toggle"
+                        onClick={() => setNgPanelOpen((v) => !v)}
+                      >
+                        ＋ NGスタッフを追加
+                        <span className="preferred-add__chevron">{ngPanelOpen ? '▲' : '▼'}</span>
+                      </button>
+                      {ngPanelOpen && (
+                        <div className="preferred-add__panel">
+                          <div className="site-chips preferred-add__chips">
+                            {unselectedNgStaff.map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                className="site-chip"
+                                onClick={() => toggleNgPartner(s.id)}
+                              >
+                                {s.name}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+              <p className="section-desc" style={{ marginTop: '6px' }}>
+                同じ現場・日付に同時配置しません（双方向で自動設定）
+              </p>
+            </div>
+          </div>
+
           <h4 className="form-section-title">月別希望休カレンダー</h4>
           <p className="section-desc">日付をクリックして希望休を登録・解除できます</p>
 
@@ -527,6 +634,23 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                         )}
                       </div>
                     </div>
+
+                    {/* NGペア：あるときのみ表示 */}
+                    {s.ngPartnerIds && s.ngPartnerIds.length > 0 && (
+                      <div className="staff-card__row">
+                        <span className="staff-card__label">NGペア</span>
+                        <div className="staff-card__chips">
+                          {s.ngPartnerIds.map((id) => {
+                            const partner = staff.find((p) => p.id === id);
+                            return partner ? (
+                              <span key={id} className="staff-card__chip staff-card__chip--ng">
+                                {partner.name}
+                              </span>
+                            ) : null;
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* メモ：空なら非表示 */}
                     {s.memo && (

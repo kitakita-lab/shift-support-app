@@ -91,7 +91,11 @@ export default function App() {
           : { ...a, assignedStaffIds: validStaff, shortage: a.shortage + removedCount };
       })
     );
-    setStaff(newStaff);
+    // 削除されたスタッフのIDを ngPartnerIds からも除去
+    setStaff(newStaff.map((s) => ({
+      ...s,
+      ngPartnerIds: s.ngPartnerIds?.filter((id) => newIds.has(id)),
+    })));
   }
 
   function handleWorkSiteChange(newSites: WorkSite[]) {
