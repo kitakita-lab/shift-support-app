@@ -549,6 +549,16 @@ body {
   text-overflow: ellipsis;
 }
 
+/* フォーム上部のアクションバー（下部と共通クラス、下余白・ボーダー方向だけ上書き） */
+.form-actions--top {
+  border-top: none !important;
+  border-bottom: 1px solid #e5e7eb;
+  margin-top: 0 !important;
+  margin-bottom: 12px !important;
+  padding-top: 0 !important;
+  padding-bottom: 12px !important;
+}
+
 .staff-form-toggle {
   display: flex;
   align-items: center;

@@ -339,6 +339,15 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
           </button>
         )}
         {(formOpen || !!editId) && <form onSubmit={handleSubmit} className="form">
+          <div className="form-actions form-actions--top">
+            <button type="submit" className="btn btn--primary">
+              {editId ? '更新' : '登録'}
+            </button>
+            <button type="button" className="btn btn--secondary" onClick={handleCancel}>
+              {editId ? 'キャンセル' : '閉じる'}
+            </button>
+          </div>
+
           <h4 className="form-section-title">基本情報</h4>
 
           <div className="form-row">
