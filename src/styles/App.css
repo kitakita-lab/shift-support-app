@@ -1195,7 +1195,7 @@ h2 {
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
-  padding: 12px;
+  padding: 10px 12px;
 }
 
 .site-card--ungrouped {
@@ -1248,8 +1248,9 @@ h2 {
 }
 
 .site-name-primary {
-  font-weight: 700;
+  font-weight: 800;
   font-size: 15px;
+  line-height: 1.2;
   color: #1a1a2e;
   white-space: nowrap;
   overflow: hidden;
@@ -1257,9 +1258,10 @@ h2 {
 }
 
 .site-name-client {
-  font-size: 12px;
-  color: #6b7280;
-  margin-top: 1px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-top: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
