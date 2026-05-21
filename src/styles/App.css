@@ -345,7 +345,7 @@ body {
     position: sticky;
     bottom: 0;
     background: #fff;
-    padding: 10px 0 2px;
+    padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid #e5e7eb;
     z-index: 5;
   }
