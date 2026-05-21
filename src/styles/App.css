@@ -559,6 +559,19 @@ body {
   padding-bottom: 12px !important;
 }
 
+@media (max-width: 768px) {
+  .form-actions--top {
+    position: sticky;
+    /* header(56) + tab-nav(46) + month-bar(~48) = 150px */
+    top: 150px;
+    z-index: 90;
+    background: #fff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.10);
+    padding: 10px 4px !important;
+    margin-bottom: 16px !important;
+  }
+}
+
 .staff-form-toggle {
   display: flex;
   align-items: center;
