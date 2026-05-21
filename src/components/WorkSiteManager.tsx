@@ -1,4 +1,4 @@
-import { useRef, useState, useMemo } from 'react';
+import { useRef, useState, useMemo, useEffect } from 'react';
 import { WorkSite, ImportLog } from '../types';
 import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
 import { formatSiteLabel } from '../utils/siteUtils';
@@ -504,10 +504,12 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   const [expandedSessions,   setExpandedSessions]   = useState<Set<string>>(new Set());
   const [expandedVenues,     setExpandedVenues]     = useState<Set<string>>(new Set());
   const [detailedDailyKeys,  setDetailedDailyKeys]  = useState<Set<string>>(new Set());
-  // 会期エディタ内でどのセッションカードが展開されているか（IDで管理）
   const [expandedSessionForms, setExpandedSessionForms] = useState<Set<string>>(new Set());
-  // 基本情報（クライアント名・現場名）エリアの開閉
   const [siteInfoExpanded,   setSiteInfoExpanded]   = useState(false);
+  // 会期エディタ内カレンダーの現在月（直前に使用した月を保持する）
+  const [editorMonth,        setEditorMonth]        = useState<string>(selectedMonth);
+  // 会期エディタへのスクロール用 ref
+  const sessionEditorRef = useRef<HTMLDivElement>(null);
 
   // ── CSV 取込モーダル
   const [csvModalOpen,      setCsvModalOpen]      = useState(false);
@@ -721,6 +723,9 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   // ── 会期エディタ操作 ────────────────────────────────────────
 
   function openGroupSessionEditor(groupId: string, sites: WorkSite[]) {
+    const lastDate = [...sites].filter((s) => !s.isPlaceholder && s.date)
+      .sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
+    setEditorMonth(lastDate ? lastDate.slice(0, 7) : selectedMonth);
     setSessionEditor({
       groupId,
       clientName:  sites[0]?.clientName  ?? '',
@@ -737,12 +742,15 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
 
   function openGroupSessionEditorWithNewSession(groupId: string, sites: WorkSite[]) {
     const newSess = emptySession();
+    const lastDate = [...sites].filter((s) => !s.isPlaceholder && s.date)
+      .sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
+    setEditorMonth(lastDate ? lastDate.slice(0, 7) : selectedMonth);
     setSessionEditor({
       groupId,
       clientName:  sites[0]?.clientName  ?? '',
       siteName:    sites[0]?.siteName    ?? '',
       subSiteName: sites[0]?.subSiteName ?? '',
-      sessions:    [newSess, ...deriveSessionsFromSites(sites)],
+      sessions:    [...deriveSessionsFromSites(sites), newSess],  // 末尾に追加
       isExistingGroup: true,
       sourceIds:   [],
       newSessionIds: [newSess.id],
@@ -801,12 +809,19 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
 
   function addSession() {
     const newSess = emptySession();
+    // 直前会期の最終日の月をカレンダー月として引き継ぐ
+    const lastDate = sessionEditor?.sessions
+      .filter((s) => s.endDate || s.startDate)
+      .sort((a, b) => (b.endDate || b.startDate).localeCompare(a.endDate || a.startDate))[0];
+    const nextMonth = lastDate
+      ? (lastDate.endDate || lastDate.startDate).slice(0, 7)
+      : editorMonth;
+    setEditorMonth(nextMonth);
     setSessionEditor((prev) => {
       if (!prev) return prev;
       return {
         ...prev,
-        // 先頭に追加することで、スクロール不要でフォームが表示される
-        sessions:     [newSess, ...prev.sessions],
+        sessions:     [...prev.sessions, newSess],  // 末尾に追加
         newSessionIds: [...prev.newSessionIds, newSess.id],
       };
     });
@@ -835,6 +850,15 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     if (!sessionEditor) return 0;
     return sessionEditor.sessions.reduce((sum, s) => sum + calcDayCount(s.startDate, s.endDate), 0);
   }
+
+  // 会期エディタが開いた / 別グループに切り替わったときに対象カードへスクロール
+  useEffect(() => {
+    if (sessionEditor) {
+      setTimeout(() => {
+        sessionEditorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 50); // DOM 描画後に実行
+    }
+  }, [sessionEditor?.groupId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── CSV 取込モーダル ────────────────────────────────────────
 
@@ -911,6 +935,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     onRemove: (id: string) => void,
     collapsible = false,
     isNew = false,
+    monthHint?: string,
   ) {
     const dateError  = session.startDate && session.endDate && session.endDate < session.startDate;
     const isExpanded = !collapsible || expandedSessionForms.has(session.id);
@@ -970,7 +995,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
                 <SessionDateRangePicker
                   startDate={session.startDate}
                   endDate={session.endDate}
-                  currentMonth={selectedMonth}
+                  currentMonth={monthHint ?? selectedMonth}
                   onChange={(s, e) => onUpdate(session.id, { startDate: s, endDate: e })}
                 />
               </div>
@@ -1020,6 +1045,18 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
 
   const sessionEditorContent = sessionEditor ? (
     <>
+      {/* ── sticky 操作バー（スクロール中も常時表示） ── */}
+      <div className="session-editor__sticky-bar">
+        <span className="session-editor__sticky-title">
+          {formatSiteLabel(sessionEditor.siteName, sessionEditor.clientName)} を編集中
+        </span>
+        <div className="session-editor__sticky-actions">
+          <span className="session-preview">{sessionPreviewCount()}件</span>
+          <button type="button" className="btn btn--primary btn--sm" onClick={applySessionEditor}>更新</button>
+          <button type="button" className="btn btn--secondary btn--sm" onClick={() => setSessionEditor(null)}>キャンセル</button>
+        </div>
+      </div>
+
       {/* ── 基本情報（折りたたみ可能） ── */}
       <div className="session-editor__siteinfo">
         <button
@@ -1065,37 +1102,19 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
         )}
       </div>
 
+      {/* 会期一覧: 既存(折りたたみ) → 新規(バッジ付き展開) の順で配列通りに表示 */}
       {(() => {
         const newSessIds = new Set(sessionEditor.newSessionIds);
-        const newForms  = sessionEditor.sessions.filter((s) => newSessIds.has(s.id));
-        const existing  = sessionEditor.sessions.filter((s) => !newSessIds.has(s.id));
-        return (
-          <>
-            {/* 新規追加会期: 上部・常時展開・追加中バッジ */}
-            {newForms.map((session) =>
-              renderSessionFields(session, 0, updateSession, removeSession, false, true)
-            )}
-            {/* 既存会期: 下部・折りたたみ */}
-            {existing.map((session, idx) =>
-              renderSessionFields(session, idx, updateSession, removeSession, true, false)
-            )}
-          </>
-        );
+        return sessionEditor.sessions.map((session, idx) => {
+          const isNew = newSessIds.has(session.id);
+          return renderSessionFields(session, idx, updateSession, removeSession, !isNew, isNew, editorMonth);
+        });
       })()}
 
       <div className="session-editor__footer">
         <button type="button" className="btn btn--secondary" onClick={addSession}>
           ＋ 会期を追加
         </button>
-        <div className="session-editor__footer-right">
-          <span className="session-preview">{sessionPreviewCount()}件の現場日程を生成</span>
-          <button type="button" className="btn btn--primary" onClick={applySessionEditor}>
-            更新
-          </button>
-          <button type="button" className="btn btn--secondary" onClick={() => setSessionEditor(null)}>
-            キャンセル
-          </button>
-        </div>
       </div>
     </>
   ) : null;
@@ -1274,7 +1293,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
                   </div>
 
                   {isEditingSession && (
-                    <div className="session-editor">
+                    <div className="session-editor" ref={sessionEditorRef}>
                       {sessionEditorContent}
                     </div>
                   )}

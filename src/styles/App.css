@@ -1478,9 +1478,44 @@ h2 {
 
 /* ===== 会期エディタ ===== */
 .session-editor {
-  border-top: 1px solid #c7d7f5;
-  background: #f0f6ff;
-  padding: 14px 16px;
+  border: 2px solid #1a56db;
+  border-radius: 0 0 8px 8px;
+  background: #eef4ff;
+  padding: 0 16px 16px;
+  margin-top: -1px;
+}
+
+/* sticky 操作バー */
+.session-editor__sticky-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #c7d7f5;
+  background: #eef4ff;
+  position: sticky;
+  top: 150px; /* header(56) + tab-nav(46) + month-bar(~48) */
+  z-index: 90;
+}
+
+.session-editor__sticky-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1338a8;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-editor__sticky-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .session-editor--inline {
@@ -1656,12 +1691,8 @@ h2 {
 
 @media (max-width: 640px) {
   .session-editor__footer {
-    position: sticky;
-    bottom: 0;
-    background: #fff;
-    padding: 10px 0 2px;
-    border-top: 1px solid #e5e7eb;
-    z-index: 5;
+    padding: 10px 0 4px;
+    border-top: 1px solid #c7d7f5;
   }
 }
 
