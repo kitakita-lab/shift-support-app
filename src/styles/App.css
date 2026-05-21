@@ -549,6 +549,28 @@ body {
   text-overflow: ellipsis;
 }
 
+.staff-form-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  background: #f0fdf4;
+  border: 1px dashed #10b981;
+  border-radius: 6px;
+  color: #059669;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+
+.staff-form-toggle:hover {
+  background: #dcfce7;
+  border-color: #059669;
+}
+
 .staff-search-row {
   display: flex;
   align-items: center;
