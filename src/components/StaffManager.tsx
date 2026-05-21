@@ -168,6 +168,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   const [addSiteOpen, setAddSiteOpen] = useState(false);
   const [siteSearch, setSiteSearch] = useState('');
   const [ngPanelOpen, setNgPanelOpen] = useState(false);
+  const [staffSearch, setStaffSearch] = useState('');
   const [consecutiveDaysInput, setConsecutiveDaysInput] = useState<string>(
     String(form.maxConsecutiveDays ?? 5)
   );
@@ -265,6 +266,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     setAddSiteOpen(false);
     setSiteSearch('');
     setNgPanelOpen(false);
+    if (!editId) setStaffSearch(''); // 新規登録後は検索クリアして追加スタッフを見やすく
   }
 
   function handleEdit(s: Staff) {
@@ -285,6 +287,8 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   }
 
   function handleDelete(id: string) {
+    const target = staff.find((s) => s.id === id);
+    if (!confirm(`${target?.name ?? 'このスタッフ'}を削除しますか？関連する割当やNGペア設定からも削除されます。`)) return;
     onChange(staff.filter((s) => s.id !== id));
   }
 
@@ -548,6 +552,29 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
           <p className="empty-msg">スタッフが登録されていません</p>
         ) : (
           <>
+          <div className="staff-search-row">
+            <input
+              type="search"
+              className="staff-search-input"
+              placeholder="スタッフ名で絞り込み"
+              value={staffSearch}
+              onChange={(e) => setStaffSearch(e.target.value)}
+            />
+            {staffSearch && (
+              <button
+                type="button"
+                className="staff-search-clear"
+                onClick={() => setStaffSearch('')}
+                aria-label="検索クリア"
+              >×</button>
+            )}
+          </div>
+          {(() => {
+            const q = staffSearch.trim().toLowerCase();
+            const filteredStaff = q ? staff.filter((s) => s.name.toLowerCase().includes(q)) : staff;
+            if (filteredStaff.length === 0) return <p className="empty-msg">「{staffSearch}」に一致するスタッフがいません</p>;
+            return (
+          <>
           {/* PC：テーブル表示 */}
           <div className="table-wrapper staff-table-wrapper">
             <table className="data-table data-table--staff">
@@ -562,7 +589,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                 </tr>
               </thead>
               <tbody>
-                {staff.map((s) => (
+                {filteredStaff.map((s) => (
                   <tr key={s.id}>
                     <td>
                       <input
@@ -600,7 +627,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
 
           {/* モバイル：カード表示 */}
           <div className="staff-card-list">
-            {staff.map((s) => {
+            {filteredStaff.map((s) => {
               const daysOffText = formatDaysOff(s.requestedDaysOff, currentMonth);
               const hasDaysOff  = daysOffText !== '—';
               return (
@@ -674,6 +701,9 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
               );
             })}
           </div>
+          </>
+            );
+          })()}
           </>
         )}
       </div>
