@@ -340,16 +340,6 @@ body {
   padding-top: 4px;
 }
 
-@media (max-width: 768px) {
-  .form-actions {
-    position: static;
-    padding: 12px 0;
-    border-top: 1px solid #e5e7eb;
-    margin-top: 8px;
-    /* Safari下部バー対策: sticky + bottom:0 は Safari chrome に隠れるため static に変更し固定余白を確保 */
-    margin-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
-  }
-}
 
 /* ===== 曜日チェック ===== */
 .weekday-group {

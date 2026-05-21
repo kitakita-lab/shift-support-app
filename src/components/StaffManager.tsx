@@ -558,14 +558,6 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
             onChange={(days) => setForm((prev) => ({ ...prev, requestedDaysOff: days }))}
           />
 
-          <div className="form-actions">
-            <button type="submit" className="btn btn--primary">
-              {editId ? '更新' : '登録'}
-            </button>
-            <button type="button" className="btn btn--secondary" onClick={handleCancel}>
-              {editId ? 'キャンセル' : '閉じる'}
-            </button>
-          </div>
         </form>}
       </div>
 
