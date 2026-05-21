@@ -169,6 +169,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   const [siteSearch, setSiteSearch] = useState('');
   const [ngPanelOpen, setNgPanelOpen] = useState(false);
   const [staffSearch, setStaffSearch] = useState('');
+  const [formOpen, setFormOpen] = useState(false);
   const [consecutiveDaysInput, setConsecutiveDaysInput] = useState<string>(
     String(form.maxConsecutiveDays ?? 5)
   );
@@ -266,7 +267,10 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     setAddSiteOpen(false);
     setSiteSearch('');
     setNgPanelOpen(false);
-    if (!editId) setStaffSearch(''); // 新規登録後は検索クリアして追加スタッフを見やすく
+    if (!editId) {
+      setStaffSearch(''); // 新規登録後は検索クリアして追加スタッフを見やすく
+      setFormOpen(false);
+    }
   }
 
   function handleEdit(s: Staff) {
@@ -284,6 +288,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     });
     setConsecutiveDaysInput(String(s.maxConsecutiveDays ?? 5));
     setNgPanelOpen(false);
+    setFormOpen(true);
   }
 
   function handleDelete(id: string) {
@@ -299,6 +304,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     setAddSiteOpen(false);
     setSiteSearch('');
     setNgPanelOpen(false);
+    setFormOpen(false);
   }
 
   function handleStaffNoChange(id: string, value: string) {
@@ -321,8 +327,18 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
       <h2>スタッフ管理</h2>
 
       <div className="card">
-        <h3>{editId ? 'スタッフ編集' : 'スタッフ登録'}</h3>
-        <form onSubmit={handleSubmit} className="form">
+        {editId ? (
+          <h3>スタッフ編集</h3>
+        ) : (
+          <button
+            type="button"
+            className="staff-form-toggle"
+            onClick={() => setFormOpen((v) => !v)}
+          >
+            <span>{formOpen ? '▲ 閉じる' : '＋ 新規スタッフを登録'}</span>
+          </button>
+        )}
+        {(formOpen || !!editId) && <form onSubmit={handleSubmit} className="form">
           <h4 className="form-section-title">基本情報</h4>
 
           <div className="form-row">
@@ -537,13 +553,11 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
             <button type="submit" className="btn btn--primary">
               {editId ? '更新' : '登録'}
             </button>
-            {editId && (
-              <button type="button" className="btn btn--secondary" onClick={handleCancel}>
-                キャンセル
-              </button>
-            )}
+            <button type="button" className="btn btn--secondary" onClick={handleCancel}>
+              {editId ? 'キャンセル' : '閉じる'}
+            </button>
           </div>
-        </form>
+        </form>}
       </div>
 
       <div className="card">
