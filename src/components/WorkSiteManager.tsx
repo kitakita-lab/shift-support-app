@@ -1245,7 +1245,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
                 const activeSites          = sites.filter((s) => !s.isPlaceholder);
                 const monthActiveSites     = activeSites.filter((s) => s.date.startsWith(selectedMonth));
                 const monthDisplaySessions = groupSitesIntoDisplaySessions(monthActiveSites);
-                const siteName            = sites[0]?.displaySiteName ?? sites[0]?.siteName ?? '';
+                const siteName            = sites[0]?.siteName ?? '';
                 const subSiteName         = sites[0]?.subSiteName ?? '';
                 const clientName          = sites[0]?.clientName ?? '';
                 const isVenueOpen         = expandedVenues.has(groupId);
