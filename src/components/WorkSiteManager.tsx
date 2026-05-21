@@ -507,6 +507,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   const [detailedDailyKeys,  setDetailedDailyKeys]  = useState<Set<string>>(new Set());
   const [expandedSessionForms, setExpandedSessionForms] = useState<Set<string>>(new Set());
   const [siteInfoExpanded,   setSiteInfoExpanded]   = useState(false);
+  const [noMonthOpen,        setNoMonthOpen]        = useState(false);
   // 会期エディタ内カレンダーの現在月（直前に使用した月を保持する）
   const [editorMonth,        setEditorMonth]        = useState<string>(selectedMonth);
   // 会期エディタへのスクロール用 ref
@@ -1238,177 +1239,209 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
               )}
             </div>
 
-            {filteredGroups.map(({ groupId, sites }) => {
-              const isEditingSession    = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
-              const activeSites          = sites.filter((s) => !s.isPlaceholder);
-              const monthActiveSites     = activeSites.filter((s) => s.date.startsWith(selectedMonth));
-              const monthDisplaySessions = groupSitesIntoDisplaySessions(monthActiveSites);
-              const siteName            = sites[0]?.displaySiteName ?? sites[0]?.siteName ?? '';
-              const clientName          = sites[0]?.clientName ?? '';
-              const isVenueOpen         = expandedVenues.has(groupId);
+            {(() => {
+              const renderGroup = ({ groupId, sites }: { groupId: string; sites: WorkSite[] }) => {
+                const isEditingSession    = sessionEditor?.groupId === groupId && sessionEditor.isExistingGroup;
+                const activeSites          = sites.filter((s) => !s.isPlaceholder);
+                const monthActiveSites     = activeSites.filter((s) => s.date.startsWith(selectedMonth));
+                const monthDisplaySessions = groupSitesIntoDisplaySessions(monthActiveSites);
+                const siteName            = sites[0]?.displaySiteName ?? sites[0]?.siteName ?? '';
+                const subSiteName         = sites[0]?.subSiteName ?? '';
+                const clientName          = sites[0]?.clientName ?? '';
+                const isVenueOpen         = expandedVenues.has(groupId);
 
-              const venueStats = monthActiveSites.length > 0
-                ? (() => {
-                    const allPeople = monthDisplaySessions.flatMap((s) =>
-                      s.dailyPeople.length > 0
-                        ? s.dailyPeople.map((d) => d.requiredPeople)
-                        : Array.from({ length: s.dateCount }, () => s.requiredPeople)
-                    );
-                    if (allPeople.length === 0) return null;
-                    const maxPeople = Math.max(...allPeople);
-                    const avgPeople = Math.round(allPeople.reduce((sum, p) => sum + p, 0) / allPeople.length);
-                    return { maxPeople, avgPeople };
-                  })()
-                : null;
+                const venueStats = monthActiveSites.length > 0
+                  ? (() => {
+                      const allPeople = monthDisplaySessions.flatMap((s) =>
+                        s.dailyPeople.length > 0
+                          ? s.dailyPeople.map((d) => d.requiredPeople)
+                          : Array.from({ length: s.dateCount }, () => s.requiredPeople)
+                      );
+                      if (allPeople.length === 0) return null;
+                      const maxPeople = Math.max(...allPeople);
+                      const avgPeople = Math.round(allPeople.reduce((sum, p) => sum + p, 0) / allPeople.length);
+                      return { maxPeople, avgPeople };
+                    })()
+                  : null;
+
+                return (
+                  <div key={groupId} className="site-card">
+                    <div className="site-header">
+                      <button className="site-header__main" onClick={() => toggleVenue(groupId)}>
+                        <div className="site-header__info">
+                          <div className="site-name-primary">
+                            {siteName}{subSiteName ? `（${subSiteName}）` : ''}
+                          </div>
+                          {clientName && <div className="site-name-client">{clientName}</div>}
+                          <div className="site-meta">
+                            {activeSites.length === 0 ? (
+                              <span className="site-summary__unregistered">未登録</span>
+                            ) : monthActiveSites.length === 0 ? (
+                              <span className="site-summary__no-month">この月の会期なし</span>
+                            ) : venueStats ? (
+                              <>
+                                <span className={`site-summary__peak site-summary__peak--${peakColorClass(venueStats.maxPeople, venueStats.avgPeople)}`}>
+                                  👥ピーク{venueStats.maxPeople}人
+                                </span>
+                                <span className="site-summary__avg">📊平均{venueStats.avgPeople}人</span>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                        <span className="venue-chevron">{isVenueOpen ? '▲' : '▼'}</span>
+                      </button>
+                      <div className="site-actions">
+                        {!isEditingSession && (
+                          <button className="btn btn--sm btn--secondary"
+                            onClick={() => openGroupSessionEditorWithNewSession(groupId, sites)}>
+                            ＋会期を追加
+                          </button>
+                        )}
+                        <button className="btn btn--sm btn--secondary"
+                          onClick={() => isEditingSession
+                            ? setSessionEditor(null)
+                            : openGroupSessionEditor(groupId, sites)}>
+                          {isEditingSession ? 'キャンセル' : '会期編集'}
+                        </button>
+                        <button className="btn btn--sm btn--ghost-danger"
+                          onClick={() => deleteGroup(groupId)}>
+                          削除
+                        </button>
+                      </div>
+                    </div>
+
+                    {isEditingSession && (
+                      <div className="session-editor" ref={sessionEditorRef}>
+                        {sessionEditorContent}
+                      </div>
+                    )}
+
+                    {isVenueOpen && (
+                      <>
+                        {activeSites.length === 0 ? (
+                          <div className="site-empty">会期なし（まだ登録されていません）</div>
+                        ) : monthActiveSites.length === 0 ? (
+                          <div className="site-empty">この月の会期はありません</div>
+                        ) : (
+                          <div className="session-list">
+                            {monthDisplaySessions.map((session) => {
+                              const key    = `${groupId}-${session.sessionId}`;
+                              const isOpen = expandedSessions.has(key);
+                              const dailyRows = session.dailyPeople.length > 0
+                                ? session.dailyPeople
+                                : calcDateRange(session.startDate, session.endDate).map((date) => ({
+                                    date, requiredPeople: session.requiredPeople,
+                                  }));
+                              const sessionVals = session.dailyPeople.length > 0
+                                ? session.dailyPeople.map((d) => d.requiredPeople)
+                                : Array.from({ length: session.dateCount || 1 }, () => session.requiredPeople);
+                              const sessionPeak = Math.max(...sessionVals);
+                              const sessionAvg  = Math.round(sessionVals.reduce((sum, p) => sum + p, 0) / sessionVals.length);
+                              return (
+                                <div key={key} className="session-card">
+                                  <div className="session-card__header">
+                                    <button
+                                      className="session-summary"
+                                      onClick={() => toggleSession(key)}>
+                                      <span className="session-summary__date">
+                                        📅 {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}（{session.dateCount}日）
+                                        <span className="session-chevron">{isOpen ? '▲' : '▼'}</span>
+                                      </span>
+                                      <div className="session-summary__meta">
+                                        <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
+                                        <span className={`session-summary__people session-summary__people--${peakColorClass(sessionPeak, sessionAvg)}`}>
+                                          👥ピーク{sessionPeak}人　📊平均{sessionAvg}人
+                                        </span>
+                                      </div>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn--sm btn--ghost-danger session-card__delete"
+                                      onClick={() => {
+                                        if (!confirm('この会期を削除します。よろしいですか？')) return;
+                                        deleteDisplaySession(groupId, session);
+                                      }}>
+                                      削除
+                                    </button>
+                                  </div>
+                                  {isOpen && (() => {
+                                    const isDetailed = detailedDailyKeys.has(key);
+                                    const fmt = isDetailed ? formatDateWithDow : formatDateShort;
+                                    return (
+                                      <div className="session-daily">
+                                        <div className="session-daily__header">
+                                          <button
+                                            className="daily-toggle"
+                                            onClick={() => toggleDailyDetail(key)}
+                                          >
+                                            {isDetailed ? '曜日を隠す' : '曜日を表示'}
+                                          </button>
+                                        </div>
+                                        {groupDailyRows(dailyRows).map((group) => {
+                                          const label = group.startDate === group.endDate
+                                            ? fmt(group.startDate)
+                                            : `${fmt(group.startDate)}〜${fmt(group.endDate)}`;
+                                          return (
+                                            <div key={group.startDate} className="daily-row">
+                                              <span className="daily-row__date">{label}</span>
+                                              <span className="daily-row__people">{group.requiredPeople}人</span>
+                                            </div>
+                                          );
+                                        })}
+                                        {session.memo && (
+                                          <div className="daily-row daily-row--memo">
+                                            <span className="daily-row__date">メモ</span>
+                                            <span className="daily-row__people">{session.memo}</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {!isEditingSession && (
+                          <button
+                            className="btn btn--sm btn--secondary site-add-session-btn"
+                            onClick={() => openGroupSessionEditorWithNewSession(groupId, sites)}>
+                            ＋ 会期を追加
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              };
+
+              const hasMonthGroups = filteredGroups.filter(({ sites }) =>
+                sites.some((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth))
+              );
+              const noMonthGroups = filteredGroups.filter(({ sites }) =>
+                !sites.some((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth))
+              );
 
               return (
-                <div key={groupId} className="site-card">
-                  <div className="site-header">
-                    <button className="site-header__main" onClick={() => toggleVenue(groupId)}>
-                      <div className="site-header__info">
-                        <div className="site-title">{formatSiteLabel(siteName, clientName)}</div>
-                        <div className="site-meta">
-                          {activeSites.length === 0 ? (
-                            <span className="site-summary__unregistered">未登録</span>
-                          ) : monthActiveSites.length === 0 ? (
-                            <span className="site-summary__no-month">この月の会期なし</span>
-                          ) : venueStats ? (
-                            <>
-                              <span className={`site-summary__peak site-summary__peak--${peakColorClass(venueStats.maxPeople, venueStats.avgPeople)}`}>
-                                👥ピーク{venueStats.maxPeople}人
-                              </span>
-                              <span className="site-summary__avg">📊平均{venueStats.avgPeople}人</span>
-                            </>
-                          ) : null}
-                        </div>
-                      </div>
-                      <span className="venue-chevron">{isVenueOpen ? '▲' : '▼'}</span>
-                    </button>
-                    <div className="site-actions">
-                      {!isEditingSession && (
-                        <button className="btn btn--sm btn--secondary"
-                          onClick={() => openGroupSessionEditorWithNewSession(groupId, sites)}>
-                          ＋会期を追加
-                        </button>
-                      )}
-                      <button className="btn btn--sm btn--secondary"
-                        onClick={() => isEditingSession
-                          ? setSessionEditor(null)
-                          : openGroupSessionEditor(groupId, sites)}>
-                        {isEditingSession ? 'キャンセル' : '会期編集'}
+                <>
+                  {hasMonthGroups.map(renderGroup)}
+                  {noMonthGroups.length > 0 && (
+                    <div className="no-month-section">
+                      <button
+                        type="button"
+                        className="no-month-toggle"
+                        onClick={() => setNoMonthOpen((v) => !v)}
+                      >
+                        <span>この月の会期なし現場（{noMonthGroups.length}件）</span>
+                        <span className="no-month-toggle__chevron">{noMonthOpen ? '▲' : '▼'}</span>
                       </button>
-                      <button className="btn btn--sm btn--ghost-danger"
-                        onClick={() => deleteGroup(groupId)}>
-                        削除
-                      </button>
-                    </div>
-                  </div>
-
-                  {isEditingSession && (
-                    <div className="session-editor" ref={sessionEditorRef}>
-                      {sessionEditorContent}
+                      {noMonthOpen && noMonthGroups.map(renderGroup)}
                     </div>
                   )}
-
-                  {isVenueOpen && (
-                    <>
-                      {activeSites.length === 0 ? (
-                        <div className="site-empty">会期なし（まだ登録されていません）</div>
-                      ) : monthActiveSites.length === 0 ? (
-                        <div className="site-empty">この月の会期はありません</div>
-                      ) : (
-                        <div className="session-list">
-                          {monthDisplaySessions.map((session) => {
-                            const key    = `${groupId}-${session.sessionId}`;
-                            const isOpen = expandedSessions.has(key);
-                            const dailyRows = session.dailyPeople.length > 0
-                              ? session.dailyPeople
-                              : calcDateRange(session.startDate, session.endDate).map((date) => ({
-                                  date, requiredPeople: session.requiredPeople,
-                                }));
-                            const sessionVals = session.dailyPeople.length > 0
-                              ? session.dailyPeople.map((d) => d.requiredPeople)
-                              : Array.from({ length: session.dateCount || 1 }, () => session.requiredPeople);
-                            const sessionPeak = Math.max(...sessionVals);
-                            const sessionAvg  = Math.round(sessionVals.reduce((sum, p) => sum + p, 0) / sessionVals.length);
-                            return (
-                              <div key={key} className="session-card">
-                                <div className="session-card__header">
-                                  <button
-                                    className="session-summary"
-                                    onClick={() => toggleSession(key)}>
-                                    <span className="session-summary__date">
-                                      📅 {session.startDate.replace(/-/g, '/')}〜{session.endDate.replace(/-/g, '/')}（{session.dateCount}日）
-                                      <span className="session-chevron">{isOpen ? '▲' : '▼'}</span>
-                                    </span>
-                                    <div className="session-summary__meta">
-                                      <span className="session-summary__time">⏰ {session.startTime}〜{session.endTime}</span>
-                                      <span className={`session-summary__people session-summary__people--${peakColorClass(sessionPeak, sessionAvg)}`}>
-                                        👥ピーク{sessionPeak}人　📊平均{sessionAvg}人
-                                      </span>
-                                    </div>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn--sm btn--ghost-danger session-card__delete"
-                                    onClick={() => {
-                                      if (!confirm('この会期を削除します。よろしいですか？')) return;
-                                      deleteDisplaySession(groupId, session);
-                                    }}>
-                                    削除
-                                  </button>
-                                </div>
-                                {isOpen && (() => {
-                                  const isDetailed = detailedDailyKeys.has(key);
-                                  const fmt = isDetailed ? formatDateWithDow : formatDateShort;
-                                  return (
-                                    <div className="session-daily">
-                                      <div className="session-daily__header">
-                                        <button
-                                          className="daily-toggle"
-                                          onClick={() => toggleDailyDetail(key)}
-                                        >
-                                          {isDetailed ? '曜日を隠す' : '曜日を表示'}
-                                        </button>
-                                      </div>
-                                      {groupDailyRows(dailyRows).map((group) => {
-                                        const label = group.startDate === group.endDate
-                                          ? fmt(group.startDate)
-                                          : `${fmt(group.startDate)}〜${fmt(group.endDate)}`;
-                                        return (
-                                          <div key={group.startDate} className="daily-row">
-                                            <span className="daily-row__date">{label}</span>
-                                            <span className="daily-row__people">{group.requiredPeople}人</span>
-                                          </div>
-                                        );
-                                      })}
-                                      {session.memo && (
-                                        <div className="daily-row daily-row--memo">
-                                          <span className="daily-row__date">メモ</span>
-                                          <span className="daily-row__people">{session.memo}</span>
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })()}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {!isEditingSession && (
-                        <button
-                          className="btn btn--sm btn--secondary site-add-session-btn"
-                          onClick={() => openGroupSessionEditorWithNewSession(groupId, sites)}>
-                          ＋ 会期を追加
-                        </button>
-                      )}
-                    </>
-                  )}
-                </div>
+                </>
               );
-            })}
+            })()}
 
             {filteredUngrouped.length > 0 && (
               <div className="site-ungrouped-section">

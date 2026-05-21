@@ -1247,6 +1247,53 @@ h2 {
   text-overflow: ellipsis;
 }
 
+.site-name-primary {
+  font-weight: 700;
+  font-size: 15px;
+  color: #1a1a2e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.site-name-client {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.no-month-section {
+  margin-top: 4px;
+}
+
+.no-month-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #6b7280;
+  font-family: inherit;
+  margin-bottom: 6px;
+}
+
+.no-month-toggle:hover {
+  background: #e5e7eb;
+}
+
+.no-month-toggle__chevron {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
 .site-meta {
   font-size: 12px;
   color: #6b7280;
