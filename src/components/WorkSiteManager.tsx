@@ -493,6 +493,7 @@ interface Props {
 
 export default function WorkSiteManager({ workSites, onChange, onAddImportLog, selectedMonth }: Props) {
   // ── 新規現場登録フォーム
+  const [newSiteFormOpen, setNewSiteFormOpen] = useState(false);
   const [newClientName,  setNewClientName]  = useState('');
   const [newSiteName,    setNewSiteName]    = useState('');
   const [newSubSiteName, setNewSubSiteName] = useState('');
@@ -637,6 +638,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
     setNewSiteName('');
     setNewSubSiteName('');
     setNewSessions([emptySession()]);
+    setNewSiteFormOpen(false);
     setTimeout(() => setSuccessMsg(''), 4000);
   }
 
@@ -1126,66 +1128,76 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
       {/* ── 新規現場登録フォーム ───────────────────────── */}
       <div className="card">
         <div className="site-list-header">
-          <h3>現場を登録</h3>
+          <button
+            type="button"
+            className="staff-form-toggle"
+            onClick={() => setNewSiteFormOpen((v) => !v)}
+          >
+            <span>{newSiteFormOpen ? '▲ 閉じる' : '＋ 新規現場を登録'}</span>
+          </button>
           <button type="button" className="btn btn--secondary btn--sm" onClick={() => setCsvModalOpen(true)}>
             CSVから一括登録
           </button>
         </div>
-        <p className="section-desc">
-          現場名と会期（期間・時間・人数）を入力してください。会期は複数追加できます。
-        </p>
 
-        <form onSubmit={handleNewSiteSubmit} className="form">
-          <div className="form-row">
-            <label className="form-label">クライアント名</label>
-            <input className="form-input" type="text" value={newClientName}
-              onChange={(e) => setNewClientName(e.target.value)}
-              placeholder="△△株式会社" />
-          </div>
+        {newSiteFormOpen && (
+          <form onSubmit={handleNewSiteSubmit} className="form">
+            {/* sticky 操作バー */}
+            <div className="form-actions form-actions--top">
+              <button type="submit" className="btn btn--primary" disabled={!isReady}>
+                登録
+              </button>
+              <button type="button" className="btn btn--secondary"
+                onClick={() => setNewSiteFormOpen(false)}>
+                閉じる
+              </button>
+            </div>
 
-          <div className="form-row">
-            <label className="form-label">現場名 *</label>
-            <input className="form-input" type="text" value={newSiteName}
-              onChange={(e) => setNewSiteName(e.target.value)}
-              placeholder="〇〇倉庫" required />
-          </div>
+            <div className="form-row">
+              <label className="form-label">クライアント名</label>
+              <input className="form-input" type="text" value={newClientName}
+                onChange={(e) => setNewClientName(e.target.value)}
+                placeholder="△△株式会社" />
+            </div>
 
-          <div className="form-row">
-            <label className="form-label">サブ会場名</label>
-            <input className="form-input" type="text" value={newSubSiteName}
-              onChange={(e) => setNewSubSiteName(e.target.value)}
-              placeholder="2階ドラッグ側、センターコート 等（省略可）" />
-          </div>
+            <div className="form-row">
+              <label className="form-label">現場名 *</label>
+              <input className="form-input" type="text" value={newSiteName}
+                onChange={(e) => setNewSiteName(e.target.value)}
+                placeholder="〇〇倉庫" required />
+            </div>
 
-          {newSessions.map((session, idx) =>
-            renderSessionFields(session, idx, updateNewSession, removeNewSession)
-          )}
+            <div className="form-row">
+              <label className="form-label">サブ会場名</label>
+              <input className="form-input" type="text" value={newSubSiteName}
+                onChange={(e) => setNewSubSiteName(e.target.value)}
+                placeholder="2階ドラッグ側、センターコート 等（省略可）" />
+            </div>
 
-          <div className="new-session-add">
-            <button type="button" className="btn btn--secondary" onClick={addNewSession}>
-              ＋ 会期を追加
-            </button>
-          </div>
-
-          <div className={`preview-count${previewCount > 0 && !hasDateError ? ' preview-count--ready' : ''}`}>
-            {hasDateError ? (
-              <span className="preview-count__error">終了日は開始日以降を指定してください</span>
-            ) : previewCount > 0 ? (
-              <>
-                <span className="preview-count__num">{previewCount}</span>
-                <span className="preview-count__text">件の現場日程が作成されます</span>
-              </>
-            ) : (
-              <span className="preview-count__empty">会期の期間を入力すると作成件数が表示されます</span>
+            {newSessions.map((session, idx) =>
+              renderSessionFields(session, idx, updateNewSession, removeNewSession)
             )}
-          </div>
 
-          <div className="form-actions">
-            <button type="submit" className="btn btn--primary btn--large" disabled={!isReady}>
-              登録
-            </button>
-          </div>
-        </form>
+            <div className="new-session-add">
+              <button type="button" className="btn btn--secondary" onClick={addNewSession}>
+                ＋ 会期を追加
+              </button>
+            </div>
+
+            <div className={`preview-count${previewCount > 0 && !hasDateError ? ' preview-count--ready' : ''}`}>
+              {hasDateError ? (
+                <span className="preview-count__error">終了日は開始日以降を指定してください</span>
+              ) : previewCount > 0 ? (
+                <>
+                  <span className="preview-count__num">{previewCount}</span>
+                  <span className="preview-count__text">件の現場日程が作成されます</span>
+                </>
+              ) : (
+                <span className="preview-count__empty">会期の期間を入力すると作成件数が表示されます</span>
+              )}
+            </div>
+          </form>
+        )}
 
         {successMsg && <div className="success-msg">{successMsg}</div>}
       </div>
