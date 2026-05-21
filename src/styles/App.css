@@ -1205,16 +1205,15 @@ h2 {
 
 .site-header {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 8px;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
 }
 
 .site-header__main {
   display: flex;
   align-items: center;
-  flex: 1;
+  width: 100%;
   gap: 8px;
   background: none;
   border: none;
@@ -1335,7 +1334,7 @@ h2 {
 .site-actions {
   display: flex;
   gap: 6px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .site-empty {
