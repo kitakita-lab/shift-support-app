@@ -522,6 +522,11 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   // ── 現場検索
   const [siteSearch, setSiteSearch] = useState('');
 
+  // ── クライアント名候補（datalist 用）
+  const clientNameOptions = useMemo(() =>
+    [...new Set(workSites.map((s) => s.clientName?.trim()).filter(Boolean) as string[])].sort(),
+  [workSites]);
+
   // ── 登録プレビュー計算
   const previewCount = useMemo(() =>
     newSessions.reduce((sum, s) => sum + calcDayCount(s.startDate, s.endDate), 0),
@@ -1076,6 +1081,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
             <label className="edit-panel__field edit-panel__field--wide">
               クライアント名
               <input type="text" className="form-input"
+                list="worksite-client-datalist"
                 value={sessionEditor.clientName}
                 onChange={(e) => {
                   const v = e.target.value;
@@ -1124,6 +1130,10 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
 
   return (
     <div>
+      <datalist id="worksite-client-datalist">
+        {clientNameOptions.map((name) => <option key={name} value={name} />)}
+      </datalist>
+
       <h2>現場・必要人数管理</h2>
 
       {/* ── 新規現場登録フォーム ───────────────────────── */}
@@ -1157,6 +1167,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
             <div className="form-row">
               <label className="form-label">クライアント名</label>
               <input className="form-input" type="text" value={newClientName}
+                list="worksite-client-datalist"
                 onChange={(e) => setNewClientName(e.target.value)}
                 placeholder="△△株式会社" />
             </div>

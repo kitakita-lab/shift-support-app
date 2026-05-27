@@ -7,6 +7,7 @@ import WorkSiteManager from './components/WorkSiteManager';
 import ShiftBuilder from './components/ShiftBuilder';
 import ExportPanel from './components/ExportPanel';
 import CsvImporter from './components/CsvImporter';
+import AuthButton from './components/AuthButton';
 import './styles/App.css';
 
 type Tab = 'dashboard' | 'staff' | 'worksite' | 'shift' | 'export' | 'import';
@@ -153,8 +154,11 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>シフト作成サポート</h1>
-        <span className="app-header__badge">MVP</span>
+        <div className="app-header__left">
+          <h1>シフト作成サポート</h1>
+          <span className="app-header__badge">MVP</span>
+        </div>
+        <AuthButton />
       </header>
 
       <nav className="tab-nav">
