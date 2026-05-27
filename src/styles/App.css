@@ -112,6 +112,21 @@ body {
   color: rgba(255,255,255,0.5);
 }
 
+.auth-signin-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.auth-error {
+  font-size: 11px;
+  color: #fca5a5;
+  max-width: 200px;
+  text-align: right;
+  line-height: 1.3;
+}
+
 /* ===== タブナビ ===== */
 .tab-nav {
   background: white;
