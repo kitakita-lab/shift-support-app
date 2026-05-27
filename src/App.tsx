@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Staff, WorkSite, ShiftAssignment, ImportLog } from './types';
 import { storage } from './utils/storage';
 import Dashboard from './components/Dashboard';
@@ -53,11 +53,43 @@ export default function App() {
 
   const { user } = useAuth();
 
-  // localStorage に保存 + ログイン中なら Firestore にも fire-and-forget で同期
-  useEffect(() => { storage.saveStaff(staff);       if (user) firestoreService.saveStaff(user.uid, staff).catch(() => {}); },       [staff, user]);
-  useEffect(() => { storage.saveWorkSites(workSites); if (user) firestoreService.saveWorkSites(user.uid, workSites).catch(() => {}); }, [workSites, user]);
+  // Firestore からの更新で setState した直後は書き戻しをスキップするフラグ
+  const fromFirestore = useRef({ staff: false, workSites: false });
+
+  // ログイン時に Firestore をリアルタイム購読（全端末でデータ共有）
+  useEffect(() => {
+    if (!user) return;
+    const unsubStaff = firestoreService.subscribeStaff(user.uid, (items) => {
+      fromFirestore.current.staff = true;
+      setStaff(items);
+    });
+    const unsubWorkSites = firestoreService.subscribeWorkSites(user.uid, (items) => {
+      fromFirestore.current.workSites = true;
+      setWorkSites(items);
+    });
+    return () => { unsubStaff(); unsubWorkSites(); };
+  }, [user]);
+
+  // スタッフ: localStorage に常時保存、Firestore には自端末の変更時のみ書き込む
+  useEffect(() => {
+    storage.saveStaff(staff);
+    if (user) {
+      if (fromFirestore.current.staff) { fromFirestore.current.staff = false; return; }
+      firestoreService.saveStaff(user.uid, staff).catch(() => {});
+    }
+  }, [staff, user]);
+
+  // 現場: 同上
+  useEffect(() => {
+    storage.saveWorkSites(workSites);
+    if (user) {
+      if (fromFirestore.current.workSites) { fromFirestore.current.workSites = false; return; }
+      firestoreService.saveWorkSites(user.uid, workSites).catch(() => {});
+    }
+  }, [workSites, user]);
+
   useEffect(() => { storage.saveAssignments(assignments); if (user) firestoreService.saveAssignments(user.uid, assignments).catch(() => {}); }, [assignments, user]);
-  useEffect(() => { storage.saveImportLogs(importLogs); if (user) firestoreService.saveImportLogs(user.uid, importLogs).catch(() => {}); }, [importLogs, user]);
+  useEffect(() => { storage.saveImportLogs(importLogs);   if (user) firestoreService.saveImportLogs(user.uid, importLogs).catch(() => {});   }, [importLogs, user]);
 
   const monthlyWorkSites = useMemo(
     () => workSites.filter((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth)),
