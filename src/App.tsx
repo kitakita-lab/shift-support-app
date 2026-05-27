@@ -8,6 +8,8 @@ import ShiftBuilder from './components/ShiftBuilder';
 import ExportPanel from './components/ExportPanel';
 import CsvImporter from './components/CsvImporter';
 import AuthButton from './components/AuthButton';
+import { useAuth } from './contexts/AuthContext';
+import { firestoreService } from './services/firestoreService';
 import './styles/App.css';
 
 type Tab = 'dashboard' | 'staff' | 'worksite' | 'shift' | 'export' | 'import';
@@ -49,10 +51,13 @@ export default function App() {
 
   const [selectedMonth, setSelectedMonth] = useState<string>(() => toYearMonth(new Date()));
 
-  useEffect(() => { storage.saveStaff(staff); },         [staff]);
-  useEffect(() => { storage.saveWorkSites(workSites); },  [workSites]);
-  useEffect(() => { storage.saveAssignments(assignments); }, [assignments]);
-  useEffect(() => { storage.saveImportLogs(importLogs); }, [importLogs]);
+  const { user } = useAuth();
+
+  // localStorage に保存 + ログイン中なら Firestore にも fire-and-forget で同期
+  useEffect(() => { storage.saveStaff(staff);       if (user) firestoreService.saveStaff(user.uid, staff).catch(() => {}); },       [staff, user]);
+  useEffect(() => { storage.saveWorkSites(workSites); if (user) firestoreService.saveWorkSites(user.uid, workSites).catch(() => {}); }, [workSites, user]);
+  useEffect(() => { storage.saveAssignments(assignments); if (user) firestoreService.saveAssignments(user.uid, assignments).catch(() => {}); }, [assignments, user]);
+  useEffect(() => { storage.saveImportLogs(importLogs); if (user) firestoreService.saveImportLogs(user.uid, importLogs).catch(() => {}); }, [importLogs, user]);
 
   const monthlyWorkSites = useMemo(
     () => workSites.filter((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth)),
