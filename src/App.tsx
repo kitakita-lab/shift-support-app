@@ -53,40 +53,94 @@ export default function App() {
 
   const { user } = useAuth();
 
-  // Firestore からの更新で setState した直後は書き戻しをスキップするフラグ
+  // Firestore からの更新で setState した直後は書き戻しをスキップするフラグ（ref: レンダー不要）
   const fromFirestore = useRef({ staff: false, workSites: false });
+  // 初回 snapshot 到着後のみ書き込みを許可（ログイン直後の localStorage 上書き防止）
+  // useState にすることで ready 変化時に save useEffect を再発火させる
+  const [firestoreReady, setFirestoreReady] = useState({ staff: false, workSites: false });
+
+  // マウント時の localStorage 初期値をログ（localStorage が Firestore を上書きしないか確認用）
+  useEffect(() => {
+    console.debug(
+      '[App] init localStorage —',
+      'staff:', storage.loadStaff().length,
+      'workSites:', storage.loadWorkSites().length,
+    );
+  }, []);
 
   // ログイン時に Firestore をリアルタイム購読（全端末でデータ共有）
   useEffect(() => {
-    if (!user) return;
-    const unsubStaff = firestoreService.subscribeStaff((items) => {
-      fromFirestore.current.staff = true;
-      setStaff(items);
-    });
-    const unsubWorkSites = firestoreService.subscribeWorkSites((items) => {
-      fromFirestore.current.workSites = true;
-      setWorkSites(items);
-    });
-    return () => { unsubStaff(); unsubWorkSites(); };
+    if (!user) {
+      setFirestoreReady({ staff: false, workSites: false });
+      return;
+    }
+    console.debug('[App] subscribe start — uid:', user.uid);
+
+    const unsubStaff = firestoreService.subscribeStaff(
+      (items) => {
+        console.debug('[App] ← Firestore staff count:', items.length, '→ setStaff');
+        fromFirestore.current.staff = true;
+        setStaff(items);
+      },
+      () => {
+        console.debug('[App] staff ready (first snapshot arrived)');
+        setFirestoreReady((prev) => ({ ...prev, staff: true }));
+      },
+    );
+
+    const unsubWorkSites = firestoreService.subscribeWorkSites(
+      (items) => {
+        console.debug('[App] ← Firestore workSites count:', items.length, '→ setWorkSites');
+        fromFirestore.current.workSites = true;
+        setWorkSites(items);
+      },
+      () => {
+        console.debug('[App] workSites ready (first snapshot arrived)');
+        setFirestoreReady((prev) => ({ ...prev, workSites: true }));
+      },
+    );
+
+    return () => {
+      console.debug('[App] unsubscribe');
+      unsubStaff();
+      unsubWorkSites();
+      fromFirestore.current = { staff: false, workSites: false };
+    };
   }, [user]);
 
-  // スタッフ: localStorage に常時保存、Firestore には自端末の変更時のみ書き込む
+  // スタッフ: localStorage に常時保存 / Firestore は ready かつ自端末変更時のみ書き込む
   useEffect(() => {
     storage.saveStaff(staff);
-    if (user) {
-      if (fromFirestore.current.staff) { fromFirestore.current.staff = false; return; }
-      firestoreService.saveStaff(staff).catch(() => {});
+    if (!user) return;
+    if (!firestoreReady.staff) {
+      console.debug('[App] staff save skip — Firestore not ready yet');
+      return;
     }
-  }, [staff, user]);
+    if (fromFirestore.current.staff) {
+      console.debug('[App] staff save skip — came from Firestore');
+      fromFirestore.current.staff = false;
+      return;
+    }
+    console.debug('[App] staff → Firestore write count:', staff.length);
+    firestoreService.saveStaff(staff).catch(() => {});
+  }, [staff, user, firestoreReady.staff]);
 
   // 現場: 同上
   useEffect(() => {
     storage.saveWorkSites(workSites);
-    if (user) {
-      if (fromFirestore.current.workSites) { fromFirestore.current.workSites = false; return; }
-      firestoreService.saveWorkSites(workSites).catch(() => {});
+    if (!user) return;
+    if (!firestoreReady.workSites) {
+      console.debug('[App] workSites save skip — Firestore not ready yet');
+      return;
     }
-  }, [workSites, user]);
+    if (fromFirestore.current.workSites) {
+      console.debug('[App] workSites save skip — came from Firestore');
+      fromFirestore.current.workSites = false;
+      return;
+    }
+    console.debug('[App] workSites → Firestore write count:', workSites.length);
+    firestoreService.saveWorkSites(workSites).catch(() => {});
+  }, [workSites, user, firestoreReady.workSites]);
 
   useEffect(() => { storage.saveAssignments(assignments); if (user) firestoreService.saveAssignments(assignments).catch(() => {}); }, [assignments, user]);
   useEffect(() => { storage.saveImportLogs(importLogs);   if (user) firestoreService.saveImportLogs(importLogs).catch(() => {});   }, [importLogs, user]);
