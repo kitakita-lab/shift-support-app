@@ -59,11 +59,11 @@ export default function App() {
   // ログイン時に Firestore をリアルタイム購読（全端末でデータ共有）
   useEffect(() => {
     if (!user) return;
-    const unsubStaff = firestoreService.subscribeStaff(user.uid, (items) => {
+    const unsubStaff = firestoreService.subscribeStaff((items) => {
       fromFirestore.current.staff = true;
       setStaff(items);
     });
-    const unsubWorkSites = firestoreService.subscribeWorkSites(user.uid, (items) => {
+    const unsubWorkSites = firestoreService.subscribeWorkSites((items) => {
       fromFirestore.current.workSites = true;
       setWorkSites(items);
     });
@@ -75,7 +75,7 @@ export default function App() {
     storage.saveStaff(staff);
     if (user) {
       if (fromFirestore.current.staff) { fromFirestore.current.staff = false; return; }
-      firestoreService.saveStaff(user.uid, staff).catch(() => {});
+      firestoreService.saveStaff(staff).catch(() => {});
     }
   }, [staff, user]);
 
@@ -84,12 +84,12 @@ export default function App() {
     storage.saveWorkSites(workSites);
     if (user) {
       if (fromFirestore.current.workSites) { fromFirestore.current.workSites = false; return; }
-      firestoreService.saveWorkSites(user.uid, workSites).catch(() => {});
+      firestoreService.saveWorkSites(workSites).catch(() => {});
     }
   }, [workSites, user]);
 
-  useEffect(() => { storage.saveAssignments(assignments); if (user) firestoreService.saveAssignments(user.uid, assignments).catch(() => {}); }, [assignments, user]);
-  useEffect(() => { storage.saveImportLogs(importLogs);   if (user) firestoreService.saveImportLogs(user.uid, importLogs).catch(() => {});   }, [importLogs, user]);
+  useEffect(() => { storage.saveAssignments(assignments); if (user) firestoreService.saveAssignments(assignments).catch(() => {}); }, [assignments, user]);
+  useEffect(() => { storage.saveImportLogs(importLogs);   if (user) firestoreService.saveImportLogs(importLogs).catch(() => {});   }, [importLogs, user]);
 
   const monthlyWorkSites = useMemo(
     () => workSites.filter((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth)),
