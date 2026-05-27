@@ -10,10 +10,16 @@ export const isFirebaseConfigured = !!(
 
 let _app: FirebaseApp | null = null;
 if (isFirebaseConfigured) {
+  // authDomain: https:// プレフィックスを除去し、未設定時は {projectId}.firebaseapp.com にフォールバック
+  const rawAuthDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN;
+  const authDomain = rawAuthDomain
+    ? rawAuthDomain.replace(/^https?:\/\//, '')
+    : `${import.meta.env.VITE_FIREBASE_PROJECT_ID}.firebaseapp.com`;
+
   _app = getApps().length === 0
     ? initializeApp({
         apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
-        authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+        authDomain,
         projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
         storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
         messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,

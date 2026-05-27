@@ -3,6 +3,8 @@ import {
   User,
   onAuthStateChanged,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut as firebaseSignOut,
 } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
@@ -23,6 +25,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Firebase が未設定（env 未定義）の場合はスキップ
     if (!auth) { setLoading(false); return; }
+
+    // signInWithRedirect からの戻りを処理（Safari 等ポップアップ非対応ブラウザ向け）
+    getRedirectResult(auth).catch(() => {});
+
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
@@ -32,7 +38,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = async () => {
     if (!auth || !googleProvider) return;
-    await signInWithPopup(auth, googleProvider);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err: unknown) {
+      // Safari 等でポップアップがブロックされた場合はリダイレクトにフォールバック
+      const code = (err as { code?: string })?.code;
+      if (code === 'auth/popup-blocked' || code === 'auth/popup-cancelled') {
+        await signInWithRedirect(auth, googleProvider);
+      }
+    }
   };
 
   const signOut = async () => {
