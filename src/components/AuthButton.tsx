@@ -1,7 +1,11 @@
 import { useAuth } from '../contexts/AuthContext';
+import { isFirebaseConfigured } from '../firebase';
 
 export default function AuthButton() {
-  const { user, loading, signIn, signOut } = useAuth();
+  const { user, loading, signInError, signIn, signOut } = useAuth();
+
+  // Firebase が未設定（Vercel env 未定義等）の場合は何も表示しない
+  if (!isFirebaseConfigured) return null;
 
   if (loading) {
     return <span className="auth-loading">...</span>;
@@ -22,8 +26,11 @@ export default function AuthButton() {
   }
 
   return (
-    <button className="auth-signin-btn" onClick={signIn}>
-      Googleでログイン
-    </button>
+    <div className="auth-signin-wrap">
+      <button className="auth-signin-btn" onClick={signIn}>
+        Googleでログイン
+      </button>
+      {signInError && <span className="auth-error">{signInError}</span>}
+    </div>
   );
 }
