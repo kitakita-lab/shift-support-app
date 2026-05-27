@@ -6,6 +6,7 @@ type Unsubscribe = () => void;
 
 export const TEAM_ID = 'intention-dev';
 
+// Firestore パス: teams/{teamId}/appData/{key}
 function teamDoc(key: string) {
   return doc(db!, 'teams', TEAM_ID, 'appData', key);
 }
