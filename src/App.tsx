@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Staff, WorkSite, ShiftAssignment, ImportLog } from './types';
-import { storage } from './utils/storage';
+import { storage, hydrateWorkSite } from './utils/storage';
 import Dashboard from './components/Dashboard';
 import StaffManager from './components/StaffManager';
 import WorkSiteManager from './components/WorkSiteManager';
@@ -80,7 +80,17 @@ export default function App() {
       (items) => {
         console.debug('[App] ← Firestore staff count:', items.length, '→ setStaff');
         fromFirestore.current.staff = true;
-        setStaff(items);
+        setStaff(items.map((s) => ({
+          ...s,
+          staffNo:            s.staffNo            ?? '',
+          availableWeekdays:  s.availableWeekdays  ?? [],
+          requestedDaysOff:   s.requestedDaysOff   ?? [],
+          maxWorkDays:        s.maxWorkDays         ?? 20,
+          maxConsecutiveDays: s.maxConsecutiveDays  ?? 5,
+          memo:               s.memo               ?? '',
+          preferredWorkSites: s.preferredWorkSites  ?? [],
+          ngPartnerIds:       s.ngPartnerIds        ?? [],
+        })));
       },
       () => {
         console.debug('[App] staff ready (first snapshot arrived)');
@@ -92,7 +102,7 @@ export default function App() {
       (items) => {
         console.debug('[App] ← Firestore workSites count:', items.length, '→ setWorkSites');
         fromFirestore.current.workSites = true;
-        setWorkSites(items);
+        setWorkSites(items.map((s) => hydrateWorkSite(s as Partial<WorkSite>)));
       },
       () => {
         console.debug('[App] workSites ready (first snapshot arrived)');

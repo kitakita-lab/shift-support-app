@@ -208,16 +208,19 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   }
 
   function togglePreferredSite(name: string) {
-    setForm((prev) => ({
-      ...prev,
-      preferredWorkSites: prev.preferredWorkSites.includes(name)
-        ? prev.preferredWorkSites.filter((n) => n !== name)
-        : [...prev.preferredWorkSites, name],
-    }));
+    setForm((prev) => {
+      const sites = prev.preferredWorkSites ?? [];
+      return {
+        ...prev,
+        preferredWorkSites: sites.includes(name)
+          ? sites.filter((n) => n !== name)
+          : [...sites, name],
+      };
+    });
   }
 
   const uniqueSiteNames = [...new Set(workSites.map((w) => w.siteName))].sort();
-  const unselectedSites = uniqueSiteNames.filter((n) => !form.preferredWorkSites.includes(n));
+  const unselectedSites = uniqueSiteNames.filter((n) => !(form.preferredWorkSites ?? []).includes(n));
 
   // 検索クエリで siteName・clientName の両方を照合して絞り込む
   const filteredUnselectedSites = siteSearch.trim()
@@ -278,12 +281,12 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     setForm({
       staffNo: s.staffNo,
       name: s.name,
-      availableWeekdays: s.availableWeekdays,
-      requestedDaysOff: s.requestedDaysOff,
+      availableWeekdays: s.availableWeekdays ?? [],
+      requestedDaysOff: s.requestedDaysOff ?? [],
       maxWorkDays: s.maxWorkDays,
       maxConsecutiveDays: s.maxConsecutiveDays ?? 5,
       memo: s.memo,
-      preferredWorkSites: s.preferredWorkSites,
+      preferredWorkSites: s.preferredWorkSites ?? [],
       ngPartnerIds: s.ngPartnerIds ?? [],
     });
     setConsecutiveDaysInput(String(s.maxConsecutiveDays ?? 5));
@@ -412,11 +415,11 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                 <>
                   {/* 上段：選択済み */}
                   <div className="preferred-selected">
-                    {form.preferredWorkSites.length === 0 ? (
+                    {(form.preferredWorkSites ?? []).length === 0 ? (
                       <span className="preferred-none">なし</span>
                     ) : (
                       <div className="site-chips">
-                        {form.preferredWorkSites.map((name) => (
+                        {(form.preferredWorkSites ?? []).map((name) => (
                           <span key={name} className="site-chip site-chip--selected">
                             <span className="site-chip__name">{name}</span>
                             <button
@@ -620,9 +623,9 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                       />
                     </td>
                     <td className="name-cell">{s.name}</td>
-                    <td>{formatDaysOff(s.requestedDaysOff, currentMonth)}</td>
+                    <td>{formatDaysOff(s.requestedDaysOff ?? [], currentMonth)}</td>
                     <td>{s.memo || '—'}</td>
-                    <td className="preferred-sites-cell">{formatPreferredSites(s.preferredWorkSites)}</td>
+                    <td className="preferred-sites-cell">{formatPreferredSites(s.preferredWorkSites ?? [])}</td>
                     <td className="action-cell">
                       <button className="btn btn--sm btn--secondary" onClick={() => handleEdit(s)}>
                         編集
@@ -643,7 +646,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
           {/* モバイル：カード表示 */}
           <div className="staff-card-list">
             {filteredStaff.map((s) => {
-              const daysOffText = formatDaysOff(s.requestedDaysOff, currentMonth);
+              const daysOffText = formatDaysOff(s.requestedDaysOff ?? [], currentMonth);
               const hasDaysOff  = daysOffText !== '—';
               return (
                 <div key={s.id} className="staff-card">
@@ -667,10 +670,10 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                     <div className="staff-card__row">
                       <span className="staff-card__label">優先現場</span>
                       <div className="staff-card__chips">
-                        {s.preferredWorkSites.length === 0 ? (
+                        {(s.preferredWorkSites ?? []).length === 0 ? (
                           <span className="staff-card__value">—</span>
                         ) : (
-                          s.preferredWorkSites.map((site) => (
+                          (s.preferredWorkSites ?? []).map((site) => (
                             <span key={site} className="staff-card__chip">{site}</span>
                           ))
                         )}

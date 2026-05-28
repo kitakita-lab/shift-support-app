@@ -31,7 +31,7 @@ function save<T>(key: string, data: T[]): void {
  * 新フィールド（siteIdentityKey 等）は存在する場合のみコピーする。
  * Supabase 移行時もこの関数を更新するだけで対応できる。
  */
-function hydrateWorkSite(raw: Partial<WorkSite>): WorkSite {
+export function hydrateWorkSite(raw: Partial<WorkSite>): WorkSite {
   const s: WorkSite = {
     id:             raw.id             ?? genId(),
     date:           raw.date           ?? '',
