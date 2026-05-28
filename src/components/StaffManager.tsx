@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Staff, WorkSite } from '../types';
 import { sortStaff, nextStaffNo } from '../utils/staffUtils';
 import { EditingState } from '../services/editingService';
+import { useEditingPresence } from '../hooks/useEditingPresence';
 
 interface Props {
   staff: Staff[];
@@ -10,7 +11,6 @@ interface Props {
   selectedMonth: string;
   editingStates?: EditingState[];
   currentUserId?: string;
-  onStartEditing?: (type: 'staff' | 'worksite', targetId: string, targetName: string) => () => void;
 }
 
 function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
@@ -164,26 +164,12 @@ function DaysOffCalendar({ yearMonth, onMonthChange, daysOff, onChange }: Calend
   );
 }
 
-export default function StaffManager({ staff, workSites, onChange, selectedMonth, editingStates, currentUserId, onStartEditing }: Props) {
+export default function StaffManager({ staff, workSites, onChange, selectedMonth, editingStates, currentUserId }: Props) {
   const [form, setForm] = useState<Omit<Staff, 'id'>>(() => emptyForm(staff));
   const [editId, setEditId] = useState<string | null>(null);
 
-  // 編集中状態トラッキング
-  const stopEditingRef    = useRef<(() => void) | null>(null);
-  const onStartEditingRef = useRef(onStartEditing);
-  useEffect(() => { onStartEditingRef.current = onStartEditing; }, [onStartEditing]);
-
-  useEffect(() => {
-    if (editId) {
-      stopEditingRef.current?.();
-      const s = staff.find((st) => st.id === editId);
-      stopEditingRef.current = onStartEditingRef.current?.('staff', editId, s?.name ?? '') ?? null;
-    } else {
-      stopEditingRef.current?.();
-      stopEditingRef.current = null;
-    }
-    return () => { stopEditingRef.current?.(); stopEditingRef.current = null; };
-  }, [editId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const editingTargetName = editId ? (staff.find((s) => s.id === editId)?.name ?? '') : '';
+  useEditingPresence({ type: 'staff', targetId: editId, targetName: editingTargetName, enabled: !!editId });
   const [currentMonth, setCurrentMonth] = useState(() => selectedMonth);
   const [editingNos, setEditingNos] = useState<Record<string, string>>({});
   const [addSiteOpen, setAddSiteOpen] = useState(false);

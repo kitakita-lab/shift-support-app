@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Staff, WorkSite, ShiftAssignment, ImportLog } from './types';
-import { storage, hydrateWorkSite } from './utils/storage';
+import { storage } from './utils/storage';
 import Dashboard from './components/Dashboard';
 import StaffManager from './components/StaffManager';
 import WorkSiteManager from './components/WorkSiteManager';
@@ -9,22 +9,13 @@ import ExportPanel from './components/ExportPanel';
 import CsvImporter from './components/CsvImporter';
 import AuthButton from './components/AuthButton';
 import { useAuth } from './contexts/AuthContext';
-import { firestoreService, setCurrentUser, subscribeLastActivity, DocMeta } from './services/firestoreService';
-import { startPresenceHeartbeat, subscribePresence, PresenceUser } from './services/presenceService';
-import { logActivity, subscribeActivityLogs, ActivityLog } from './services/activityLogService';
-import { startEditing, subscribeEditingStates, EditingState } from './services/editingService';
+import { logActivity } from './services/activityLogService';
+import { DocMeta } from './services/firestoreService';
+import { useCollaborativeSync } from './hooks/useCollaborativeSync';
+import { useUndo } from './hooks/useUndo';
 import './styles/App.css';
 
 type Tab = 'dashboard' | 'staff' | 'worksite' | 'shift' | 'export' | 'import';
-type SyncState = 'idle' | 'saving' | 'saved' | 'error';
-
-interface UndoSnapshot {
-  staff: Staff[];
-  workSites: WorkSite[];
-  assignments: ShiftAssignment[];
-  importLogs: ImportLog[];
-  label: string;
-}
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'dashboard', label: 'ダッシュボード' },
@@ -63,244 +54,24 @@ function formatLastActivity(meta: DocMeta): string {
 }
 
 export default function App() {
-  const [activeTab,   setActiveTab]   = useState<Tab>('dashboard');
-  const [staff,       setStaff]       = useState<Staff[]>(() => storage.loadStaff());
-  const [workSites,   setWorkSites]   = useState<WorkSite[]>(() => storage.loadWorkSites());
-  const [assignments, setAssignments] = useState<ShiftAssignment[]>(() => storage.loadAssignments());
-  const [importLogs,  setImportLogs]  = useState<ImportLog[]>(() => storage.loadImportLogs());
-
+  const [activeTab,     setActiveTab]     = useState<Tab>('dashboard');
   const [selectedMonth, setSelectedMonth] = useState<string>(() => toYearMonth(new Date()));
 
-  // ── Firestore sync state ──────────────────────────────────────
-  const [syncState,     setSyncState]     = useState<SyncState>('idle');
-  const [lastActivity,  setLastActivity]  = useState<DocMeta | null>(null);
-  const [onlineUsers,   setOnlineUsers]   = useState<PresenceUser[]>([]);
-  const [activityLogs,  setActivityLogs]  = useState<ActivityLog[]>([]);
-  const [editingStates, setEditingStates] = useState<EditingState[]>([]);
-  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const {
+    staff, setStaff,
+    workSites, setWorkSites,
+    assignments, setAssignments,
+    importLogs, setImportLogs,
+    syncState,
+    lastActivity,
+    onlineUsers,
+    activityLogs,
+    editingStates,
+  } = useCollaborativeSync();
 
-  // ── Undo ─────────────────────────────────────────────────────
-  const [undoSnapshot, setUndoSnapshot] = useState<UndoSnapshot | null>(null);
-  const [undoToast,    setUndoToast]    = useState<string | null>(null);
-  const undoToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { snapshot, toast, saveSnapshot, applyUndo } = useUndo();
 
   const { user } = useAuth();
-
-  // Firestore からの更新で setState した直後は書き戻しをスキップするフラグ（ref: レンダー不要）
-  const fromFirestore = useRef({ staff: false, workSites: false, assignments: false, importLogs: false });
-  // 初回 snapshot 到着後のみ書き込みを許可（ログイン直後の localStorage 上書き防止）
-  const [firestoreReady, setFirestoreReady] = useState({ staff: false, workSites: false, assignments: false, importLogs: false });
-
-  // ── 保存状態ラッパー ───────────────────────────────────────────
-  function wrapSave(promise: Promise<void>): void {
-    setSyncState('saving');
-    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-    promise
-      .then(() => {
-        setSyncState('saved');
-        syncTimerRef.current = setTimeout(() => setSyncState('idle'), 2000);
-      })
-      .catch(() => setSyncState('error'));
-  }
-
-  // ── Undo ─────────────────────────────────────────────────────
-
-  function saveUndoSnapshot(label: string) {
-    setUndoSnapshot({ staff, workSites, assignments, importLogs, label });
-  }
-
-  function handleUndo() {
-    if (!undoSnapshot) return;
-    setStaff(undoSnapshot.staff);
-    setWorkSites(undoSnapshot.workSites);
-    setAssignments(undoSnapshot.assignments);
-    setImportLogs(undoSnapshot.importLogs);
-    const msg = `「${undoSnapshot.label}」を元に戻しました`;
-    setUndoSnapshot(null);
-    setUndoToast(msg);
-    if (undoToastTimerRef.current) clearTimeout(undoToastTimerRef.current);
-    undoToastTimerRef.current = setTimeout(() => setUndoToast(null), 3000);
-  }
-
-  // ── 編集開始ファクトリ ────────────────────────────────────────
-
-  function makeStartEditing(
-    type: 'staff' | 'worksite',
-    targetId: string,
-    targetName: string,
-  ): () => void {
-    if (!user) return () => {};
-    return startEditing(
-      { uid: user.uid, displayName: user.displayName ?? user.email ?? '不明' },
-      type, targetId, targetName,
-    );
-  }
-
-  // ── 現在ユーザーを firestoreService に注入 ────────────────────
-  useEffect(() => {
-    setCurrentUser(
-      user
-        ? { uid: user.uid, displayName: user.displayName ?? user.email ?? '不明' }
-        : null,
-    );
-  }, [user]);
-
-  // マウント時の localStorage 初期値をログ
-  useEffect(() => {
-    console.debug(
-      '[App] init localStorage —',
-      'staff:', storage.loadStaff().length,
-      'workSites:', storage.loadWorkSites().length,
-    );
-  }, []);
-
-  // ── Firestore リアルタイム購読 ────────────────────────────────
-  useEffect(() => {
-    if (!user) {
-      setFirestoreReady({ staff: false, workSites: false, assignments: false, importLogs: false });
-      setOnlineUsers([]);
-      setActivityLogs([]);
-      setLastActivity(null);
-      setEditingStates([]);
-      return;
-    }
-    console.debug('[App] subscribe start — uid:', user.uid);
-
-    // スタッフ
-    const unsubStaff = firestoreService.subscribeStaff(
-      (items) => {
-        console.debug('[App] ← Firestore staff count:', items.length);
-        fromFirestore.current.staff = true;
-        setStaff(items.map((s) => ({
-          ...s,
-          staffNo:            s.staffNo            ?? '',
-          availableWeekdays:  s.availableWeekdays  ?? [],
-          requestedDaysOff:   s.requestedDaysOff   ?? [],
-          maxWorkDays:        s.maxWorkDays         ?? 20,
-          maxConsecutiveDays: s.maxConsecutiveDays  ?? 5,
-          memo:               s.memo               ?? '',
-          preferredWorkSites: s.preferredWorkSites  ?? [],
-          ngPartnerIds:       s.ngPartnerIds        ?? [],
-        })));
-      },
-      () => {
-        console.debug('[App] staff ready');
-        setFirestoreReady((prev) => ({ ...prev, staff: true }));
-      },
-    );
-
-    // 現場
-    const unsubWorkSites = firestoreService.subscribeWorkSites(
-      (items) => {
-        console.debug('[App] ← Firestore workSites count:', items.length);
-        fromFirestore.current.workSites = true;
-        setWorkSites(items.map((s) => hydrateWorkSite(s as Partial<WorkSite>)));
-      },
-      () => {
-        console.debug('[App] workSites ready');
-        setFirestoreReady((prev) => ({ ...prev, workSites: true }));
-      },
-    );
-
-    // シフト割当
-    const unsubAssignments = firestoreService.subscribeAssignments(
-      (items) => {
-        console.debug('[App] ← Firestore assignments count:', items.length);
-        fromFirestore.current.assignments = true;
-        setAssignments(items.map((a) => ({ ...a, assignedStaffIds: a.assignedStaffIds ?? [] })));
-      },
-      () => {
-        console.debug('[App] assignments ready');
-        setFirestoreReady((prev) => ({ ...prev, assignments: true }));
-      },
-    );
-
-    // インポートログ
-    const unsubImportLogs = firestoreService.subscribeImportLogs(
-      (items) => {
-        console.debug('[App] ← Firestore importLogs count:', items.length);
-        fromFirestore.current.importLogs = true;
-        setImportLogs(items);
-      },
-      () => {
-        console.debug('[App] importLogs ready');
-        setFirestoreReady((prev) => ({ ...prev, importLogs: true }));
-      },
-    );
-
-    // 最終更新情報
-    const unsubLastActivity = subscribeLastActivity(setLastActivity);
-
-    // Presence（heartbeat + 購読）
-    const stopHeartbeat = startPresenceHeartbeat({
-      uid:         user.uid,
-      displayName: user.displayName,
-      photoURL:    user.photoURL,
-    });
-    const unsubPresence = subscribePresence(setOnlineUsers);
-
-    // アクティビティログ
-    const unsubActivityLogs = subscribeActivityLogs(setActivityLogs);
-
-    // 編集中状態
-    const unsubEditing = subscribeEditingStates(setEditingStates);
-
-    return () => {
-      console.debug('[App] unsubscribe');
-      unsubStaff();
-      unsubWorkSites();
-      unsubAssignments();
-      unsubImportLogs();
-      unsubLastActivity();
-      stopHeartbeat();
-      unsubPresence();
-      unsubActivityLogs();
-      unsubEditing();
-      fromFirestore.current = { staff: false, workSites: false, assignments: false, importLogs: false };
-    };
-  }, [user]);
-
-  // ── セーブエフェクト ──────────────────────────────────────────
-
-  // スタッフ
-  useEffect(() => {
-    storage.saveStaff(staff);
-    if (!user) return;
-    if (!firestoreReady.staff) { console.debug('[App] staff save skip — not ready'); return; }
-    if (fromFirestore.current.staff) { console.debug('[App] staff save skip — from Firestore'); fromFirestore.current.staff = false; return; }
-    console.debug('[App] staff → Firestore write count:', staff.length);
-    wrapSave(firestoreService.saveStaff(staff));
-  }, [staff, user, firestoreReady.staff]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 現場
-  useEffect(() => {
-    storage.saveWorkSites(workSites);
-    if (!user) return;
-    if (!firestoreReady.workSites) { console.debug('[App] workSites save skip — not ready'); return; }
-    if (fromFirestore.current.workSites) { console.debug('[App] workSites save skip — from Firestore'); fromFirestore.current.workSites = false; return; }
-    console.debug('[App] workSites → Firestore write count:', workSites.length);
-    wrapSave(firestoreService.saveWorkSites(workSites));
-  }, [workSites, user, firestoreReady.workSites]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // シフト割当
-  useEffect(() => {
-    storage.saveAssignments(assignments);
-    if (!user) return;
-    if (!firestoreReady.assignments) { console.debug('[App] assignments save skip — not ready'); return; }
-    if (fromFirestore.current.assignments) { console.debug('[App] assignments save skip — from Firestore'); fromFirestore.current.assignments = false; return; }
-    console.debug('[App] assignments → Firestore write count:', assignments.length);
-    wrapSave(firestoreService.saveAssignments(assignments));
-  }, [assignments, user, firestoreReady.assignments]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // インポートログ
-  useEffect(() => {
-    storage.saveImportLogs(importLogs);
-    if (!user) return;
-    if (!firestoreReady.importLogs) { console.debug('[App] importLogs save skip — not ready'); return; }
-    if (fromFirestore.current.importLogs) { console.debug('[App] importLogs save skip — from Firestore'); fromFirestore.current.importLogs = false; return; }
-    console.debug('[App] importLogs → Firestore write count:', importLogs.length);
-    wrapSave(firestoreService.saveImportLogs(importLogs));
-  }, [importLogs, user, firestoreReady.importLogs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 計算値 ───────────────────────────────────────────────────
 
@@ -319,7 +90,6 @@ export default function App() {
     [workSites]
   );
 
-  // アクター情報（activityLog 用）
   const actor = user
     ? { uid: user.uid, name: user.displayName ?? user.email ?? '不明' }
     : null;
@@ -344,12 +114,10 @@ export default function App() {
     const newIds  = new Set(newStaff.map((s) => s.id));
     const deleted = staff.filter((s) => !newIds.has(s.id));
 
-    // Undo スナップショット（削除時のみ保存）
     if (deleted.length > 0) {
-      saveUndoSnapshot(`スタッフ削除（${deleted.map((s) => s.name).join('・')}）`);
+      saveSnapshot(`スタッフ削除（${deleted.map((s) => s.name).join('・')}）`, { staff, workSites, assignments, importLogs });
     }
 
-    // アクティビティログ: 追加/削除の検出
     if (actor) {
       newStaff.filter((s) => !prevIds.has(s.id)).forEach((s) =>
         logActivity(actor, 'staff_add', s.name)
@@ -382,12 +150,10 @@ export default function App() {
     const addedCount   = [...newGroupIds].filter((id) => !prevGroupIds.has(id)).length;
     const deletedCount = [...prevGroupIds].filter((id) => !newGroupIds.has(id)).length;
 
-    // Undo スナップショット（削除時のみ保存）
     if (deletedCount > 0) {
-      saveUndoSnapshot(`現場削除（${deletedCount}件）`);
+      saveSnapshot(`現場削除（${deletedCount}件）`, { staff, workSites, assignments, importLogs });
     }
 
-    // アクティビティログ
     if (actor) {
       if (addedCount   > 0) logActivity(actor, 'worksite_add',    `${addedCount}件`);
       if (deletedCount > 0) logActivity(actor, 'worksite_delete', `${deletedCount}件`);
@@ -408,14 +174,14 @@ export default function App() {
   }
 
   function handleClearMonthlyShifts() {
-    saveUndoSnapshot(`シフトクリア（${selectedMonth}）`);
+    saveSnapshot(`シフトクリア（${selectedMonth}）`, { staff, workSites, assignments, importLogs });
     if (actor) logActivity(actor, 'shift_clear', selectedMonth);
     const monthSiteIds = new Set(monthlyWorkSites.map((s) => s.id));
     setAssignments((prev) => prev.filter((a) => !monthSiteIds.has(a.siteId)));
   }
 
   function handleDeleteImportBatch(importBatchId: string) {
-    saveUndoSnapshot('インポートバッチ削除');
+    saveSnapshot('インポートバッチ削除', { staff, workSites, assignments, importLogs });
     const batchIds = new Set(
       workSites
         .filter((s) => s.importBatchId === importBatchId && s.source !== 'manual' && !s.isManuallyEdited)
@@ -431,7 +197,7 @@ export default function App() {
   }
 
   function handleReimportBatch(oldBatchId: string, newSites: WorkSite[], newLog: ImportLog) {
-    saveUndoSnapshot('再インポート');
+    saveSnapshot('再インポート', { staff, workSites, assignments, importLogs });
     const oldBatchSiteIds = new Set(
       workSites
         .filter((s) => s.importBatchId === oldBatchId && s.source !== 'manual' && !s.isManuallyEdited)
@@ -446,6 +212,15 @@ export default function App() {
     });
     setImportLogs((prev) => [...prev.filter((l) => l.importBatchId !== oldBatchId), newLog]);
     if (actor) logActivity(actor, 'import', newLog.sourceFileName ? `再インポート: ${newLog.sourceFileName}` : '再インポート');
+  }
+
+  function handleUndo() {
+    const restored = applyUndo();
+    if (!restored) return;
+    setStaff(restored.staff);
+    setWorkSites(restored.workSites);
+    setAssignments(restored.assignments);
+    setImportLogs(restored.importLogs);
   }
 
   // ── ヘッダー UI ───────────────────────────────────────────────
@@ -496,8 +271,8 @@ export default function App() {
                 <span className="presence-count">{onlineUsers.length}人オンライン</span>
               </div>
             )}
-            {undoSnapshot && (
-              <button className="header-undo-btn" onClick={handleUndo} title={undoSnapshot.label}>
+            {snapshot && (
+              <button className="header-undo-btn" onClick={handleUndo} title={snapshot.label}>
                 ↩ Undo
               </button>
             )}
@@ -536,7 +311,7 @@ export default function App() {
         )}
       </div>
 
-      {undoToast && <div className="undo-toast">{undoToast}</div>}
+      {toast && <div className="undo-toast">{toast}</div>}
 
       <main className="main-content">
         {activeTab === 'dashboard' && (
@@ -558,7 +333,6 @@ export default function App() {
             selectedMonth={selectedMonth}
             editingStates={editingStates}
             currentUserId={user?.uid}
-            onStartEditing={makeStartEditing}
           />
         )}
         {activeTab === 'worksite' && (
@@ -569,7 +343,6 @@ export default function App() {
             selectedMonth={selectedMonth}
             editingStates={editingStates}
             currentUserId={user?.uid}
-            onStartEditing={makeStartEditing}
           />
         )}
         {activeTab === 'shift' && (
@@ -600,7 +373,7 @@ export default function App() {
             csvSiteCount={workSites.filter((s) => isImportedSite(s)).length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
             onImportSites={(imported, overwrite) => {
-              saveUndoSnapshot('CSVインポート');
+              saveSnapshot('CSVインポート', { staff, workSites, assignments, importLogs });
               if (overwrite) {
                 const overwriteIds = new Set(
                   workSites.filter((s) => isImportedSite(s)).map((s) => s.id)
