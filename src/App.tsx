@@ -12,10 +12,19 @@ import { useAuth } from './contexts/AuthContext';
 import { firestoreService, setCurrentUser, subscribeLastActivity, DocMeta } from './services/firestoreService';
 import { startPresenceHeartbeat, subscribePresence, PresenceUser } from './services/presenceService';
 import { logActivity, subscribeActivityLogs, ActivityLog } from './services/activityLogService';
+import { startEditing, subscribeEditingStates, EditingState } from './services/editingService';
 import './styles/App.css';
 
 type Tab = 'dashboard' | 'staff' | 'worksite' | 'shift' | 'export' | 'import';
 type SyncState = 'idle' | 'saving' | 'saved' | 'error';
+
+interface UndoSnapshot {
+  staff: Staff[];
+  workSites: WorkSite[];
+  assignments: ShiftAssignment[];
+  importLogs: ImportLog[];
+  label: string;
+}
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'dashboard', label: 'ダッシュボード' },
@@ -67,7 +76,13 @@ export default function App() {
   const [lastActivity,  setLastActivity]  = useState<DocMeta | null>(null);
   const [onlineUsers,   setOnlineUsers]   = useState<PresenceUser[]>([]);
   const [activityLogs,  setActivityLogs]  = useState<ActivityLog[]>([]);
+  const [editingStates, setEditingStates] = useState<EditingState[]>([]);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Undo ─────────────────────────────────────────────────────
+  const [undoSnapshot, setUndoSnapshot] = useState<UndoSnapshot | null>(null);
+  const [undoToast,    setUndoToast]    = useState<string | null>(null);
+  const undoToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { user } = useAuth();
 
@@ -86,6 +101,39 @@ export default function App() {
         syncTimerRef.current = setTimeout(() => setSyncState('idle'), 2000);
       })
       .catch(() => setSyncState('error'));
+  }
+
+  // ── Undo ─────────────────────────────────────────────────────
+
+  function saveUndoSnapshot(label: string) {
+    setUndoSnapshot({ staff, workSites, assignments, importLogs, label });
+  }
+
+  function handleUndo() {
+    if (!undoSnapshot) return;
+    setStaff(undoSnapshot.staff);
+    setWorkSites(undoSnapshot.workSites);
+    setAssignments(undoSnapshot.assignments);
+    setImportLogs(undoSnapshot.importLogs);
+    const msg = `「${undoSnapshot.label}」を元に戻しました`;
+    setUndoSnapshot(null);
+    setUndoToast(msg);
+    if (undoToastTimerRef.current) clearTimeout(undoToastTimerRef.current);
+    undoToastTimerRef.current = setTimeout(() => setUndoToast(null), 3000);
+  }
+
+  // ── 編集開始ファクトリ ────────────────────────────────────────
+
+  function makeStartEditing(
+    type: 'staff' | 'worksite',
+    targetId: string,
+    targetName: string,
+  ): () => void {
+    if (!user) return () => {};
+    return startEditing(
+      { uid: user.uid, displayName: user.displayName ?? user.email ?? '不明' },
+      type, targetId, targetName,
+    );
   }
 
   // ── 現在ユーザーを firestoreService に注入 ────────────────────
@@ -113,6 +161,7 @@ export default function App() {
       setOnlineUsers([]);
       setActivityLogs([]);
       setLastActivity(null);
+      setEditingStates([]);
       return;
     }
     console.debug('[App] subscribe start — uid:', user.uid);
@@ -193,6 +242,9 @@ export default function App() {
     // アクティビティログ
     const unsubActivityLogs = subscribeActivityLogs(setActivityLogs);
 
+    // 編集中状態
+    const unsubEditing = subscribeEditingStates(setEditingStates);
+
     return () => {
       console.debug('[App] unsubscribe');
       unsubStaff();
@@ -203,6 +255,7 @@ export default function App() {
       stopHeartbeat();
       unsubPresence();
       unsubActivityLogs();
+      unsubEditing();
       fromFirestore.current = { staff: false, workSites: false, assignments: false, importLogs: false };
     };
   }, [user]);
@@ -287,19 +340,23 @@ export default function App() {
   }
 
   function handleStaffChange(newStaff: Staff[]) {
+    const prevIds = new Set(staff.map((s) => s.id));
+    const newIds  = new Set(newStaff.map((s) => s.id));
+    const deleted = staff.filter((s) => !newIds.has(s.id));
+
+    // Undo スナップショット（削除時のみ保存）
+    if (deleted.length > 0) {
+      saveUndoSnapshot(`スタッフ削除（${deleted.map((s) => s.name).join('・')}）`);
+    }
+
     // アクティビティログ: 追加/削除の検出
     if (actor) {
-      const prevIds = new Set(staff.map((s) => s.id));
-      const newIds  = new Set(newStaff.map((s) => s.id));
       newStaff.filter((s) => !prevIds.has(s.id)).forEach((s) =>
         logActivity(actor, 'staff_add', s.name)
       );
-      staff.filter((s) => !newIds.has(s.id)).forEach((s) =>
-        logActivity(actor, 'staff_delete', s.name)
-      );
+      deleted.forEach((s) => logActivity(actor, 'staff_delete', s.name));
     }
 
-    const newIds = new Set(newStaff.map((s) => s.id));
     setAssignments((prev) =>
       prev.map((a) => {
         const validStaff   = a.assignedStaffIds.filter((id) => newIds.has(id));
@@ -316,16 +373,22 @@ export default function App() {
   }
 
   function handleWorkSiteChange(newSites: WorkSite[]) {
-    // アクティビティログ: 会場単位で追加/削除を検出
+    const prevGroupIds = new Set(
+      workSites.filter((s) => !s.isPlaceholder).map((s) => s.groupId ?? s.id)
+    );
+    const newGroupIds  = new Set(
+      newSites.filter((s) => !s.isPlaceholder).map((s) => s.groupId ?? s.id)
+    );
+    const addedCount   = [...newGroupIds].filter((id) => !prevGroupIds.has(id)).length;
+    const deletedCount = [...prevGroupIds].filter((id) => !newGroupIds.has(id)).length;
+
+    // Undo スナップショット（削除時のみ保存）
+    if (deletedCount > 0) {
+      saveUndoSnapshot(`現場削除（${deletedCount}件）`);
+    }
+
+    // アクティビティログ
     if (actor) {
-      const prevGroupIds = new Set(
-        workSites.filter((s) => !s.isPlaceholder).map((s) => s.groupId ?? s.id)
-      );
-      const newGroupIds  = new Set(
-        newSites.filter((s) => !s.isPlaceholder).map((s) => s.groupId ?? s.id)
-      );
-      const addedCount   = [...newGroupIds].filter((id) => !prevGroupIds.has(id)).length;
-      const deletedCount = [...prevGroupIds].filter((id) => !newGroupIds.has(id)).length;
       if (addedCount   > 0) logActivity(actor, 'worksite_add',    `${addedCount}件`);
       if (deletedCount > 0) logActivity(actor, 'worksite_delete', `${deletedCount}件`);
     }
@@ -345,12 +408,14 @@ export default function App() {
   }
 
   function handleClearMonthlyShifts() {
+    saveUndoSnapshot(`シフトクリア（${selectedMonth}）`);
     if (actor) logActivity(actor, 'shift_clear', selectedMonth);
     const monthSiteIds = new Set(monthlyWorkSites.map((s) => s.id));
     setAssignments((prev) => prev.filter((a) => !monthSiteIds.has(a.siteId)));
   }
 
   function handleDeleteImportBatch(importBatchId: string) {
+    saveUndoSnapshot('インポートバッチ削除');
     const batchIds = new Set(
       workSites
         .filter((s) => s.importBatchId === importBatchId && s.source !== 'manual' && !s.isManuallyEdited)
@@ -366,6 +431,7 @@ export default function App() {
   }
 
   function handleReimportBatch(oldBatchId: string, newSites: WorkSite[], newLog: ImportLog) {
+    saveUndoSnapshot('再インポート');
     const oldBatchSiteIds = new Set(
       workSites
         .filter((s) => s.importBatchId === oldBatchId && s.source !== 'manual' && !s.isManuallyEdited)
@@ -430,6 +496,11 @@ export default function App() {
                 <span className="presence-count">{onlineUsers.length}人オンライン</span>
               </div>
             )}
+            {undoSnapshot && (
+              <button className="header-undo-btn" onClick={handleUndo} title={undoSnapshot.label}>
+                ↩ Undo
+              </button>
+            )}
           </div>
         )}
 
@@ -465,6 +536,8 @@ export default function App() {
         )}
       </div>
 
+      {undoToast && <div className="undo-toast">{undoToast}</div>}
+
       <main className="main-content">
         {activeTab === 'dashboard' && (
           <Dashboard
@@ -483,6 +556,9 @@ export default function App() {
             workSites={workSites}
             onChange={handleStaffChange}
             selectedMonth={selectedMonth}
+            editingStates={editingStates}
+            currentUserId={user?.uid}
+            onStartEditing={makeStartEditing}
           />
         )}
         {activeTab === 'worksite' && (
@@ -491,6 +567,9 @@ export default function App() {
             onChange={handleWorkSiteChange}
             onAddImportLog={handleAddImportLog}
             selectedMonth={selectedMonth}
+            editingStates={editingStates}
+            currentUserId={user?.uid}
+            onStartEditing={makeStartEditing}
           />
         )}
         {activeTab === 'shift' && (
@@ -521,6 +600,7 @@ export default function App() {
             csvSiteCount={workSites.filter((s) => isImportedSite(s)).length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
             onImportSites={(imported, overwrite) => {
+              saveUndoSnapshot('CSVインポート');
               if (overwrite) {
                 const overwriteIds = new Set(
                   workSites.filter((s) => isImportedSite(s)).map((s) => s.id)

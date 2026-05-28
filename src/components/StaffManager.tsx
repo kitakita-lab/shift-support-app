@@ -1,12 +1,16 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Staff, WorkSite } from '../types';
 import { sortStaff, nextStaffNo } from '../utils/staffUtils';
+import { EditingState } from '../services/editingService';
 
 interface Props {
   staff: Staff[];
   workSites: WorkSite[];
   onChange: (staff: Staff[]) => void;
   selectedMonth: string;
+  editingStates?: EditingState[];
+  currentUserId?: string;
+  onStartEditing?: (type: 'staff' | 'worksite', targetId: string, targetName: string) => () => void;
 }
 
 function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
@@ -160,9 +164,26 @@ function DaysOffCalendar({ yearMonth, onMonthChange, daysOff, onChange }: Calend
   );
 }
 
-export default function StaffManager({ staff, workSites, onChange, selectedMonth }: Props) {
+export default function StaffManager({ staff, workSites, onChange, selectedMonth, editingStates, currentUserId, onStartEditing }: Props) {
   const [form, setForm] = useState<Omit<Staff, 'id'>>(() => emptyForm(staff));
   const [editId, setEditId] = useState<string | null>(null);
+
+  // 編集中状態トラッキング
+  const stopEditingRef    = useRef<(() => void) | null>(null);
+  const onStartEditingRef = useRef(onStartEditing);
+  useEffect(() => { onStartEditingRef.current = onStartEditing; }, [onStartEditing]);
+
+  useEffect(() => {
+    if (editId) {
+      stopEditingRef.current?.();
+      const s = staff.find((st) => st.id === editId);
+      stopEditingRef.current = onStartEditingRef.current?.('staff', editId, s?.name ?? '') ?? null;
+    } else {
+      stopEditingRef.current?.();
+      stopEditingRef.current = null;
+    }
+    return () => { stopEditingRef.current?.(); stopEditingRef.current = null; };
+  }, [editId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [currentMonth, setCurrentMonth] = useState(() => selectedMonth);
   const [editingNos, setEditingNos] = useState<Record<string, string>>({});
   const [addSiteOpen, setAddSiteOpen] = useState(false);
@@ -607,7 +628,9 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                 </tr>
               </thead>
               <tbody>
-                {filteredStaff.map((s) => (
+                {filteredStaff.map((s) => {
+                  const editingEntry = editingStates?.find((e) => e.type === 'staff' && e.targetId === s.id);
+                  return (
                   <tr key={s.id}>
                     <td>
                       <input
@@ -622,7 +645,14 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                         }}
                       />
                     </td>
-                    <td className="name-cell">{s.name}</td>
+                    <td className="name-cell">
+                      {s.name}
+                      {editingEntry && (
+                        <span className={editingEntry.userId === currentUserId ? 'editing-indicator editing-indicator--self' : 'editing-indicator editing-indicator--other'}>
+                          {editingEntry.userId === currentUserId ? '🟢 あなたが編集中' : `🟠 ${editingEntry.userName} が編集中`}
+                        </span>
+                      )}
+                    </td>
                     <td>{formatDaysOff(s.requestedDaysOff ?? [], currentMonth)}</td>
                     <td>{s.memo || '—'}</td>
                     <td className="preferred-sites-cell">{formatPreferredSites(s.preferredWorkSites ?? [])}</td>
@@ -638,7 +668,8 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -646,10 +677,16 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
           {/* モバイル：カード表示 */}
           <div className="staff-card-list">
             {filteredStaff.map((s) => {
-              const daysOffText = formatDaysOff(s.requestedDaysOff ?? [], currentMonth);
-              const hasDaysOff  = daysOffText !== '—';
+              const daysOffText  = formatDaysOff(s.requestedDaysOff ?? [], currentMonth);
+              const hasDaysOff   = daysOffText !== '—';
+              const editingEntry = editingStates?.find((e) => e.type === 'staff' && e.targetId === s.id);
               return (
                 <div key={s.id} className="staff-card">
+                  {editingEntry && (
+                    <div className={editingEntry.userId === currentUserId ? 'editing-indicator editing-indicator--self' : 'editing-indicator editing-indicator--other'}>
+                      {editingEntry.userId === currentUserId ? '🟢 あなたが編集中' : `🟠 ${editingEntry.userName} が編集中`}
+                    </div>
+                  )}
                   {/* ── ヘッダー（名前左・No右）── */}
                   <div className="staff-card__header">
                     <span className="staff-card__name">{s.name}</span>

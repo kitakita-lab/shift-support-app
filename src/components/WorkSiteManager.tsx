@@ -4,6 +4,7 @@ import { parseSiteCSV, SiteParseResult } from '../utils/csvImport';
 import { formatSiteLabel } from '../utils/siteUtils';
 import { buildNormalizedSiteKey, normalizeImportedWorkSites } from '../utils/shiftNormalize';
 import SessionDateRangePicker from './SessionDateRangePicker';
+import { EditingState } from '../services/editingService';
 
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
@@ -487,11 +488,14 @@ interface Props {
   onChange: (workSites: WorkSite[]) => void;
   onAddImportLog: (log: ImportLog) => void;
   selectedMonth: string;
+  editingStates?: EditingState[];
+  currentUserId?: string;
+  onStartEditing?: (type: 'staff' | 'worksite', targetId: string, targetName: string) => () => void;
 }
 
 // ─── component ─────────────────────────────────────────────
 
-export default function WorkSiteManager({ workSites, onChange, onAddImportLog, selectedMonth }: Props) {
+export default function WorkSiteManager({ workSites, onChange, onAddImportLog, selectedMonth, editingStates, currentUserId, onStartEditing }: Props) {
   // ── 新規現場登録フォーム
   const [newSiteFormOpen, setNewSiteFormOpen] = useState(false);
   const [newClientName,  setNewClientName]  = useState('');
@@ -512,6 +516,24 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   const [editorMonth,        setEditorMonth]        = useState<string>(selectedMonth);
   // 会期エディタへのスクロール用 ref
   const sessionEditorRef = useRef<HTMLDivElement>(null);
+
+  // 編集中状態トラッキング
+  const stopEditingRef    = useRef<(() => void) | null>(null);
+  const onStartEditingRef = useRef(onStartEditing);
+  useEffect(() => { onStartEditingRef.current = onStartEditing; }, [onStartEditing]);
+
+  useEffect(() => {
+    if (sessionEditor?.isExistingGroup && sessionEditor.groupId) {
+      stopEditingRef.current?.();
+      stopEditingRef.current = onStartEditingRef.current?.(
+        'worksite', sessionEditor.groupId, sessionEditor.siteName || '現場'
+      ) ?? null;
+    } else {
+      stopEditingRef.current?.();
+      stopEditingRef.current = null;
+    }
+    return () => { stopEditingRef.current?.(); stopEditingRef.current = null; };
+  }, [sessionEditor?.groupId, sessionEditor?.isExistingGroup]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── CSV 取込モーダル
   const [csvModalOpen,      setCsvModalOpen]      = useState(false);
@@ -1275,8 +1297,15 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
                     })()
                   : null;
 
+                const editingEntry = editingStates?.find((e) => e.type === 'worksite' && e.targetId === groupId);
+
                 return (
                   <div key={groupId} className="site-card">
+                    {editingEntry && !(isEditingSession && editingEntry.userId === currentUserId) && (
+                      <div className={editingEntry.userId === currentUserId ? 'editing-indicator editing-indicator--self' : 'editing-indicator editing-indicator--other'}>
+                        {editingEntry.userId === currentUserId ? '🟢 あなたが編集中' : `🟠 ${editingEntry.userName} が編集中`}
+                      </div>
+                    )}
                     <div className="site-header">
                       <button className="site-header__main" onClick={() => toggleVenue(groupId)}>
                         <div className="site-header__info">
