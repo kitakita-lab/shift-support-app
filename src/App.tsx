@@ -54,10 +54,10 @@ export default function App() {
   const { user } = useAuth();
 
   // Firestore からの更新で setState した直後は書き戻しをスキップするフラグ（ref: レンダー不要）
-  const fromFirestore = useRef({ staff: false, workSites: false });
+  const fromFirestore = useRef({ staff: false, workSites: false, assignments: false, importLogs: false });
   // 初回 snapshot 到着後のみ書き込みを許可（ログイン直後の localStorage 上書き防止）
   // useState にすることで ready 変化時に save useEffect を再発火させる
-  const [firestoreReady, setFirestoreReady] = useState({ staff: false, workSites: false });
+  const [firestoreReady, setFirestoreReady] = useState({ staff: false, workSites: false, assignments: false, importLogs: false });
 
   // マウント時の localStorage 初期値をログ（localStorage が Firestore を上書きしないか確認用）
   useEffect(() => {
@@ -71,7 +71,7 @@ export default function App() {
   // ログイン時に Firestore をリアルタイム購読（全端末でデータ共有）
   useEffect(() => {
     if (!user) {
-      setFirestoreReady({ staff: false, workSites: false });
+      setFirestoreReady({ staff: false, workSites: false, assignments: false, importLogs: false });
       return;
     }
     console.debug('[App] subscribe start — uid:', user.uid);
@@ -110,11 +110,40 @@ export default function App() {
       },
     );
 
+    const unsubAssignments = firestoreService.subscribeAssignments(
+      (items) => {
+        console.debug('[App] ← Firestore assignments count:', items.length, '→ setAssignments');
+        fromFirestore.current.assignments = true;
+        setAssignments(items.map((a) => ({
+          ...a,
+          assignedStaffIds: a.assignedStaffIds ?? [],
+        })));
+      },
+      () => {
+        console.debug('[App] assignments ready (first snapshot arrived)');
+        setFirestoreReady((prev) => ({ ...prev, assignments: true }));
+      },
+    );
+
+    const unsubImportLogs = firestoreService.subscribeImportLogs(
+      (items) => {
+        console.debug('[App] ← Firestore importLogs count:', items.length, '→ setImportLogs');
+        fromFirestore.current.importLogs = true;
+        setImportLogs(items);
+      },
+      () => {
+        console.debug('[App] importLogs ready (first snapshot arrived)');
+        setFirestoreReady((prev) => ({ ...prev, importLogs: true }));
+      },
+    );
+
     return () => {
       console.debug('[App] unsubscribe');
       unsubStaff();
       unsubWorkSites();
-      fromFirestore.current = { staff: false, workSites: false };
+      unsubAssignments();
+      unsubImportLogs();
+      fromFirestore.current = { staff: false, workSites: false, assignments: false, importLogs: false };
     };
   }, [user]);
 
@@ -152,8 +181,39 @@ export default function App() {
     firestoreService.saveWorkSites(workSites).catch(() => {});
   }, [workSites, user, firestoreReady.workSites]);
 
-  useEffect(() => { storage.saveAssignments(assignments); if (user) firestoreService.saveAssignments(assignments).catch(() => {}); }, [assignments, user]);
-  useEffect(() => { storage.saveImportLogs(importLogs);   if (user) firestoreService.saveImportLogs(importLogs).catch(() => {});   }, [importLogs, user]);
+  // シフト割当: 同上
+  useEffect(() => {
+    storage.saveAssignments(assignments);
+    if (!user) return;
+    if (!firestoreReady.assignments) {
+      console.debug('[App] assignments save skip — Firestore not ready yet');
+      return;
+    }
+    if (fromFirestore.current.assignments) {
+      console.debug('[App] assignments save skip — came from Firestore');
+      fromFirestore.current.assignments = false;
+      return;
+    }
+    console.debug('[App] assignments → Firestore write count:', assignments.length);
+    firestoreService.saveAssignments(assignments).catch(() => {});
+  }, [assignments, user, firestoreReady.assignments]);
+
+  // インポートログ: 同上
+  useEffect(() => {
+    storage.saveImportLogs(importLogs);
+    if (!user) return;
+    if (!firestoreReady.importLogs) {
+      console.debug('[App] importLogs save skip — Firestore not ready yet');
+      return;
+    }
+    if (fromFirestore.current.importLogs) {
+      console.debug('[App] importLogs save skip — came from Firestore');
+      fromFirestore.current.importLogs = false;
+      return;
+    }
+    console.debug('[App] importLogs → Firestore write count:', importLogs.length);
+    firestoreService.saveImportLogs(importLogs).catch(() => {});
+  }, [importLogs, user, firestoreReady.importLogs]);
 
   const monthlyWorkSites = useMemo(
     () => workSites.filter((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth)),

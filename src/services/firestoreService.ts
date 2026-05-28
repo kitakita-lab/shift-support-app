@@ -67,6 +67,16 @@ export const firestoreService = {
     onFirst: () => void,
   ): Unsubscribe => subscribe<WorkSite>('workSites', cb, onFirst),
 
+  subscribeAssignments: (
+    cb: (items: ShiftAssignment[]) => void,
+    onFirst: () => void,
+  ): Unsubscribe => subscribe<ShiftAssignment>('assignments', cb, onFirst),
+
+  subscribeImportLogs: (
+    cb: (items: ImportLog[]) => void,
+    onFirst: () => void,
+  ): Unsubscribe => subscribe<ImportLog>('importLogs', cb, onFirst),
+
   saveStaff:       (items: Staff[]): Promise<void>           => save('staff',       items),
   saveWorkSites:   (items: WorkSite[]): Promise<void>        => save('workSites',   items),
   saveAssignments: (items: ShiftAssignment[]): Promise<void> => save('assignments', items),
