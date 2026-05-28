@@ -73,9 +73,17 @@ export function hydrateWorkSite(raw: Partial<WorkSite>): WorkSite {
 
 export const storage = {
   loadStaff: (): Staff[] =>
-    load<Partial<Staff> & Omit<Staff, 'staffNo' | 'preferredWorkSites'>>(KEYS.staff).map(
-      (s) => ({ staffNo: '', preferredWorkSites: [], maxConsecutiveDays: 5, ...s } as Staff)
-    ),
+    load<Partial<Staff>>(KEYS.staff).map((s) => ({
+      staffNo:            '',
+      availableWeekdays:  [],
+      requestedDaysOff:   [],
+      maxWorkDays:        20,
+      maxConsecutiveDays: 5,
+      memo:               '',
+      preferredWorkSites: [],
+      ngPartnerIds:       [],
+      ...s,
+    } as Staff)),
   saveStaff: (data: Staff[]): void => save(KEYS.staff, data),
 
   loadWorkSites: (): WorkSite[] =>

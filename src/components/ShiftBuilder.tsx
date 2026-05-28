@@ -34,7 +34,7 @@ export default function ShiftBuilder({ staff, workSites, assignments, selectedMo
   for (const site of sorted) {
     if (!seenDates.has(site.date)) {
       seenDates.add(site.date);
-      const offs = sortStaff(staff.filter((s) => s.requestedDaysOff.includes(site.date)));
+      const offs = sortStaff(staff.filter((s) => (s.requestedDaysOff ?? []).includes(site.date)));
       if (offs.length > 0) dateToOffStaff.set(site.date, offs);
     }
   }
@@ -132,7 +132,7 @@ export default function ShiftBuilder({ staff, workSites, assignments, selectedMo
                   // 希望休日に割当されているスタッフ（通常はゼロ、安全チェック用）
                   const violationIds = new Set(
                     asgn.assignedStaffIds.filter(
-                      (id) => staffIndex[id]?.requestedDaysOff.includes(site.date)
+                      (id) => (staffIndex[id]?.requestedDaysOff ?? []).includes(site.date)
                     )
                   );
 
@@ -161,7 +161,7 @@ export default function ShiftBuilder({ staff, workSites, assignments, selectedMo
                                     <span className="assign-violation" title="希望休日に割当されています">
                                       ⚠ {staffMap[id] ?? id}
                                     </span>
-                                  ) : staffIndex[id]?.preferredWorkSites.includes(site.siteName) ? (
+                                  ) : (staffIndex[id]?.preferredWorkSites ?? []).includes(site.siteName) ? (
                                     <span className="assign-preferred" title="優先現場として設定されています">
                                       ★ {staffMap[id] ?? id}
                                     </span>

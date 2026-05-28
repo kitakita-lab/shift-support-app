@@ -71,7 +71,7 @@ function passesHardConstraints(
   alreadyAssignedIds: string[] = []
 ): boolean {
   // 1. 希望休
-  if (s.requestedDaysOff.includes(site.date)) return false;
+  if ((s.requestedDaysOff ?? []).includes(site.date)) return false;
   // 2. 勤務不可曜日
   if (!isAvailableOnDate(s, site.date)) return false;
   // 3. 月間最大勤務日数
@@ -118,7 +118,7 @@ function scoreStaffForSite(
   assignedDates: Set<string>
 ): StaffScore {
   return {
-    preferred:    s.preferredWorkSites.includes(site.siteName) ? 1 : 0,
+    preferred:    (s.preferredWorkSites ?? []).includes(site.siteName) ? 1 : 0,
     pairBonus:    0,   // 未実装（将来: preferredPairs の相手が配置済みなら加点）
     leaderBonus:  0,   // 未実装（将来: isLeader かつリーダー未配置の現場で加点）
     levelBalance: 0,   // 未実装（将来: スタッフレベル分散のための補正）
@@ -188,7 +188,7 @@ export function generateShifts(
     assigned.forEach((s) => assignedDates[s.id].add(site.date));
 
     if (import.meta.env.DEV) {
-      const preferredCount = candidates.filter((s) => s.preferredWorkSites.includes(site.siteName)).length;
+      const preferredCount = candidates.filter((s) => (s.preferredWorkSites ?? []).includes(site.siteName)).length;
       console.log(
         `[シフト] ${site.date} ${site.siteName}: 候補${candidates.length}人（優先${preferredCount}人）→ 選出: [${assigned.map((s) => s.name).join(', ')}]`
       );
