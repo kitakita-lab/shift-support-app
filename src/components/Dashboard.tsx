@@ -1,4 +1,5 @@
 import { Staff, WorkSite, ShiftAssignment } from '../types';
+import { ActivityLog, ACTION_LABELS } from '../services/activityLogService';
 
 interface Props {
   staff: Staff[];
@@ -7,6 +8,7 @@ interface Props {
   selectedMonth: string;
   onNavigate: (tab: string) => void;
   hasSites: boolean;
+  activityLogs?: ActivityLog[];
 }
 
 interface StatCardProps {
@@ -29,7 +31,13 @@ function formatMonthLabel(yearMonth: string): string {
   return `${y}年${parseInt(m)}月`;
 }
 
-export default function Dashboard({ staff, workSites, assignments, selectedMonth, onNavigate, hasSites }: Props) {
+function formatLogTime(ts: number): string {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export default function Dashboard({ staff, workSites, assignments, selectedMonth, onNavigate, hasSites, activityLogs }: Props) {
   const monthLabel = formatMonthLabel(selectedMonth);
 
   // isPlaceholder（会期なし会場の仮レコード）を除いたアクティブな現場日程
@@ -118,6 +126,24 @@ export default function Dashboard({ staff, workSites, assignments, selectedMonth
           <StatCard label="割当済み人数（延べ）" value={totalAssigned} />
           <StatCard label="不足人数（延べ）" value={totalShortage} alert={totalShortage > 0} />
           <StatCard label="不足スロット数" value={warningCount} alert={warningCount > 0} />
+        </div>
+      )}
+
+      {activityLogs && activityLogs.length > 0 && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <h3>操作履歴</h3>
+          <ol className="activity-timeline">
+            {activityLogs.map((log) => (
+              <li key={log.id} className="activity-item">
+                <span className="activity-item__time">{formatLogTime(log.timestamp)}</span>
+                <span className="activity-item__action">{ACTION_LABELS[log.action]}</span>
+                <span className="activity-item__actor">{log.actorName}</span>
+                {log.details && (
+                  <span className="activity-item__details">{log.details}</span>
+                )}
+              </li>
+            ))}
+          </ol>
         </div>
       )}
     </div>
