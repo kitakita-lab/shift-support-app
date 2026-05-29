@@ -7,6 +7,7 @@ import SessionDateRangePicker from './SessionDateRangePicker';
 import { EditingState } from '../services/editingService';
 import { useEditingPresence } from '../hooks/useEditingPresence';
 
+
 // ─── ヘルパー関数 ──────────────────────────────────────────
 
 const createId = (): string =>
@@ -491,11 +492,13 @@ interface Props {
   selectedMonth: string;
   editingStates?: EditingState[];
   currentUserId?: string;
+  /** useFirestoreSync から渡す workSites ドキュメントの最新 updatedAt。保存競合検知に使用。 */
+  workSitesServerUpdatedAt?: number;
 }
 
 // ─── component ─────────────────────────────────────────────
 
-export default function WorkSiteManager({ workSites, onChange, onAddImportLog, selectedMonth, editingStates, currentUserId }: Props) {
+export default function WorkSiteManager({ workSites, onChange, onAddImportLog, selectedMonth, editingStates, currentUserId, workSitesServerUpdatedAt = 0 }: Props) {
   // ── 新規現場登録フォーム
   const [newSiteFormOpen, setNewSiteFormOpen] = useState(false);
   const [newClientName,  setNewClientName]  = useState('');
@@ -517,7 +520,7 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   // 会期エディタへのスクロール用 ref
   const sessionEditorRef = useRef<HTMLDivElement>(null);
 
-  useEditingPresence({
+  const { editingStartedAt } = useEditingPresence({
     type:       'worksite',
     targetId:   sessionEditor?.isExistingGroup ? sessionEditor.groupId : null,
     targetName: sessionEditor?.siteName ?? '',
@@ -742,6 +745,12 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   // ── 会期エディタ操作 ────────────────────────────────────────
 
   function openGroupSessionEditor(groupId: string, sites: WorkSite[]) {
+    const othersEditing = editingStates?.find(
+      (e) => e.type === 'worksite' && e.targetId === groupId && e.userId !== currentUserId,
+    );
+    if (othersEditing) {
+      if (!window.confirm(`🟠 ${othersEditing.userName}さんが編集中です。\n\n編集を続行しますか？`)) return;
+    }
     const lastDate = [...sites].filter((s) => !s.isPlaceholder && s.date)
       .sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
     setEditorMonth(lastDate ? lastDate.slice(0, 7) : selectedMonth);
@@ -760,6 +769,12 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
   }
 
   function openGroupSessionEditorWithNewSession(groupId: string, sites: WorkSite[]) {
+    const othersEditing = editingStates?.find(
+      (e) => e.type === 'worksite' && e.targetId === groupId && e.userId !== currentUserId,
+    );
+    if (othersEditing) {
+      if (!window.confirm(`🟠 ${othersEditing.userName}さんが編集中です。\n\n編集を続行しますか？`)) return;
+    }
     const newSess = emptySession();
     const lastDate = [...sites].filter((s) => !s.isPlaceholder && s.date)
       .sort((a, b) => b.date.localeCompare(a.date))[0]?.date;
@@ -804,6 +819,14 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
 
   function applySessionEditor() {
     if (!sessionEditor) return;
+    if (sessionEditor.isExistingGroup && editingStartedAt && workSitesServerUpdatedAt > editingStartedAt) {
+      const ok = window.confirm(
+        '⚠️ あなたが編集開始した後に別ユーザーが保存しています。\n\n' +
+        '保存を続行すると相手の変更を上書きする可能性があります。\n\n' +
+        '「OK」で上書き保存します。キャンセルで編集を続けられます。',
+      );
+      if (!ok) return;
+    }
     const editMeta = sessionEditor.isExistingGroup
       ? { isManuallyEdited: true as const, manualEditedAt: new Date().toISOString() }
       : undefined;

@@ -77,6 +77,12 @@ export interface WorkSite {
   importedAt?: string;
   /** 同一インポート操作のバッチID。バッチ単位での削除・管理に使用。 */
   importBatchId?: string;
+  /**
+   * 会期（sessionId）単位の優先度。同一現場でも会期ごとに異なる優先度を設定できる。
+   * sessionId が同じ全 WorkSite レコードで同一値を保持する運用とする。
+   * シフト生成ロジックへの組み込みは別フェーズで実施。
+   */
+  sessionPriority?: 'S' | 'A' | 'normal';
 }
 
 export interface ShiftAssignment {

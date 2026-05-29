@@ -50,6 +50,7 @@ function subscribe<T>(
   key: string,
   onData: (items: T[]) => void,
   onFirstSnapshot: () => void,
+  onMeta?: (updatedAt: number) => void,
 ): Unsubscribe {
   if (!db) {
     console.debug(`[FS] subscribe(${key}) skip — db=null`);
@@ -65,11 +66,14 @@ function subscribe<T>(
       console.debug(
         `[FS] snapshot(${key}) exists=${snap.exists()} pending=${snap.metadata.hasPendingWrites}`,
       );
-      // 自端末の書き込みによるローカルキャッシュ通知はスキップ（server 確認済みのみ処理）
       if (snap.metadata.hasPendingWrites) return;
 
       if (isFirst) { isFirst = false; onFirstSnapshot(); }
-      if (snap.exists()) onData((snap.data().items ?? []) as T[]);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (onMeta && typeof data.updatedAt === 'number') onMeta(data.updatedAt);
+        onData((data.items ?? []) as T[]);
+      }
     },
     (err) => {
       console.debug(`[FS] error(${key}):`, err.code, err.message);
@@ -117,22 +121,26 @@ export const firestoreService = {
   subscribeStaff: (
     cb: (items: Staff[]) => void,
     onFirst: () => void,
-  ): Unsubscribe => subscribe<Staff>('staff', cb, onFirst),
+    onMeta?: (updatedAt: number) => void,
+  ): Unsubscribe => subscribe<Staff>('staff', cb, onFirst, onMeta),
 
   subscribeWorkSites: (
     cb: (items: WorkSite[]) => void,
     onFirst: () => void,
-  ): Unsubscribe => subscribe<WorkSite>('workSites', cb, onFirst),
+    onMeta?: (updatedAt: number) => void,
+  ): Unsubscribe => subscribe<WorkSite>('workSites', cb, onFirst, onMeta),
 
   subscribeAssignments: (
     cb: (items: ShiftAssignment[]) => void,
     onFirst: () => void,
-  ): Unsubscribe => subscribe<ShiftAssignment>('assignments', cb, onFirst),
+    onMeta?: (updatedAt: number) => void,
+  ): Unsubscribe => subscribe<ShiftAssignment>('assignments', cb, onFirst, onMeta),
 
   subscribeImportLogs: (
     cb: (items: ImportLog[]) => void,
     onFirst: () => void,
-  ): Unsubscribe => subscribe<ImportLog>('importLogs', cb, onFirst),
+    onMeta?: (updatedAt: number) => void,
+  ): Unsubscribe => subscribe<ImportLog>('importLogs', cb, onFirst, onMeta),
 
   saveStaff:       (items: Staff[]): Promise<void>           => save('staff',       items),
   saveWorkSites:   (items: WorkSite[]): Promise<void>        => save('workSites',   items),

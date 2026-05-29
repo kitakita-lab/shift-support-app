@@ -11,7 +11,9 @@ import AuthButton from './components/AuthButton';
 import { useAuth } from './contexts/AuthContext';
 import { logActivity } from './services/activityLogService';
 import { DocMeta } from './services/firestoreService';
-import { useCollaborativeSync } from './hooks/useCollaborativeSync';
+import { useFirestoreSync } from './hooks/useFirestoreSync';
+import { useCollaborativePresence } from './hooks/useCollaborativePresence';
+import { useCollaborativeFeatures } from './hooks/useCollaborativeFeatures';
 import { useUndo } from './hooks/useUndo';
 import './styles/App.css';
 
@@ -57,17 +59,13 @@ export default function App() {
   const [activeTab,     setActiveTab]     = useState<Tab>('dashboard');
   const [selectedMonth, setSelectedMonth] = useState<string>(() => toYearMonth(new Date()));
 
-  const {
-    staff, setStaff,
-    workSites, setWorkSites,
-    assignments, setAssignments,
-    importLogs, setImportLogs,
-    syncState,
-    lastActivity,
-    onlineUsers,
-    activityLogs,
-    editingStates,
-  } = useCollaborativeSync();
+  const firestore     = useFirestoreSync();
+  const presence      = useCollaborativePresence();
+  const collaboration = useCollaborativeFeatures();
+
+  const { staff, setStaff, workSites, setWorkSites, assignments, setAssignments, importLogs, setImportLogs, syncState } = firestore;
+  const { lastActivity, onlineUsers } = presence;
+  const { activityLogs, editingStates } = collaboration;
 
   const { snapshot, toast, saveSnapshot, applyUndo } = useUndo();
 
@@ -333,6 +331,7 @@ export default function App() {
             selectedMonth={selectedMonth}
             editingStates={editingStates}
             currentUserId={user?.uid}
+            staffServerUpdatedAt={firestore.serverUpdatedAt.staff}
           />
         )}
         {activeTab === 'worksite' && (
@@ -343,6 +342,7 @@ export default function App() {
             selectedMonth={selectedMonth}
             editingStates={editingStates}
             currentUserId={user?.uid}
+            workSitesServerUpdatedAt={firestore.serverUpdatedAt.workSites}
           />
         )}
         {activeTab === 'shift' && (
