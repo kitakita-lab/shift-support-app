@@ -8,7 +8,7 @@ rules_version = '2';
 //
 // アプリが使用するパス（src/services/ 参照）:
 //   teams/intention-dev/appData/{key}                  … staff / workSites / assignments / importLogs
-//   teams/intention-dev/presence/{uid}                 … オンライン状態（10s heartbeat）
+//   teams/intention-dev/presence/{uid}                 … オンライン状態（30s heartbeat）
 //   teams/intention-dev/editingStates/{type_targetId}  … 編集中表示
 //   teams/intention-dev/activityLogs/{docId}           … 操作ログ
 //

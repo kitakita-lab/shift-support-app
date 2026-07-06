@@ -9,9 +9,11 @@ export interface PresenceUser {
   lastSeen: number;
 }
 
-// heartbeat 10s / online threshold 35s（3 missed beats で offline 扱い）
-const HEARTBEAT_MS  = 10_000;
-const ONLINE_THR_MS = 35_000;
+// heartbeat 30s / online threshold 95s（3 missed beats + 5s マージンで offline 扱い）
+// 30s × 3人 × 8h ≒ 2,880 writes/日。10s だと 8,640/日で無料枠(20k/日)の 43% を占めるため 30s とする。
+// 変更する場合は ONLINE_THR_MS = HEARTBEAT_MS × 3 + 5s の比率を維持すること。
+const HEARTBEAT_MS  = 30_000;
+const ONLINE_THR_MS = 95_000;
 
 function presenceDoc(uid: string) {
   return doc(db!, 'teams', TEAM_ID, 'presence', uid);
