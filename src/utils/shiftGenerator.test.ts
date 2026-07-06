@@ -299,3 +299,81 @@ describe('generateShifts: 処理順序', () => {
     expect(result.map((r) => r.siteId)).toEqual(['first', 'second']);
   });
 });
+
+describe('generateShifts: sessionPriority（会期優先度）', () => {
+  it('S 会期は日付が後でも通常会期より先に処理され、人員枠を先取りする', () => {
+    // A は月間上限1日。通常(月曜) と S(火曜) が競合すると S が勝つ。
+    const staff = [makeStaff({ id: 'A', maxWorkDays: 1 })];
+    const sites = [
+      makeSite({ id: 'normalMon', date: MON }),
+      makeSite({ id: 'sTue',      date: TUE, sessionPriority: 'S' }),
+    ];
+    const result = generateShifts(staff, sites);
+    const byId = Object.fromEntries(result.map((r) => [r.siteId, r]));
+    expect(byId['sTue'].assignedStaffIds).toEqual(['A']);
+    expect(byId['normalMon'].assignedStaffIds).toEqual([]);
+    expect(byId['normalMon'].shortage).toBe(1);
+  });
+
+  it('A 会期は通常会期より先に処理される', () => {
+    const staff = [makeStaff({ id: 'A', maxWorkDays: 1 })];
+    const sites = [
+      makeSite({ id: 'normalMon', date: MON }),
+      makeSite({ id: 'aTue',      date: TUE, sessionPriority: 'A' }),
+    ];
+    const result = generateShifts(staff, sites);
+    const byId = Object.fromEntries(result.map((r) => [r.siteId, r]));
+    expect(byId['aTue'].assignedStaffIds).toEqual(['A']);
+    expect(byId['normalMon'].assignedStaffIds).toEqual([]);
+  });
+
+  it('S は A より先に処理される', () => {
+    const staff = [makeStaff({ id: 'A', maxWorkDays: 1 })];
+    const sites = [
+      makeSite({ id: 'aMon', date: MON, sessionPriority: 'A' }),
+      makeSite({ id: 'sTue', date: TUE, sessionPriority: 'S' }),
+    ];
+    const result = generateShifts(staff, sites);
+    const byId = Object.fromEntries(result.map((r) => [r.siteId, r]));
+    expect(byId['sTue'].assignedStaffIds).toEqual(['A']);
+    expect(byId['aMon'].assignedStaffIds).toEqual([]);
+  });
+
+  it('priority が同じ場合は現在の並び順（日付昇順・同日は入力順）を維持する', () => {
+    const staff = [makeStaff({ id: 'A', maxWorkDays: 1 })];
+    // 両方 S → 日付の早い方が先に枠を取る（従来ルールが priority 内で生きる）
+    const sites = [
+      makeSite({ id: 'sTue', date: TUE, sessionPriority: 'S' }),
+      makeSite({ id: 'sMon', date: MON, sessionPriority: 'S' }),
+    ];
+    const result = generateShifts(staff, sites);
+    const byId = Object.fromEntries(result.map((r) => [r.siteId, r]));
+    expect(byId['sMon'].assignedStaffIds).toEqual(['A']);
+    expect(byId['sTue'].assignedStaffIds).toEqual([]);
+  });
+
+  it("priority 未設定と明示 'normal' は同順位（通常扱い）", () => {
+    const staff = [makeStaff({ id: 'A', maxWorkDays: 1 })];
+    // 未設定(月曜) vs 明示 normal(火曜) → 同順位なので日付順で月曜が勝つ
+    const sites = [
+      makeSite({ id: 'explicitTue', date: TUE, sessionPriority: 'normal' }),
+      makeSite({ id: 'unsetMon',    date: MON }),
+    ];
+    const result = generateShifts(staff, sites);
+    const byId = Object.fromEntries(result.map((r) => [r.siteId, r]));
+    expect(byId['unsetMon'].assignedStaffIds).toEqual(['A']);
+    expect(byId['explicitTue'].assignedStaffIds).toEqual([]);
+  });
+
+  it('全現場が優先度未設定なら従来の処理順（日付昇順のみ）と同一', () => {
+    const staff = [makeStaff({ id: 'A', maxWorkDays: 1 })];
+    const sites = [
+      makeSite({ id: 'tue', date: TUE }),
+      makeSite({ id: 'mon', date: MON }),
+    ];
+    const result = generateShifts(staff, sites);
+    // 既存テストと同じ期待値（早い日付が枠を取る）
+    expect(result[0]).toMatchObject({ siteId: 'mon', assignedStaffIds: ['A'] });
+    expect(result[1]).toMatchObject({ siteId: 'tue', assignedStaffIds: [], shortage: 1 });
+  });
+});

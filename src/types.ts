@@ -80,7 +80,8 @@ export interface WorkSite {
   /**
    * 会期（sessionId）単位の優先度。同一現場でも会期ごとに異なる優先度を設定できる。
    * sessionId が同じ全 WorkSite レコードで同一値を保持する運用とする。
-   * シフト生成ロジックへの組み込みは別フェーズで実施。
+   * 未設定は「通常」扱い。generateShifts が S → A → 通常 の順に処理し、
+   * 優先度の高い会期が人員枠（月間上限・連勤）を先に確保する。
    */
   sessionPriority?: 'S' | 'A' | 'normal';
 }
