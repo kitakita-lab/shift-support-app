@@ -3107,3 +3107,228 @@ details[open] .paste-details__summary::before {
     --rdp-day_button-width:   38px;
   }
 }
+
+/* ===== ヘッダー：メタ情報（最終更新 / 同期バッジ / プレゼンス）===== */
+.app-header__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.header-last-activity {
+  font-size: 11px;
+  color: rgba(255,255,255,0.65);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+@media (max-width: 600px) {
+  .header-last-activity {
+    display: none;
+  }
+}
+
+.header-sync-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.header-sync-badge--saving {
+  background: rgba(251,191,36,0.25);
+  color: #fde68a;
+}
+
+.header-sync-badge--saved {
+  background: rgba(52,211,153,0.25);
+  color: #6ee7b7;
+}
+
+.header-sync-badge--error {
+  background: rgba(248,113,113,0.25);
+  color: #fca5a5;
+}
+
+/* ===== プレゼンス（オンラインユーザー）===== */
+.header-presence {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.presence-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.5);
+  object-fit: cover;
+}
+
+.presence-initial {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.2);
+  border: 2px solid rgba(255,255,255,0.5);
+  font-size: 11px;
+  font-weight: 700;
+  color: white;
+  flex-shrink: 0;
+}
+
+.presence-count {
+  font-size: 11px;
+  color: rgba(255,255,255,0.65);
+  white-space: nowrap;
+}
+
+/* ===== 操作履歴タイムライン ===== */
+.activity-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.activity-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+}
+
+.activity-item::before {
+  content: '●';
+  font-size: 8px;
+  color: #1a56db;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.activity-item__time {
+  font-size: 12px;
+  color: #9ca3af;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.activity-item__action {
+  font-weight: 600;
+  color: #1a56db;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.activity-item__actor {
+  color: #374151;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.activity-item__details {
+  color: #6b7280;
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== 編集中インジケーター ===== */
+.editing-indicator {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* テーブルセル内では name の下に表示 */
+.name-cell .editing-indicator {
+  display: block;
+  margin-top: 2px;
+}
+
+/* サイトカード・スタッフカードの上部バナーとして表示 */
+.site-card > .editing-indicator,
+.staff-card > .editing-indicator {
+  display: block;
+  border-radius: 4px 4px 0 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  margin-bottom: 0;
+}
+
+.editing-indicator--other {
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+}
+
+.editing-indicator--self {
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+/* ===== Undo ボタン（ヘッダー内）===== */
+.header-undo-btn {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.6);
+  background: rgba(255,255,255,0.15);
+  color: white;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.header-undo-btn:hover {
+  background: rgba(255,255,255,0.28);
+}
+
+/* ===== Undo トースト通知 ===== */
+.undo-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1a2e;
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  z-index: 9999;
+  pointer-events: none;
+  white-space: nowrap;
+}

@@ -1,12 +1,18 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Staff, WorkSite } from '../types';
 import { sortStaff, nextStaffNo } from '../utils/staffUtils';
+import { EditingState } from '../services/editingService';
+import { useEditingPresence } from '../hooks/useEditingPresence';
 
 interface Props {
   staff: Staff[];
   workSites: WorkSite[];
   onChange: (staff: Staff[]) => void;
   selectedMonth: string;
+  editingStates?: EditingState[];
+  currentUserId?: string;
+  /** useFirestoreSync から渡す staff ドキュメントの最新 updatedAt。保存競合検知に使用。 */
+  staffServerUpdatedAt?: number;
 }
 
 function emptyForm(staff: Staff[]): Omit<Staff, 'id'> {
@@ -160,9 +166,12 @@ function DaysOffCalendar({ yearMonth, onMonthChange, daysOff, onChange }: Calend
   );
 }
 
-export default function StaffManager({ staff, workSites, onChange, selectedMonth }: Props) {
+export default function StaffManager({ staff, workSites, onChange, selectedMonth, editingStates, currentUserId, staffServerUpdatedAt = 0 }: Props) {
   const [form, setForm] = useState<Omit<Staff, 'id'>>(() => emptyForm(staff));
   const [editId, setEditId] = useState<string | null>(null);
+
+  const editingTargetName = editId ? (staff.find((s) => s.id === editId)?.name ?? '') : '';
+  const { editingStartedAt } = useEditingPresence({ type: 'staff', targetId: editId, targetName: editingTargetName, enabled: !!editId });
   const [currentMonth, setCurrentMonth] = useState(() => selectedMonth);
   const [editingNos, setEditingNos] = useState<Record<string, string>>({});
   const [addSiteOpen, setAddSiteOpen] = useState(false);
@@ -235,6 +244,16 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     e.preventDefault();
     if (!form.name.trim()) return;
 
+    // Phase2: 保存競合警告（編集中に他ユーザーが保存した場合）
+    if (editId && editingStartedAt && staffServerUpdatedAt > editingStartedAt) {
+      const ok = window.confirm(
+        '⚠️ あなたが編集開始した後に別ユーザーが保存しています。\n\n' +
+        '保存を続行すると相手の変更を上書きする可能性があります。\n\n' +
+        '「OK」で上書き保存します。キャンセルで編集を続けられます。',
+      );
+      if (!ok) return;
+    }
+
     const newNgIds = new Set(form.ngPartnerIds ?? []);
     let updatedStaff: Staff[];
 
@@ -277,6 +296,14 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   }
 
   function handleEdit(s: Staff) {
+    // Phase3: 他ユーザー編集中の続行確認
+    const othersEditing = editingStates?.find(
+      (e) => e.type === 'staff' && e.targetId === s.id && e.userId !== currentUserId,
+    );
+    if (othersEditing) {
+      if (!window.confirm(`🟠 ${othersEditing.userName}さんが編集中です。\n\n編集を続行しますか？`)) return;
+    }
+
     setEditId(s.id);
     setForm({
       staffNo: s.staffNo,
@@ -607,7 +634,9 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                 </tr>
               </thead>
               <tbody>
-                {filteredStaff.map((s) => (
+                {filteredStaff.map((s) => {
+                  const editingEntry = editingStates?.find((e) => e.type === 'staff' && e.targetId === s.id);
+                  return (
                   <tr key={s.id}>
                     <td>
                       <input
@@ -622,7 +651,14 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                         }}
                       />
                     </td>
-                    <td className="name-cell">{s.name}</td>
+                    <td className="name-cell">
+                      {s.name}
+                      {editingEntry && (
+                        <span className={editingEntry.userId === currentUserId ? 'editing-indicator editing-indicator--self' : 'editing-indicator editing-indicator--other'}>
+                          {editingEntry.userId === currentUserId ? '🟢 あなたが編集中' : `🟠 ${editingEntry.userName} が編集中`}
+                        </span>
+                      )}
+                    </td>
                     <td>{formatDaysOff(s.requestedDaysOff ?? [], currentMonth)}</td>
                     <td>{s.memo || '—'}</td>
                     <td className="preferred-sites-cell">{formatPreferredSites(s.preferredWorkSites ?? [])}</td>
@@ -638,7 +674,8 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -646,10 +683,16 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
           {/* モバイル：カード表示 */}
           <div className="staff-card-list">
             {filteredStaff.map((s) => {
-              const daysOffText = formatDaysOff(s.requestedDaysOff ?? [], currentMonth);
-              const hasDaysOff  = daysOffText !== '—';
+              const daysOffText  = formatDaysOff(s.requestedDaysOff ?? [], currentMonth);
+              const hasDaysOff   = daysOffText !== '—';
+              const editingEntry = editingStates?.find((e) => e.type === 'staff' && e.targetId === s.id);
               return (
                 <div key={s.id} className="staff-card">
+                  {editingEntry && (
+                    <div className={editingEntry.userId === currentUserId ? 'editing-indicator editing-indicator--self' : 'editing-indicator editing-indicator--other'}>
+                      {editingEntry.userId === currentUserId ? '🟢 あなたが編集中' : `🟠 ${editingEntry.userName} が編集中`}
+                    </div>
+                  )}
                   {/* ── ヘッダー（名前左・No右）── */}
                   <div className="staff-card__header">
                     <span className="staff-card__name">{s.name}</span>

@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Staff, WorkSite, ShiftAssignment, ImportLog } from './types';
-import { storage, hydrateWorkSite } from './utils/storage';
+import { storage } from './utils/storage';
 import Dashboard from './components/Dashboard';
 import StaffManager from './components/StaffManager';
 import WorkSiteManager from './components/WorkSiteManager';
@@ -9,7 +9,12 @@ import ExportPanel from './components/ExportPanel';
 import CsvImporter from './components/CsvImporter';
 import AuthButton from './components/AuthButton';
 import { useAuth } from './contexts/AuthContext';
-import { firestoreService } from './services/firestoreService';
+import { logActivity } from './services/activityLogService';
+import { DocMeta } from './services/firestoreService';
+import { useFirestoreSync } from './hooks/useFirestoreSync';
+import { useCollaborativePresence } from './hooks/useCollaborativePresence';
+import { useCollaborativeFeatures } from './hooks/useCollaborativeFeatures';
+import { useUndo } from './hooks/useUndo';
 import './styles/App.css';
 
 type Tab = 'dashboard' | 'staff' | 'worksite' | 'shift' | 'export' | 'import';
@@ -42,178 +47,31 @@ function isImportedSite(s: WorkSite): boolean {
   return s.source === 'csv' || s.source === 'excel';
 }
 
-export default function App() {
-  const [activeTab,   setActiveTab]   = useState<Tab>('dashboard');
-  const [staff,       setStaff]       = useState<Staff[]>(() => storage.loadStaff());
-  const [workSites,   setWorkSites]   = useState<WorkSite[]>(() => storage.loadWorkSites());
-  const [assignments, setAssignments] = useState<ShiftAssignment[]>(() => storage.loadAssignments());
-  const [importLogs,  setImportLogs]  = useState<ImportLog[]>(() => storage.loadImportLogs());
+function formatLastActivity(meta: DocMeta): string {
+  const d = new Date(meta.updatedAt);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const who  = meta.updatedBy?.displayName ?? '不明';
+  return `${date}  ${who}`;
+}
 
+export default function App() {
+  const [activeTab,     setActiveTab]     = useState<Tab>('dashboard');
   const [selectedMonth, setSelectedMonth] = useState<string>(() => toYearMonth(new Date()));
+
+  const firestore     = useFirestoreSync();
+  const presence      = useCollaborativePresence();
+  const collaboration = useCollaborativeFeatures();
+
+  const { staff, setStaff, workSites, setWorkSites, assignments, setAssignments, importLogs, setImportLogs, syncState } = firestore;
+  const { lastActivity, onlineUsers } = presence;
+  const { activityLogs, editingStates } = collaboration;
+
+  const { snapshot, toast, saveSnapshot, applyUndo } = useUndo();
 
   const { user } = useAuth();
 
-  // Firestore からの更新で setState した直後は書き戻しをスキップするフラグ（ref: レンダー不要）
-  const fromFirestore = useRef({ staff: false, workSites: false, assignments: false, importLogs: false });
-  // 初回 snapshot 到着後のみ書き込みを許可（ログイン直後の localStorage 上書き防止）
-  // useState にすることで ready 変化時に save useEffect を再発火させる
-  const [firestoreReady, setFirestoreReady] = useState({ staff: false, workSites: false, assignments: false, importLogs: false });
-
-  // マウント時の localStorage 初期値をログ（localStorage が Firestore を上書きしないか確認用）
-  useEffect(() => {
-    console.debug(
-      '[App] init localStorage —',
-      'staff:', storage.loadStaff().length,
-      'workSites:', storage.loadWorkSites().length,
-    );
-  }, []);
-
-  // ログイン時に Firestore をリアルタイム購読（全端末でデータ共有）
-  useEffect(() => {
-    if (!user) {
-      setFirestoreReady({ staff: false, workSites: false, assignments: false, importLogs: false });
-      return;
-    }
-    console.debug('[App] subscribe start — uid:', user.uid);
-
-    const unsubStaff = firestoreService.subscribeStaff(
-      (items) => {
-        console.debug('[App] ← Firestore staff count:', items.length, '→ setStaff');
-        fromFirestore.current.staff = true;
-        setStaff(items.map((s) => ({
-          ...s,
-          staffNo:            s.staffNo            ?? '',
-          availableWeekdays:  s.availableWeekdays  ?? [],
-          requestedDaysOff:   s.requestedDaysOff   ?? [],
-          maxWorkDays:        s.maxWorkDays         ?? 20,
-          maxConsecutiveDays: s.maxConsecutiveDays  ?? 5,
-          memo:               s.memo               ?? '',
-          preferredWorkSites: s.preferredWorkSites  ?? [],
-          ngPartnerIds:       s.ngPartnerIds        ?? [],
-        })));
-      },
-      () => {
-        console.debug('[App] staff ready (first snapshot arrived)');
-        setFirestoreReady((prev) => ({ ...prev, staff: true }));
-      },
-    );
-
-    const unsubWorkSites = firestoreService.subscribeWorkSites(
-      (items) => {
-        console.debug('[App] ← Firestore workSites count:', items.length, '→ setWorkSites');
-        fromFirestore.current.workSites = true;
-        setWorkSites(items.map((s) => hydrateWorkSite(s as Partial<WorkSite>)));
-      },
-      () => {
-        console.debug('[App] workSites ready (first snapshot arrived)');
-        setFirestoreReady((prev) => ({ ...prev, workSites: true }));
-      },
-    );
-
-    const unsubAssignments = firestoreService.subscribeAssignments(
-      (items) => {
-        console.debug('[App] ← Firestore assignments count:', items.length, '→ setAssignments');
-        fromFirestore.current.assignments = true;
-        setAssignments(items.map((a) => ({
-          ...a,
-          assignedStaffIds: a.assignedStaffIds ?? [],
-        })));
-      },
-      () => {
-        console.debug('[App] assignments ready (first snapshot arrived)');
-        setFirestoreReady((prev) => ({ ...prev, assignments: true }));
-      },
-    );
-
-    const unsubImportLogs = firestoreService.subscribeImportLogs(
-      (items) => {
-        console.debug('[App] ← Firestore importLogs count:', items.length, '→ setImportLogs');
-        fromFirestore.current.importLogs = true;
-        setImportLogs(items);
-      },
-      () => {
-        console.debug('[App] importLogs ready (first snapshot arrived)');
-        setFirestoreReady((prev) => ({ ...prev, importLogs: true }));
-      },
-    );
-
-    return () => {
-      console.debug('[App] unsubscribe');
-      unsubStaff();
-      unsubWorkSites();
-      unsubAssignments();
-      unsubImportLogs();
-      fromFirestore.current = { staff: false, workSites: false, assignments: false, importLogs: false };
-    };
-  }, [user]);
-
-  // スタッフ: localStorage に常時保存 / Firestore は ready かつ自端末変更時のみ書き込む
-  useEffect(() => {
-    storage.saveStaff(staff);
-    if (!user) return;
-    if (!firestoreReady.staff) {
-      console.debug('[App] staff save skip — Firestore not ready yet');
-      return;
-    }
-    if (fromFirestore.current.staff) {
-      console.debug('[App] staff save skip — came from Firestore');
-      fromFirestore.current.staff = false;
-      return;
-    }
-    console.debug('[App] staff → Firestore write count:', staff.length);
-    firestoreService.saveStaff(staff).catch(() => {});
-  }, [staff, user, firestoreReady.staff]);
-
-  // 現場: 同上
-  useEffect(() => {
-    storage.saveWorkSites(workSites);
-    if (!user) return;
-    if (!firestoreReady.workSites) {
-      console.debug('[App] workSites save skip — Firestore not ready yet');
-      return;
-    }
-    if (fromFirestore.current.workSites) {
-      console.debug('[App] workSites save skip — came from Firestore');
-      fromFirestore.current.workSites = false;
-      return;
-    }
-    console.debug('[App] workSites → Firestore write count:', workSites.length);
-    firestoreService.saveWorkSites(workSites).catch(() => {});
-  }, [workSites, user, firestoreReady.workSites]);
-
-  // シフト割当: 同上
-  useEffect(() => {
-    storage.saveAssignments(assignments);
-    if (!user) return;
-    if (!firestoreReady.assignments) {
-      console.debug('[App] assignments save skip — Firestore not ready yet');
-      return;
-    }
-    if (fromFirestore.current.assignments) {
-      console.debug('[App] assignments save skip — came from Firestore');
-      fromFirestore.current.assignments = false;
-      return;
-    }
-    console.debug('[App] assignments → Firestore write count:', assignments.length);
-    firestoreService.saveAssignments(assignments).catch(() => {});
-  }, [assignments, user, firestoreReady.assignments]);
-
-  // インポートログ: 同上
-  useEffect(() => {
-    storage.saveImportLogs(importLogs);
-    if (!user) return;
-    if (!firestoreReady.importLogs) {
-      console.debug('[App] importLogs save skip — Firestore not ready yet');
-      return;
-    }
-    if (fromFirestore.current.importLogs) {
-      console.debug('[App] importLogs save skip — came from Firestore');
-      fromFirestore.current.importLogs = false;
-      return;
-    }
-    console.debug('[App] importLogs → Firestore write count:', importLogs.length);
-    firestoreService.saveImportLogs(importLogs).catch(() => {});
-  }, [importLogs, user, firestoreReady.importLogs]);
+  // ── 計算値 ───────────────────────────────────────────────────
 
   const monthlyWorkSites = useMemo(
     () => workSites.filter((s) => !s.isPlaceholder && s.date.startsWith(selectedMonth)),
@@ -230,6 +88,12 @@ export default function App() {
     [workSites]
   );
 
+  const actor = user
+    ? { uid: user.uid, name: user.displayName ?? user.email ?? '不明' }
+    : null;
+
+  // ── イベントハンドラ ─────────────────────────────────────────
+
   function handleClearAll() {
     storage.clearAll();
     setStaff([]);
@@ -240,10 +104,25 @@ export default function App() {
 
   function handleAddImportLog(log: ImportLog) {
     setImportLogs((prev) => [...prev, log]);
+    if (actor) logActivity(actor, 'import', log.sourceFileName);
   }
 
   function handleStaffChange(newStaff: Staff[]) {
-    const newIds = new Set(newStaff.map((s) => s.id));
+    const prevIds = new Set(staff.map((s) => s.id));
+    const newIds  = new Set(newStaff.map((s) => s.id));
+    const deleted = staff.filter((s) => !newIds.has(s.id));
+
+    if (deleted.length > 0) {
+      saveSnapshot(`スタッフ削除（${deleted.map((s) => s.name).join('・')}）`, { staff, workSites, assignments, importLogs });
+    }
+
+    if (actor) {
+      newStaff.filter((s) => !prevIds.has(s.id)).forEach((s) =>
+        logActivity(actor, 'staff_add', s.name)
+      );
+      deleted.forEach((s) => logActivity(actor, 'staff_delete', s.name));
+    }
+
     setAssignments((prev) =>
       prev.map((a) => {
         const validStaff   = a.assignedStaffIds.filter((id) => newIds.has(id));
@@ -253,7 +132,6 @@ export default function App() {
           : { ...a, assignedStaffIds: validStaff, shortage: a.shortage + removedCount };
       })
     );
-    // 削除されたスタッフのIDを ngPartnerIds からも除去
     setStaff(newStaff.map((s) => ({
       ...s,
       ngPartnerIds: s.ngPartnerIds?.filter((id) => newIds.has(id)),
@@ -261,12 +139,31 @@ export default function App() {
   }
 
   function handleWorkSiteChange(newSites: WorkSite[]) {
+    const prevGroupIds = new Set(
+      workSites.filter((s) => !s.isPlaceholder).map((s) => s.groupId ?? s.id)
+    );
+    const newGroupIds  = new Set(
+      newSites.filter((s) => !s.isPlaceholder).map((s) => s.groupId ?? s.id)
+    );
+    const addedCount   = [...newGroupIds].filter((id) => !prevGroupIds.has(id)).length;
+    const deletedCount = [...prevGroupIds].filter((id) => !newGroupIds.has(id)).length;
+
+    if (deletedCount > 0) {
+      saveSnapshot(`現場削除（${deletedCount}件）`, { staff, workSites, assignments, importLogs });
+    }
+
+    if (actor) {
+      if (addedCount   > 0) logActivity(actor, 'worksite_add',    `${addedCount}件`);
+      if (deletedCount > 0) logActivity(actor, 'worksite_delete', `${deletedCount}件`);
+    }
+
     const newIds = new Set(newSites.map((s) => s.id));
     setAssignments((prev) => prev.filter((a) => newIds.has(a.siteId)));
     setWorkSites(newSites);
   }
 
   function handleGenerateShifts(newMonthlyAssignments: ShiftAssignment[]) {
+    if (actor) logActivity(actor, 'shift_generate', `${selectedMonth} ${newMonthlyAssignments.length}件`);
     const monthSiteIds = new Set(monthlyWorkSites.map((s) => s.id));
     setAssignments((prev) => [
       ...prev.filter((a) => !monthSiteIds.has(a.siteId)),
@@ -275,12 +172,14 @@ export default function App() {
   }
 
   function handleClearMonthlyShifts() {
+    saveSnapshot(`シフトクリア（${selectedMonth}）`, { staff, workSites, assignments, importLogs });
+    if (actor) logActivity(actor, 'shift_clear', selectedMonth);
     const monthSiteIds = new Set(monthlyWorkSites.map((s) => s.id));
     setAssignments((prev) => prev.filter((a) => !monthSiteIds.has(a.siteId)));
   }
 
-  /** バッチ単位削除。source === 'manual' または isManuallyEdited === true は保護する。 */
   function handleDeleteImportBatch(importBatchId: string) {
+    saveSnapshot('インポートバッチ削除', { staff, workSites, assignments, importLogs });
     const batchIds = new Set(
       workSites
         .filter((s) => s.importBatchId === importBatchId && s.source !== 'manual' && !s.isManuallyEdited)
@@ -295,8 +194,8 @@ export default function App() {
     setImportLogs((prev) => prev.filter((l) => l.importBatchId !== importBatchId));
   }
 
-  /** 再インポート：旧バッチを削除し新データを追加する。手動データ・手動編集済みは保護。 */
   function handleReimportBatch(oldBatchId: string, newSites: WorkSite[], newLog: ImportLog) {
+    saveSnapshot('再インポート', { staff, workSites, assignments, importLogs });
     const oldBatchSiteIds = new Set(
       workSites
         .filter((s) => s.importBatchId === oldBatchId && s.source !== 'manual' && !s.isManuallyEdited)
@@ -310,7 +209,24 @@ export default function App() {
       return [...remaining, ...newSites];
     });
     setImportLogs((prev) => [...prev.filter((l) => l.importBatchId !== oldBatchId), newLog]);
+    if (actor) logActivity(actor, 'import', newLog.sourceFileName ? `再インポート: ${newLog.sourceFileName}` : '再インポート');
   }
+
+  function handleUndo() {
+    const restored = applyUndo();
+    if (!restored) return;
+    setStaff(restored.staff);
+    setWorkSites(restored.workSites);
+    setAssignments(restored.assignments);
+    setImportLogs(restored.importLogs);
+  }
+
+  // ── ヘッダー UI ───────────────────────────────────────────────
+
+  const syncLabel =
+    syncState === 'saving' ? '同期中…' :
+    syncState === 'saved'  ? '保存済み' :
+    syncState === 'error'  ? '同期失敗' : null;
 
   return (
     <div className="app">
@@ -319,6 +235,48 @@ export default function App() {
           <h1>シフト作成サポート</h1>
           <span className="app-header__badge">MVP</span>
         </div>
+
+        {user && (
+          <div className="app-header__meta">
+            {lastActivity && (
+              <span className="header-last-activity" title={formatLastActivity(lastActivity)}>
+                最終更新: {formatLastActivity(lastActivity)}
+              </span>
+            )}
+            {syncLabel && (
+              <span className={`header-sync-badge header-sync-badge--${syncState}`}>
+                {syncLabel}
+              </span>
+            )}
+            {onlineUsers.length > 0 && (
+              <div className="header-presence">
+                {onlineUsers.slice(0, 5).map((u) => (
+                  u.photoURL ? (
+                    <img
+                      key={u.uid}
+                      src={u.photoURL}
+                      alt={u.displayName}
+                      title={u.displayName}
+                      className="presence-avatar"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <span key={u.uid} className="presence-initial" title={u.displayName}>
+                      {u.displayName.slice(0, 1)}
+                    </span>
+                  )
+                ))}
+                <span className="presence-count">{onlineUsers.length}人オンライン</span>
+              </div>
+            )}
+            {snapshot && (
+              <button className="header-undo-btn" onClick={handleUndo} title={snapshot.label}>
+                ↩ Undo
+              </button>
+            )}
+          </div>
+        )}
+
         <AuthButton />
       </header>
 
@@ -351,6 +309,8 @@ export default function App() {
         )}
       </div>
 
+      {toast && <div className="undo-toast">{toast}</div>}
+
       <main className="main-content">
         {activeTab === 'dashboard' && (
           <Dashboard
@@ -360,6 +320,7 @@ export default function App() {
             selectedMonth={selectedMonth}
             onNavigate={(tab) => setActiveTab(tab as Tab)}
             hasSites={hasSites}
+            activityLogs={activityLogs}
           />
         )}
         {activeTab === 'staff' && (
@@ -368,6 +329,9 @@ export default function App() {
             workSites={workSites}
             onChange={handleStaffChange}
             selectedMonth={selectedMonth}
+            editingStates={editingStates}
+            currentUserId={user?.uid}
+            staffServerUpdatedAt={firestore.serverUpdatedAt.staff}
           />
         )}
         {activeTab === 'worksite' && (
@@ -376,6 +340,9 @@ export default function App() {
             onChange={handleWorkSiteChange}
             onAddImportLog={handleAddImportLog}
             selectedMonth={selectedMonth}
+            editingStates={editingStates}
+            currentUserId={user?.uid}
+            workSitesServerUpdatedAt={firestore.serverUpdatedAt.workSites}
           />
         )}
         {activeTab === 'shift' && (
@@ -406,8 +373,8 @@ export default function App() {
             csvSiteCount={workSites.filter((s) => isImportedSite(s)).length}
             onImportStaff={(imported) => setStaff((prev) => [...prev, ...imported])}
             onImportSites={(imported, overwrite) => {
+              saveSnapshot('CSVインポート', { staff, workSites, assignments, importLogs });
               if (overwrite) {
-                // 上書きモード: 手動データは保持しインポート済みのみ削除
                 const overwriteIds = new Set(
                   workSites.filter((s) => isImportedSite(s)).map((s) => s.id)
                 );

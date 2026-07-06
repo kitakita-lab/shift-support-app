@@ -57,6 +57,7 @@ export function hydrateWorkSite(raw: Partial<WorkSite>): WorkSite {
   if (raw.sourceFileName       != null) s.sourceFileName       = raw.sourceFileName;
   if (raw.importedAt           != null) s.importedAt           = raw.importedAt;
   if (raw.importBatchId        != null) s.importBatchId        = raw.importBatchId;
+  if (raw.sessionPriority      != null) s.sessionPriority      = raw.sessionPriority;
 
   // siteIdentityKey の後方互換補完:
   // 1. 既存のキーがあればそのまま使う
