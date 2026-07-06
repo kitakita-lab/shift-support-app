@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { WorkSite } from '../types';
-import { hydrateWorkSite } from './storage';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Staff, WorkSite } from '../types';
+import { storage, hydrateWorkSite } from './storage';
 
 // ─────────────────────────────────────────────────────────────
 // hydrateWorkSite は旧スキーマの localStorage / Firestore データを
@@ -129,5 +129,88 @@ describe('hydrateWorkSite', () => {
     expect(s).toMatchObject(legacy);
     expect(s).not.toHaveProperty('groupId');
     expect(s).not.toHaveProperty('sessionPriority');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// スタッフ永続化の後方互換テスト。
+// loadStaff は旧スキーマ（フィールド欠落）のレコードにデフォルトを補完する。
+// StaffManager の入力UI（maxWorkDays / availableWeekdays）が依存する
+// 「未入力・旧データでも安全に読める」保証を固定する。
+// ─────────────────────────────────────────────────────────────
+
+describe('storage.saveStaff / loadStaff', () => {
+  let store: Record<string, string>;
+
+  beforeEach(() => {
+    store = {};
+    vi.stubGlobal('localStorage', {
+      getItem:    (k: string) => store[k] ?? null,
+      setItem:    (k: string, v: string) => { store[k] = v; },
+      removeItem: (k: string) => { delete store[k]; },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const fullStaff: Staff = {
+    id: 's1',
+    staffNo: '3',
+    name: '山田',
+    availableWeekdays: ['月', '水'],
+    requestedDaysOff: ['2026-06-10'],
+    maxWorkDays: 12,
+    maxConsecutiveDays: 4,
+    memo: 'メモ',
+    preferredWorkSites: ['WB小樽'],
+    ngPartnerIds: ['s2'],
+  };
+
+  it('保存 → 読込で maxWorkDays / availableWeekdays が往復保持される', () => {
+    storage.saveStaff([fullStaff]);
+    const loaded = storage.loadStaff();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].maxWorkDays).toBe(12);
+    expect(loaded[0].availableWeekdays).toEqual(['月', '水']);
+    expect(loaded[0]).toEqual(fullStaff);
+  });
+
+  it('availableWeekdays 空配列（=全曜日可）は空配列のまま維持される', () => {
+    storage.saveStaff([{ ...fullStaff, availableWeekdays: [] }]);
+    expect(storage.loadStaff()[0].availableWeekdays).toEqual([]);
+  });
+
+  it('旧スキーマ（フィールド欠落）のレコードにデフォルトを補完する', () => {
+    // maxWorkDays / availableWeekdays 等が存在しなかった時代のデータ
+    store['shift_staff'] = JSON.stringify([{ id: 'old-1', name: '旧スタッフ' }]);
+    const loaded = storage.loadStaff();
+    expect(loaded[0]).toEqual({
+      id: 'old-1',
+      name: '旧スタッフ',
+      staffNo: '',
+      availableWeekdays: [],
+      requestedDaysOff: [],
+      maxWorkDays: 20,
+      maxConsecutiveDays: 5,
+      memo: '',
+      preferredWorkSites: [],
+      ngPartnerIds: [],
+    });
+  });
+
+  it('既存データの設定値はデフォルトで上書きされない（CSVインポート由来等）', () => {
+    store['shift_staff'] = JSON.stringify([
+      { id: 'csv-1', name: 'CSV由来', maxWorkDays: 8, availableWeekdays: ['土', '日'] },
+    ]);
+    const loaded = storage.loadStaff();
+    expect(loaded[0].maxWorkDays).toBe(8);
+    expect(loaded[0].availableWeekdays).toEqual(['土', '日']);
+  });
+
+  it('壊れた JSON は空配列を返す（クラッシュしない）', () => {
+    store['shift_staff'] = '{broken';
+    expect(storage.loadStaff()).toEqual([]);
   });
 });

@@ -62,6 +62,9 @@ function formatDaysOff(days: string[], yearMonth: string): string {
 
 const DOW_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
 
+// 勤務可能曜日の選択肢（表示・保存順）。未選択（空配列）= 全曜日勤務可（generateShifts の既存仕様）
+const WEEKDAY_CHOICES = ['月', '火', '水', '木', '金', '土', '日'];
+
 interface CalendarProps {
   yearMonth: string;
   onMonthChange: (yearMonth: string) => void;
@@ -182,6 +185,9 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
   const [consecutiveDaysInput, setConsecutiveDaysInput] = useState<string>(
     String(form.maxConsecutiveDays ?? 5)
   );
+  const [maxWorkDaysInput, setMaxWorkDaysInput] = useState<string>(
+    String(form.maxWorkDays ?? 20)
+  );
 
   // siteName → clientNames[] のルックアップ（検索フィルタ用）
   const siteClientMap = useMemo(() => {
@@ -225,6 +231,15 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
           ? sites.filter((n) => n !== name)
           : [...sites, name],
       };
+    });
+  }
+
+  function toggleWeekday(dow: string) {
+    setForm((prev) => {
+      const cur = prev.availableWeekdays ?? [];
+      const next = cur.includes(dow) ? cur.filter((d) => d !== dow) : [...cur, dow];
+      // 保存順を月〜日で安定させる（判定は includes のため順序に意味はないが表示が揃う）
+      return { ...prev, availableWeekdays: WEEKDAY_CHOICES.filter((d) => next.includes(d)) };
     });
   }
 
@@ -286,6 +301,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     onChange(sortStaff(updatedStaff));
     setForm(emptyForm(staff));
     setConsecutiveDaysInput('5');
+    setMaxWorkDaysInput('20');
     setAddSiteOpen(false);
     setSiteSearch('');
     setNgPanelOpen(false);
@@ -317,6 +333,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
       ngPartnerIds: s.ngPartnerIds ?? [],
     });
     setConsecutiveDaysInput(String(s.maxConsecutiveDays ?? 5));
+    setMaxWorkDaysInput(String(s.maxWorkDays ?? 20));
     setNgPanelOpen(false);
     setFormOpen(true);
   }
@@ -331,6 +348,7 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
     setEditId(null);
     setForm(emptyForm(staff));
     setConsecutiveDaysInput('5');
+    setMaxWorkDaysInput('20');
     setAddSiteOpen(false);
     setSiteSearch('');
     setNgPanelOpen(false);
@@ -415,6 +433,25 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
           </div>
 
           <div className="form-row">
+            <label className="form-label">最大勤務日数</label>
+            <input
+              className="form-input form-input--short"
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={maxWorkDaysInput}
+              onChange={(e) => setMaxWorkDaysInput(e.target.value)}
+              onBlur={() => {
+                const v = parseInt(maxWorkDaysInput, 10);
+                const normalized = maxWorkDaysInput.trim() === '' || isNaN(v) ? 20 : Math.max(1, v);
+                setForm({ ...form, maxWorkDays: normalized });
+                setMaxWorkDaysInput(String(normalized));
+              }}
+            />
+            <span className="form-unit">日／月</span>
+          </div>
+
+          <div className="form-row">
             <label className="form-label">最大連勤日数</label>
             <input
               className="form-input form-input--short"
@@ -431,6 +468,28 @@ export default function StaffManager({ staff, workSites, onChange, selectedMonth
               }}
             />
             <span className="form-unit">日</span>
+          </div>
+
+          <div className="form-row form-row--top">
+            <label className="form-label">勤務可能曜日</label>
+            <div>
+              <div className="site-chips">
+                {WEEKDAY_CHOICES.map((dow) => {
+                  const selected = (form.availableWeekdays ?? []).includes(dow);
+                  return (
+                    <button
+                      key={dow}
+                      type="button"
+                      className={selected ? 'site-chip site-chip--selected' : 'site-chip'}
+                      onClick={() => toggleWeekday(dow)}
+                    >
+                      {dow}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="section-desc">未選択のままなら全曜日勤務可能として扱われます</p>
+            </div>
           </div>
 
           <div className="form-row form-row--top">
