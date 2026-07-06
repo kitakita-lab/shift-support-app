@@ -12,7 +12,7 @@ import {
   autoDetectMapping,
   applyMapping,
 } from '../utils/rawImport';
-import { normalizeImportedWorkSites, buildSiteIdentityKey, cleanSiteName } from '../utils/shiftNormalize';
+import { normalizeImportedWorkSites, computeSiteIdentityKey, cleanSiteName } from '../utils/shiftNormalize';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -122,24 +122,6 @@ function findCandidates(
   return results.sort((a, b) => b.score - a.score).slice(0, 3);
 }
 
-/**
- * インポート候補行から siteIdentityKey を事前計算する。
- * applySiteNormalize と同じロジックを適用して、既存データとの照合に使う。
- */
-function computeIncomingIdentityKey(
-  rawSiteName:    string,
-  subSiteNameRaw: string,
-  clientName:     string,
-): string {
-  const cleaned         = cleanSiteName(rawSiteName);
-  const m               = cleaned.match(/[（(]([^）)]+)[）)]$/);
-  const extractedClient = m ? m[1].trim() : undefined;
-  const resolvedClient  = clientName.trim() || extractedClient || undefined;
-  const siteNameFinal   = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
-  const subSite         = subSiteNameRaw.trim() || undefined;
-  return buildSiteIdentityKey(siteNameFinal, subSite, resolvedClient);
-}
-
 function getExistingGroups(workSites: WorkSite[]): ExistingGroup[] {
   const seen = new Map<string, ExistingGroup>();
   for (const site of workSites) {
@@ -176,7 +158,7 @@ function buildVenueDecisions(
       continue;
     }
 
-    const incomingKey    = computeIncomingIdentityKey(row.rawSiteName, row.subSiteNameRaw, row.clientName);
+    const incomingKey    = computeSiteIdentityKey(row.rawSiteName, row.subSiteNameRaw, row.clientName);
     const exactDuplicate = identityMap.get(incomingKey) ?? null;
     const candidates     = findCandidates(row.rawSiteName, row.subSiteNameRaw, row.clientName, groups);
 
