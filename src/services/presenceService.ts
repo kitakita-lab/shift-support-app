@@ -34,11 +34,32 @@ export function startPresenceHeartbeat(
     }).catch(() => {});
   };
 
-  write();
-  const id = window.setInterval(write, HEARTBEAT_MS);
+  // タブ非表示中は heartbeat を止めて Firestore 書き込みを削減する。
+  // 再表示時は即時 write するためオンライン復帰は瞬時。
+  // 非表示のまま ONLINE_THR_MS を超えると他ユーザーからは offline 表示になる（意図どおり）。
+  let intervalId: number | null = null;
+
+  const start = () => {
+    if (intervalId !== null) return;
+    write();
+    intervalId = window.setInterval(write, HEARTBEAT_MS);
+  };
+  const stop = () => {
+    if (intervalId === null) return;
+    window.clearInterval(intervalId);
+    intervalId = null;
+  };
+  const onVisibilityChange = () => {
+    if (document.hidden) stop();
+    else start();
+  };
+
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  if (!document.hidden) start();
 
   return () => {
-    window.clearInterval(id);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    stop();
     deleteDoc(presenceDoc(user.uid)).catch(() => {});
   };
 }

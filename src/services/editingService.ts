@@ -44,11 +44,33 @@ export function startEditing(
     }).catch(() => {});
   };
 
-  write();
-  const id = window.setInterval(write, HEARTBEAT_MS);
+  // タブ非表示中は heartbeat を止めて Firestore 書き込みを削減する。
+  // 非表示のまま EDITING_TIMEOUT_MS を超えると編集中表示は自然消滅するが、
+  // 実際の上書き事故は保存時の競合警告（serverUpdatedAt 比較）が引き続き防ぐ。
+  // 再表示時は即時 write して編集中表示を回復する。
+  let intervalId: number | null = null;
+
+  const start = () => {
+    if (intervalId !== null) return;
+    write();
+    intervalId = window.setInterval(write, HEARTBEAT_MS);
+  };
+  const stop = () => {
+    if (intervalId === null) return;
+    window.clearInterval(intervalId);
+    intervalId = null;
+  };
+  const onVisibilityChange = () => {
+    if (document.hidden) stop();
+    else start();
+  };
+
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  if (!document.hidden) start();
 
   return () => {
-    window.clearInterval(id);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    stop();
     deleteDoc(editingDoc(type, targetId)).catch(() => {});
   };
 }

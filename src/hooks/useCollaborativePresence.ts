@@ -1,44 +1,41 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { startPresenceHeartbeat, subscribePresence, PresenceUser } from '../services/presenceService';
-import { subscribeLastActivity, DocMeta } from '../services/firestoreService';
 
 export interface CollaborativePresenceResult {
-  onlineUsers:  PresenceUser[];
-  lastActivity: DocMeta | null;
+  onlineUsers: PresenceUser[];
 }
 
 /**
- * Presence heartbeat + オンラインユーザー一覧 + 最終更新情報を管理する hook。
+ * Presence heartbeat + オンラインユーザー一覧を管理する hook。
  * ログアウト時に全状態をリセットする。
+ *
+ * 「最終更新」情報（lastActivity）は useFirestoreSync が onMeta 経由で提供する
+ * （以前はここで subscribeLastActivity を購読していたが、リスナー重複のため統合した）。
  */
 export function useCollaborativePresence(): CollaborativePresenceResult {
   const { user } = useAuth();
 
-  const [onlineUsers,  setOnlineUsers]  = useState<PresenceUser[]>([]);
-  const [lastActivity, setLastActivity] = useState<DocMeta | null>(null);
+  const [onlineUsers, setOnlineUsers] = useState<PresenceUser[]>([]);
 
   useEffect(() => {
     if (!user) {
       setOnlineUsers([]);
-      setLastActivity(null);
       return;
     }
 
-    const stopHeartbeat     = startPresenceHeartbeat({
+    const stopHeartbeat = startPresenceHeartbeat({
       uid:         user.uid,
       displayName: user.displayName,
       photoURL:    user.photoURL,
     });
-    const unsubPresence     = subscribePresence(setOnlineUsers);
-    const unsubLastActivity = subscribeLastActivity(setLastActivity);
+    const unsubPresence = subscribePresence(setOnlineUsers);
 
     return () => {
       stopHeartbeat();
       unsubPresence();
-      unsubLastActivity();
     };
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { onlineUsers, lastActivity };
+  return { onlineUsers };
 }

@@ -1,6 +1,12 @@
-import { collection, addDoc, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, orderBy, limit, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { TEAM_ID } from './firestoreService';
+
+// Firestore TTL ポリシーによる自動削除までの保持日数。
+// TTL は Timestamp 型フィールドにしか設定できないため、表示・並び替えに使う
+// timestamp(number) とは別に expireAt(Timestamp) を削除専用で持つ。
+// Console 側の設定手順は docs/firestore-ttl.md を参照。
+const LOG_RETENTION_DAYS = 90;
 
 export type ActivityAction =
   | 'shift_generate'
@@ -28,6 +34,8 @@ export interface ActivityLog {
   actorName: string;
   timestamp: number;
   details?: string;
+  /** TTL 自動削除用（削除専用。表示・並び替えには timestamp を使う） */
+  expireAt?: Timestamp;
 }
 
 function activityCol() {
@@ -46,6 +54,7 @@ export function logActivity(
     actorName: actor.name,
     details:   details ?? '',
     timestamp: Date.now(),
+    expireAt:  Timestamp.fromMillis(Date.now() + LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000),
   }).catch(() => {});
 }
 

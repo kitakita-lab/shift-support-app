@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Dispatch, SetStateAction } from 'react';
 import { Staff, WorkSite, ShiftAssignment, ImportLog } from '../types';
 import { storage, hydrateWorkSite } from '../utils/storage';
 import { useAuth } from '../contexts/AuthContext';
-import { firestoreService, setCurrentUser } from '../services/firestoreService';
+import { firestoreService, setCurrentUser, DocMeta } from '../services/firestoreService';
 
 export type SyncState = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -28,6 +28,8 @@ export interface FirestoreSyncResult {
   setImportLogs:   Dispatch<SetStateAction<ImportLog[]>>;
   syncState:       SyncState;
   serverUpdatedAt: ServerUpdatedAt;
+  /** staff/workSites/assignments のうち最も新しい更新メタ（ヘッダーの「最終更新」表示用） */
+  lastActivity:    DocMeta | null;
 }
 
 /**
@@ -49,8 +51,20 @@ export function useFirestoreSync(): FirestoreSyncResult {
     staff: 0, workSites: 0, assignments: 0, importLogs: 0,
   });
 
+  // ヘッダーの「最終更新」表示用。staff/workSites/assignments の onMeta から最新を選ぶ。
+  // importLogs は対象外（従来の subscribeLastActivity と同じ対象範囲を維持）。
+  const [lastActivity, setLastActivity] = useState<DocMeta | null>(null);
+  const latestActivityAtRef = useRef(0);
+
   const fromFirestore = useRef({ staff: false, workSites: false, assignments: false, importLogs: false });
   const syncTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function updateLastActivity(meta: DocMeta): void {
+    if (meta.updatedAt > latestActivityAtRef.current) {
+      latestActivityAtRef.current = meta.updatedAt;
+      setLastActivity(meta);
+    }
+  }
 
   useEffect(() => {
     setCurrentUser(
@@ -74,6 +88,8 @@ export function useFirestoreSync(): FirestoreSyncResult {
   useEffect(() => {
     if (!user) {
       setFirestoreReady(READY_FALSE);
+      setLastActivity(null);
+      latestActivityAtRef.current = 0;
       return;
     }
 
@@ -93,7 +109,10 @@ export function useFirestoreSync(): FirestoreSyncResult {
         })));
       },
       () => setFirestoreReady((prev) => ({ ...prev, staff: true })),
-      (updatedAt) => setServerUpdatedAt((prev) => ({ ...prev, staff: updatedAt })),
+      (meta) => {
+        setServerUpdatedAt((prev) => ({ ...prev, staff: meta.updatedAt }));
+        updateLastActivity(meta);
+      },
     );
 
     const unsubWorkSites = firestoreService.subscribeWorkSites(
@@ -102,7 +121,10 @@ export function useFirestoreSync(): FirestoreSyncResult {
         setWorkSites(items.map((s) => hydrateWorkSite(s as Partial<WorkSite>)));
       },
       () => setFirestoreReady((prev) => ({ ...prev, workSites: true })),
-      (updatedAt) => setServerUpdatedAt((prev) => ({ ...prev, workSites: updatedAt })),
+      (meta) => {
+        setServerUpdatedAt((prev) => ({ ...prev, workSites: meta.updatedAt }));
+        updateLastActivity(meta);
+      },
     );
 
     const unsubAssignments = firestoreService.subscribeAssignments(
@@ -111,7 +133,10 @@ export function useFirestoreSync(): FirestoreSyncResult {
         setAssignments(items.map((a) => ({ ...a, assignedStaffIds: a.assignedStaffIds ?? [] })));
       },
       () => setFirestoreReady((prev) => ({ ...prev, assignments: true })),
-      (updatedAt) => setServerUpdatedAt((prev) => ({ ...prev, assignments: updatedAt })),
+      (meta) => {
+        setServerUpdatedAt((prev) => ({ ...prev, assignments: meta.updatedAt }));
+        updateLastActivity(meta);
+      },
     );
 
     const unsubImportLogs = firestoreService.subscribeImportLogs(
@@ -120,7 +145,8 @@ export function useFirestoreSync(): FirestoreSyncResult {
         setImportLogs(items);
       },
       () => setFirestoreReady((prev) => ({ ...prev, importLogs: true })),
-      (updatedAt) => setServerUpdatedAt((prev) => ({ ...prev, importLogs: updatedAt })),
+      // importLogs は「最終更新」表示の対象外（updateLastActivity を呼ばない）
+      (meta) => setServerUpdatedAt((prev) => ({ ...prev, importLogs: meta.updatedAt })),
     );
 
     return () => {
@@ -167,5 +193,6 @@ export function useFirestoreSync(): FirestoreSyncResult {
     importLogs, setImportLogs,
     syncState,
     serverUpdatedAt,
+    lastActivity,
   };
 }
