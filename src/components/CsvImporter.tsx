@@ -829,9 +829,11 @@ export default function CsvImporter({
     setReimportError('');
     try {
       let rawSites: WorkSite[];
+      let parseErrors: ParseError[];
       if (file.name.toLowerCase().endsWith('.xlsx')) {
         const result = await parseExcelSiteFile(file);
-        rawSites = result.valid;
+        rawSites    = result.valid;
+        parseErrors = result.errors;
       } else {
         const text = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -839,8 +841,31 @@ export default function CsvImporter({
           reader.onerror = () => reject(new Error('読み込みに失敗しました'));
           reader.readAsText(file, 'UTF-8');
         });
-        rawSites = parseSiteCSV(text).valid;
+        const parsed = parseSiteCSV(text);
+        rawSites    = parsed.valid;
+        parseErrors = parsed.errors;
       }
+
+      // 通常インポートは ErrorList でパースエラーを表示するが、再インポートは
+      // これまで errors を破棄していたため「0件読込 → 全削除の差分」が無言で出ていた。
+      // 有効行ゼロ + エラーありの場合は差分を出さずに中止し、原因を表示する。
+      if (rawSites.length === 0 && parseErrors.length > 0) {
+        setReimportSites(null);
+        setReimportDiff(null);
+        setReimportError(
+          `「${file.name}」から読み込めた行が0件のため中止しました。` +
+          `エラー ${parseErrors.length}件（例: ${parseErrors[0].row}行目 ${parseErrors[0].message}）`,
+        );
+        return;
+      }
+      // 一部の行だけエラーの場合は通常インポートと同様スキップして続行し、件数を通知する
+      if (parseErrors.length > 0) {
+        setReimportError(
+          `${parseErrors.length}行はエラーのためスキップされます` +
+          `（例: ${parseErrors[0].row}行目 ${parseErrors[0].message}）`,
+        );
+      }
+
       const oldSites = workSites.filter((s) => s.importBatchId === reimportBatch.importBatchId);
       const diff = diffImportBatch(oldSites, rawSites);
       setReimportSites(rawSites);

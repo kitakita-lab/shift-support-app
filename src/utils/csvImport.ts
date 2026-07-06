@@ -168,18 +168,42 @@ export function parseSiteCSV(rawText: string): SiteParseResult {
   const errors: ParseError[] = [];
 
   // ── ヘッダー行からカラムインデックスを検出 ──────────────────
-  // 将来の Bubble 出力列（demandId, clientName, siteId 等）が来ても壊れない
+  // 列の解決ルール:
+  // - ヘッダーあり: 名前でのみ解決する。必須列が名前で見つからなければファイル全体をエラーにする。
+  //   任意列（clientName/memo）が無い場合は空扱い。
+  //   ※ 以前は「名前が無ければ位置フォールバック」だったが、列欠落時に隣の列を
+  //     clientName 等として誤読し、無検証のまま同一性キーへ混入する事故経路だったため廃止。
+  // - ヘッダーなし: テンプレート列順（date,siteName,clientName,startTime,endTime,requiredPeople,memo）
+  //   の位置ベースで解決する（列名が存在しない以上、位置が唯一の解釈手段。既存互換）。
   const firstLine  = lines[0] ?? '';
   const headerLow  = parseCSVLine(firstLine).map((f) => f.trim().toLowerCase());
   const hasHeader  = headerLow.includes('date') || headerLow.includes('sitename');
 
-  const colIdx = (name: string, fallback: number): number => {
-    const i = headerLow.indexOf(name);
-    return i >= 0 ? i : fallback;
-  };
+  if (hasHeader) {
+    const required = [
+      ['date',           'date'],
+      ['sitename',       'siteName'],
+      ['starttime',      'startTime'],
+      ['endtime',        'endTime'],
+      ['requiredpeople', 'requiredPeople'],
+    ] as const;
+    const missing = required.filter(([low]) => !headerLow.includes(low)).map(([, label]) => label);
+    if (missing.length > 0) {
+      return {
+        valid: [],
+        errors: [{
+          row: 1,
+          message: `必須列がヘッダーにありません: ${missing.join(', ')}。列名を確認してください（テンプレートCSV参照）`,
+        }],
+      };
+    }
+  }
 
-  // フォールバック順は新テンプレート列順：date,siteName,clientName,startTime,endTime,requiredPeople,memo
-  // ヘッダーがある場合は名前で解決するため、旧テンプレート（date,clientName,siteName,...）も互換
+  // ヘッダーあり: 名前解決のみ（任意列が無ければ -1 → 空扱い）
+  // ヘッダーなし: テンプレート列順の位置解決
+  const colIdx = (name: string, fallback: number): number =>
+    hasHeader ? headerLow.indexOf(name) : fallback;
+
   const dateIdx        = colIdx('date',           0);
   const siteNameIdx    = colIdx('sitename',       1);
   const clientNameIdx  = colIdx('clientname',     2);
