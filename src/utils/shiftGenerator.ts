@@ -148,13 +148,29 @@ function compareByScore(
   return compareStaffNo(a, b);
 }
 
+// ── 会期優先度 ────────────────────────────────────────────────
+// sessionPriority はスタッフの評価ではなく「現場（会期）の充足優先度」。
+// スコア加点方式では同日の競合しか解決できないため、処理順で表現する:
+// 優先度の高い会期を先に処理することで、月間勤務上限・連勤枠という
+// 有限リソースを優先会期が先取りする。未設定は 'normal' 扱い。
+const PRIORITY_RANK: Record<'S' | 'A' | 'normal', number> = { S: 0, A: 1, normal: 2 };
+
+function priorityRank(site: WorkSite): number {
+  return PRIORITY_RANK[site.sessionPriority ?? 'normal'];
+}
+
 // ── メイン関数 ────────────────────────────────────────────────
 export function generateShifts(
   staff: Staff[],
   workSites: WorkSite[]
 ): ShiftAssignment[] {
+  // 処理順: 優先度（S → A → 通常）→ 日付昇順。同キーは安定ソートで入力順維持。
+  // 全現場が優先度未設定の場合は従来（日付昇順のみ）と完全に同一の順序になる。
+  // 出力配列もこの処理順で並ぶ（利用側は siteId で引くため順序に依存しない）。
+  // メモ: 同日複数現場への同一スタッフ配置は現仕様では許可されている
+  // （午前・午後現場など正当なケースがあるため。禁止する場合は要仕様設計）。
   const sortedSites = [...workSites.filter((s) => !s.isPlaceholder)].sort(
-    (a, b) => a.date.localeCompare(b.date)
+    (a, b) => priorityRank(a) - priorityRank(b) || a.date.localeCompare(b.date)
   );
 
   // 各スタッフの割当済み日付（連勤判定・月間上限判定に使用）

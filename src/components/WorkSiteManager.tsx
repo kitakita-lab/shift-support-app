@@ -217,6 +217,8 @@ interface SessionForm {
   endTime: string;
   requiredPeople: number | '';  // 入力中は空文字を許可。保存時のみ 1 以上に補正する
   memo: string;
+  /** 会期の優先度。未設定は「通常」扱い（S > A > 通常 の順でシフト生成が処理する） */
+  sessionPriority?: 'S' | 'A' | 'normal';
 }
 
 interface SessionEditorState {
@@ -270,6 +272,7 @@ function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
         endTime:        g[0].endTime,
         requiredPeople: g[0].requiredPeople,
         memo:           g[0].memo,
+        sessionPriority: g[0].sessionPriority,
       });
     }
     return result.sort((a, b) => a.startDate.localeCompare(b.startDate));
@@ -289,6 +292,7 @@ function deriveSessionsFromSites(sites: WorkSite[]): SessionForm[] {
       endTime:        g[0].endTime,
       requiredPeople: g[0].requiredPeople,
       memo:           g[0].memo,
+      sessionPriority: g[0].sessionPriority,
     });
   };
   for (let i = 1; i < sorted.length; i++) {
@@ -347,6 +351,8 @@ function buildSessionSites(
         requiredPeople: normalizeRequiredPeople(session.requiredPeople),
         memo:           session.memo,
         source:         'manual',
+        // 未設定（通常）はフィールド自体を付与しない（hydrateWorkSite の方針と統一）
+        ...(session.sessionPriority ? { sessionPriority: session.sessionPriority } : {}),
         ...editMeta,
       });
     }
@@ -1066,6 +1072,21 @@ export default function WorkSiteManager({ workSites, onChange, onAddImportLog, s
                       onUpdate(session.id, { requiredPeople: isNaN(num) ? '' : num });
                     }
                   }} />
+              </label>
+              <label className="edit-panel__field">
+                優先度
+                <select className="form-input form-input--short"
+                  value={session.sessionPriority ?? 'normal'}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    onUpdate(session.id, {
+                      sessionPriority: v === 'normal' ? undefined : (v as 'S' | 'A'),
+                    });
+                  }}>
+                  <option value="normal">通常</option>
+                  <option value="A">A（優先）</option>
+                  <option value="S">S（最優先）</option>
+                </select>
               </label>
               <label className="edit-panel__field edit-panel__field--memo">
                 メモ
