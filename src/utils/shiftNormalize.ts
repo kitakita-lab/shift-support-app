@@ -230,19 +230,16 @@ export function normalizeImportedWorkSites(sites: WorkSite[]): WorkSite[] {
  */
 export function applySiteNormalize(site: WorkSite): WorkSite {
   const rawSiteName = site.rawSiteName ?? site.siteName;
-  const cleaned = cleanSiteName(site.siteName);
-  const m = cleaned.match(/[（(]([^）)]+)[）)]$/);
-  const extractedClient = m ? m[1].trim() : undefined;
-  // clientName 優先順位: ファイル列/fallback (site.clientName) > 括弧抽出 > ''
-  const clientName = site.clientName?.trim() || extractedClient || '';
-  const siteNameFinal = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
-  const subSiteName = site.subSiteName?.trim() || undefined;
-  const displaySiteName = buildDisplaySiteName(siteNameFinal, subSiteName, clientName);
-  const normalizedSiteKey = buildNormalizedSiteKey(siteNameFinal, subSiteName, clientName);
-  const siteIdentityKey   = buildSiteIdentityKey(siteNameFinal, subSiteName, clientName);
+  const { siteName, subSiteName, clientName: resolvedClient } =
+    resolveSiteIdentityParts(site.siteName, site.subSiteName, site.clientName);
+  // WorkSite.clientName は「なし」を '' で保持する（キー生成上は undefined と等価）
+  const clientName = resolvedClient ?? '';
+  const displaySiteName = buildDisplaySiteName(siteName, subSiteName, clientName);
+  const normalizedSiteKey = buildNormalizedSiteKey(siteName, subSiteName, clientName);
+  const siteIdentityKey   = buildSiteIdentityKey(siteName, subSiteName, clientName);
   return {
     ...site,
-    siteName: siteNameFinal,
+    siteName,
     rawSiteName,
     subSiteName,
     displaySiteName,
@@ -250,6 +247,45 @@ export function applySiteNormalize(site: WorkSite): WorkSite {
     normalizedSiteKey,
     siteIdentityKey,
   };
+}
+
+/**
+ * siteName 原文から 親会場名・サブ会場名・クライアント名 を確定する共通ロジック。
+ * applySiteNormalize / normalizeBusinessShiftRow / インポートウィザードの
+ * 事前キー計算が共有する唯一の実装。個別に再実装しないこと。
+ *
+ * clientName の確定優先順位:
+ *   1. clientNameRaw（ファイル列 or ウィザード fallback 値）
+ *   2. siteName 末尾括弧からの自動抽出（例: "渋谷（ABC社）" → "ABC社"）
+ *   3. undefined
+ */
+export function resolveSiteIdentityParts(
+  siteNameRaw:    string,
+  subSiteNameRaw?: string,
+  clientNameRaw?:  string,
+): { siteName: string; subSiteName?: string; clientName?: string } {
+  const cleaned = cleanSiteName(siteNameRaw);
+  const m = cleaned.match(/[（(]([^）)]+)[）)]$/);
+  const extractedClient = m ? m[1].trim() : undefined;
+  const clientName = clientNameRaw?.trim() || extractedClient || undefined;
+  const siteName = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
+  const subSiteName = subSiteNameRaw?.trim() || undefined;
+  return { siteName, subSiteName, clientName };
+}
+
+/**
+ * siteName 原文（汚染・括弧クライアント込み）から siteIdentityKey を直接計算する。
+ * applySiteNormalize を通した WorkSite の siteIdentityKey と必ず一致する。
+ * インポート前の既存データ照合（重複判定）に使う。
+ */
+export function computeSiteIdentityKey(
+  siteNameRaw:    string,
+  subSiteNameRaw?: string,
+  clientNameRaw?:  string,
+): string {
+  const { siteName, subSiteName, clientName } =
+    resolveSiteIdentityParts(siteNameRaw, subSiteNameRaw, clientNameRaw);
+  return buildSiteIdentityKey(siteName, subSiteName, clientName);
 }
 
 /**
@@ -261,11 +297,7 @@ export function applySiteNormalize(site: WorkSite): WorkSite {
  */
 export function normalizeBusinessShiftRow(row: NormalizedShiftRow): NormalizedShiftRow {
   const delta = extractRequiredPeopleDelta(row.siteName);
-  const cleaned = cleanSiteName(row.siteName);
-  const m = cleaned.match(/[（(]([^）)]+)[）)]$/);
-  const extractedClient = m ? m[1].trim() : undefined;
-  const clientName = row.clientName?.trim() || extractedClient || undefined;
-  const siteName = m ? cleaned.replace(/[（(][^）)]+[）)]$/, '').trim() : cleaned;
+  const { siteName, clientName } = resolveSiteIdentityParts(row.siteName, undefined, row.clientName);
 
   return {
     ...row,

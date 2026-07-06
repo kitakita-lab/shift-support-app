@@ -3,7 +3,10 @@ import {
   cleanSiteName,
   buildNormalizedSiteKey,
   buildSiteIdentityKey,
+  computeSiteIdentityKey,
+  applySiteNormalize,
 } from './shiftNormalize';
+import { WorkSite } from '../types';
 
 // ─────────────────────────────────────────────────────────────
 // これらは characterization テスト（現在の出力を「正」として固定する）。
@@ -142,6 +145,65 @@ describe('buildSiteIdentityKey', () => {
       expect(buildSiteIdentityKey(site, sub, client)).toBe(
         buildNormalizedSiteKey(site, sub, client),
       );
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// computeSiteIdentityKey は「原文 siteName（汚染・括弧クライアント込み）から
+// 直接キーを求める」共通関数。applySiteNormalize を通した WorkSite の
+// siteIdentityKey と常に一致することが、インポート時の重複判定の前提条件。
+// ─────────────────────────────────────────────────────────────
+
+function makeSite(partial: Partial<WorkSite> & { siteName: string }): WorkSite {
+  return {
+    id: 'test-id',
+    date: '2026-06-01',
+    startTime: '09:00',
+    endTime: '18:00',
+    requiredPeople: 1,
+    memo: '',
+    ...partial,
+  };
+}
+
+describe('computeSiteIdentityKey', () => {
+  it('末尾括弧からクライアント名を抽出してキーに含める', () => {
+    expect(computeSiteIdentityKey('渋谷（ABC社）')).toBe(
+      buildSiteIdentityKey('渋谷', undefined, 'ABC社'),
+    );
+  });
+
+  it('明示 clientName は括弧抽出より優先される', () => {
+    expect(computeSiteIdentityKey('渋谷（ABC社）', undefined, 'XYZ社')).toBe(
+      buildSiteIdentityKey('渋谷', undefined, 'XYZ社'),
+    );
+  });
+
+  it('clientName 空文字は「なし」と同一視する（旧ウィザード実装との互換）', () => {
+    expect(computeSiteIdentityKey('渋谷', '', '')).toBe(buildSiteIdentityKey('渋谷'));
+  });
+
+  it('汚染文字列（+N名・※）を除去した上でキーを計算する', () => {
+    expect(computeSiteIdentityKey('WB小樽+2名 ※サテライト')).toBe(
+      buildSiteIdentityKey('WB小樽'),
+    );
+  });
+
+  it('applySiteNormalize が付与する siteIdentityKey と常に一致する【一本化の核心保証】', () => {
+    const fixtures: Partial<WorkSite>[] = [
+      { siteName: 'Bivi新札幌' },
+      { siteName: '渋谷（ABC社）' },
+      { siteName: 'ＷＢ小樽+2名', subSiteName: '2階ドラッグ側' },
+      { siteName: 'イオン厚別 ※臨時', clientName: 'ティーガイア' },
+      { siteName: '  アリオ  ハーベストコート  ', subSiteName: '', clientName: '' },
+    ];
+    for (const f of fixtures) {
+      const site = makeSite(f as Partial<WorkSite> & { siteName: string });
+      const normalized = applySiteNormalize(site);
+      expect(
+        computeSiteIdentityKey(site.siteName, site.subSiteName, site.clientName),
+      ).toBe(normalized.siteIdentityKey);
     }
   });
 });
