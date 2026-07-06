@@ -1,0 +1,31 @@
+rules_version = '2';
+
+// シフト作成サポートアプリ Firestore セキュリティルール
+//
+// 方針:
+// - Google ログイン済みユーザーのみ、固定チーム intention-dev 配下を読み書き可能
+// - それ以外のパスは全て拒否（Firestore はデフォルト拒否だが明示する）
+//
+// アプリが使用するパス（src/services/ 参照）:
+//   teams/intention-dev/appData/{key}                  … staff / workSites / assignments / importLogs
+//   teams/intention-dev/presence/{uid}                 … オンライン状態（10s heartbeat）
+//   teams/intention-dev/editingStates/{type_targetId}  … 編集中表示
+//   teams/intention-dev/activityLogs/{docId}           … 操作ログ
+//
+// 将来メンバー制にする場合:
+//   teams/{teamId}/members/{uid} ドキュメントを作成し、条件を
+//   exists(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid))
+//   に変更する。
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /teams/intention-dev/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+
+    // 上記以外は全拒否（明示）
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
