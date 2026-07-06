@@ -445,6 +445,13 @@ export default function CsvImporter({
   const [siteSuccess,    setSiteSuccess]    = useState('');
   const [daysOffSuccess, setDaysOffSuccess] = useState('');
 
+  // ファイルレベルの読込エラー（パース行エラーとは別物。破損ファイル・読取失敗など）
+  const [staffFileError,   setStaffFileError]   = useState('');
+  const [siteFileError,    setSiteFileError]    = useState('');
+  const [daysOffFileError, setDaysOffFileError] = useState('');
+  const [excelError,       setExcelError]       = useState('');
+  const [reimportError,    setReimportError]    = useState('');
+
   const [pasteSiteText,    setPasteSiteText]    = useState('');
   const [pasteSitePreview, setPasteSitePreview] = useState<SiteParseResult | null>(null);
   const [pasteSiteSuccess, setPasteSiteSuccess] = useState('');
@@ -491,39 +498,54 @@ export default function CsvImporter({
 
   // ── File readers ────────────────────────────────────────────
 
-  function readFile(file: File, onLoad: (text: string, name: string) => void) {
+  function fileReadErrorMsg(fileName: string): string {
+    return `「${fileName}」を読み込めませんでした。ファイルが破損しているか、対応していない形式の可能性があります。`;
+  }
+
+  function readFile(
+    file: File,
+    onLoad: (text: string, name: string) => void,
+    onError: (message: string) => void,
+  ) {
     const reader = new FileReader();
-    reader.onload = (e) => onLoad((e.target?.result ?? '') as string, file.name);
+    reader.onload  = (e) => onLoad((e.target?.result ?? '') as string, file.name);
+    reader.onerror = () => {
+      console.warn('[Import] ファイル読取失敗:', file.name, reader.error);
+      onError(fileReadErrorMsg(file.name));
+    };
     reader.readAsText(file, 'UTF-8');
   }
 
   function handleStaffFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    setStaffFileError('');
     readFile(file, (text, fileName) => {
       setStaffPreview({ ...parseStaffCSV(text), fileName });
       setStaffSuccess('');
-    });
+    }, setStaffFileError);
   }
 
   function handleSiteFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    setSiteFileError('');
     readFile(file, (text, fileName) => {
       setSitePreview({ ...parseSiteCSV(text), fileName });
       setSiteSuccess('');
-    });
+    }, setSiteFileError);
   }
 
   function handleDaysOffFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    setDaysOffFileError('');
     readFile(file, (text, fileName) => {
       const parsed = parseDaysOffCSV(text, daysOffTargetMonth);
       const { matched, matchErrors } = matchDaysOffRows(parsed.rows, staff);
       setDaysOffPreview({ fileName, matched, parseErrors: parsed.errors, matchErrors });
       setDaysOffSuccess('');
-    });
+    }, setDaysOffFileError);
   }
 
   async function handleExcelFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -532,9 +554,14 @@ export default function CsvImporter({
     setExcelLoading(true);
     setExcelFileName(file.name);
     setExcelSuccess('');
+    setExcelError('');
     try {
       const result = await parseExcelSiteFile(file);
       setExcelPreview(result);
+    } catch (err) {
+      console.warn('[Import] Excel読込失敗:', file.name, err);
+      setExcelPreview(null);
+      setExcelError(fileReadErrorMsg(file.name));
     } finally {
       setExcelLoading(false);
     }
@@ -544,22 +571,26 @@ export default function CsvImporter({
 
   function clearStaffPreview() {
     setStaffPreview(null);
+    setStaffFileError('');
     if (staffInputRef.current) staffInputRef.current.value = '';
   }
 
   function clearSitePreview() {
     setSitePreview(null);
+    setSiteFileError('');
     if (siteInputRef.current) siteInputRef.current.value = '';
   }
 
   function clearDaysOffPreview() {
     setDaysOffPreview(null);
+    setDaysOffFileError('');
     if (daysOffInputRef.current) daysOffInputRef.current.value = '';
   }
 
   function clearExcelPreview() {
     setExcelPreview(null);
     setExcelFileName('');
+    setExcelError('');
     if (excelInputRef.current) excelInputRef.current.value = '';
   }
 
@@ -787,6 +818,7 @@ export default function CsvImporter({
     setReimportSites(null);
     setReimportDiff(null);
     setReimportFileName('');
+    setReimportError('');
     if (reimportFileRef.current) reimportFileRef.current.value = '';
   }
 
@@ -794,6 +826,7 @@ export default function CsvImporter({
     const file = e.target.files?.[0];
     if (!file || !reimportBatch) return;
     setReimportLoading(true);
+    setReimportError('');
     try {
       let rawSites: WorkSite[];
       if (file.name.toLowerCase().endsWith('.xlsx')) {
@@ -813,6 +846,11 @@ export default function CsvImporter({
       setReimportSites(rawSites);
       setReimportDiff(diff);
       setReimportFileName(file.name);
+    } catch (err) {
+      console.warn('[Import] 再インポート読込失敗:', file.name, err);
+      setReimportSites(null);
+      setReimportDiff(null);
+      setReimportError(fileReadErrorMsg(file.name));
     } finally {
       setReimportLoading(false);
       if (reimportFileRef.current) reimportFileRef.current.value = '';
@@ -892,6 +930,11 @@ export default function CsvImporter({
               キャンセル
             </button>
           </div>
+          {reimportError && (
+            <div className="import-errors">
+              <div className="import-errors__title">{reimportError}</div>
+            </div>
+          )}
 
           {/* フェーズ2: 差分プレビューと確認 */}
           {reimportSites && reimportDiff && (
@@ -996,6 +1039,11 @@ export default function CsvImporter({
         )}
 
         {staffSuccess && <div className="success-msg">{staffSuccess}</div>}
+        {staffFileError && (
+          <div className="import-errors">
+            <div className="import-errors__title">{staffFileError}</div>
+          </div>
+        )}
       </div>
 
       {/* ── 現場CSV ──────────────────────────────────────── */}
@@ -1120,6 +1168,11 @@ export default function CsvImporter({
         )}
 
         {siteSuccess && <div className="success-msg">{siteSuccess}</div>}
+        {siteFileError && (
+          <div className="import-errors">
+            <div className="import-errors__title">{siteFileError}</div>
+          </div>
+        )}
       </div>
 
       {/* ── 現場CSV テキスト貼り付け ────────────────────────── */}
@@ -1259,6 +1312,11 @@ export default function CsvImporter({
           </button>
           <span className="import-current">現在 {currentSiteCount}件登録済み</span>
         </div>
+        {excelError && (
+          <div className="import-errors">
+            <div className="import-errors__title">{excelError}</div>
+          </div>
+        )}
 
         {excelPreview && (
           <div className="import-preview">
@@ -1506,6 +1564,11 @@ export default function CsvImporter({
         )}
 
         {daysOffSuccess && <div className="success-msg">{daysOffSuccess}</div>}
+        {daysOffFileError && (
+          <div className="import-errors">
+            <div className="import-errors__title">{daysOffFileError}</div>
+          </div>
+        )}
       </div>
     </div>
   );

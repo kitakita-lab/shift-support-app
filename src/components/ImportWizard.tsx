@@ -283,6 +283,7 @@ export default function ImportWizard({ existingWorkSites, onImportSites, onAddIm
   const [decisions,          setDecisions]          = useState<VenueDecision[]>([]);
   const [fileLoading,        setFileLoading]        = useState(false);
   const [success,            setSuccess]            = useState('');
+  const [fileError,          setFileError]          = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function reset() {
@@ -292,6 +293,7 @@ export default function ImportWizard({ existingWorkSites, onImportSites, onAddIm
     setFallbackClientName('');
     setParsedRows([]);
     setDecisions([]);
+    setFileError('');
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
@@ -299,6 +301,7 @@ export default function ImportWizard({ existingWorkSites, onImportSites, onAddIm
     const file = e.target.files?.[0];
     if (!file) return;
     setFileLoading(true);
+    setFileError('');
     try {
       let sheet: RawSheet;
       if (file.name.toLowerCase().endsWith('.xlsx')) {
@@ -314,6 +317,13 @@ export default function ImportWizard({ existingWorkSites, onImportSites, onAddIm
       setRawSheet(sheet);
       setMapping(autoDetectMapping(sheet.headers));
       setSuccess('');
+    } catch (err) {
+      console.warn('[ImportWizard] ファイル読込失敗:', file.name, err);
+      setFileError(
+        `「${file.name}」を読み込めませんでした。ファイルが破損しているか、対応していない形式の可能性があります。`,
+      );
+      // エラー後に同じファイルを選び直せるよう input をリセット（エラー時のみ）
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } finally {
       setFileLoading(false);
     }
@@ -459,6 +469,12 @@ export default function ImportWizard({ existingWorkSites, onImportSites, onAddIm
               {fileLoading ? '読込中…' : 'ファイルを選択（CSV / Excel）'}
             </label>
           </div>
+
+          {fileError && (
+            <div className="import-errors">
+              <div className="import-errors__title">{fileError}</div>
+            </div>
+          )}
 
           {rawSheet && (
             <div className="wiz-file-info">
