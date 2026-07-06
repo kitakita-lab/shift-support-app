@@ -46,7 +46,7 @@ export function useCollaborativeSync(): CollaborativeSyncResult {
     importLogs:     firestore.importLogs,
     setImportLogs:  firestore.setImportLogs,
     syncState:      firestore.syncState,
-    lastActivity:   presence.lastActivity,
+    lastActivity:   firestore.lastActivity,
     onlineUsers:    presence.onlineUsers,
     activityLogs:   features.activityLogs,
     editingStates:  features.editingStates,

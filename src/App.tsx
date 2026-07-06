@@ -63,8 +63,8 @@ export default function App() {
   const presence      = useCollaborativePresence();
   const collaboration = useCollaborativeFeatures();
 
-  const { staff, setStaff, workSites, setWorkSites, assignments, setAssignments, importLogs, setImportLogs, syncState } = firestore;
-  const { lastActivity, onlineUsers } = presence;
+  const { staff, setStaff, workSites, setWorkSites, assignments, setAssignments, importLogs, setImportLogs, syncState, lastActivity } = firestore;
+  const { onlineUsers } = presence;
   const { activityLogs, editingStates } = collaboration;
 
   const { snapshot, toast, saveSnapshot, applyUndo } = useUndo();
