@@ -220,3 +220,84 @@ export function generateShifts(
 
   return assignments;
 }
+
+// ── 手動調整用: 候補スタッフの理由付き評価 ─────────────────────
+// シフト調整モーダル（AssignmentAdjustModal）が使用する。
+// generateShifts の HARD CONSTRAINT / SOFT SCORE と同じ判定を
+// 「配置しない」ではなく「人が読める警告・おすすめ理由」として返す。
+// 既存思想どおり、警告があっても選択は禁止しない（判定して伝えるだけ）。
+// 生成アルゴリズム本体（generateShifts）はこの追加による変更なし。
+
+/** 候補1人分の評価結果 */
+export interface CandidateEvaluation {
+  /** 優先現場（siteName 完全一致）か */
+  isPreferred: boolean;
+  /** この現場を除く当月の割当日数（ユニーク日数） */
+  assignedDayCount: number;
+  /** 月間上限 */
+  maxWorkDays: number;
+  /** 警告文の一覧。空配列 = 制約に一切かからない「おすすめ」候補 */
+  warnings: string[];
+}
+
+/**
+ * スタッフをこの現場に手動追加した場合の警告を評価する。
+ *
+ * @param s                     評価対象スタッフ
+ * @param site                  対象現場
+ * @param otherAssignedDates    この現場を除く、当該スタッフの割当日集合
+ * @param currentAssignedStaff  この現場に現在割当中のスタッフ（NGペア判定用）
+ * @param sameDayOtherSiteNames 同日に割当済みの他現場の表示名一覧
+ */
+export function evaluateCandidateForSite(
+  s: Staff,
+  site: WorkSite,
+  otherAssignedDates: Set<string>,
+  currentAssignedStaff: Staff[],
+  sameDayOtherSiteNames: string[],
+): CandidateEvaluation {
+  const warnings: string[] = [];
+  const maxDays = s.maxWorkDays ?? DEFAULT_MAX_WORK_DAYS;
+
+  // 1. 希望休
+  if ((s.requestedDaysOff ?? []).includes(site.date)) {
+    warnings.push('希望休の日です');
+  }
+
+  // 2. 勤務不可曜日
+  if (!isAvailableOnDate(s, site.date)) {
+    warnings.push(`勤務可能曜日外（${(s.availableWeekdays ?? []).join('・')}のみ勤務可）`);
+  }
+
+  // 3. 月間上限（この日が新規の勤務日になる場合のみ消費される）
+  const consumesNewDay = !otherAssignedDates.has(site.date);
+  if (consumesNewDay && otherAssignedDates.size >= maxDays) {
+    warnings.push(`月間上限（${maxDays}日）に到達済み`);
+  } else if (consumesNewDay && otherAssignedDates.size === maxDays - 1) {
+    warnings.push('月間上限まで残り1日');
+  }
+
+  // 4. 最大連勤
+  const consecutiveLimit = s.maxConsecutiveDays ?? DEFAULT_MAX_CONSECUTIVE_DAYS;
+  if (wouldExceedConsecutive(otherAssignedDates, site.date, consecutiveLimit)) {
+    warnings.push(`最大連勤（${consecutiveLimit}日）を超えます`);
+  }
+
+  // 5. NGペア（現在の割当メンバーとの組み合わせ）
+  const ngWith = currentAssignedStaff.filter((a) => s.ngPartnerIds?.includes(a.id));
+  if (ngWith.length > 0) {
+    warnings.push(`NGペア: ${ngWith.map((a) => a.name).join('・')}`);
+  }
+
+  // 6. 同日の他現場割当（現仕様では許可されているが情報として提示）
+  if (sameDayOtherSiteNames.length > 0) {
+    warnings.push(`同日: ${sameDayOtherSiteNames.join('・')} に割当済み`);
+  }
+
+  return {
+    isPreferred: (s.preferredWorkSites ?? []).includes(site.siteName),
+    assignedDayCount: otherAssignedDates.size,
+    maxWorkDays: maxDays,
+    warnings,
+  };
+}
