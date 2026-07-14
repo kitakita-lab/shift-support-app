@@ -1,8 +1,9 @@
-import { Fragment } from 'react';
+import { Fragment, useRef, useState } from 'react';
 import { Staff, WorkSite, ShiftAssignment } from '../types';
 import { generateShifts } from '../utils/shiftGenerator';
 import { sortedByStaffNo, sortStaff } from '../utils/staffUtils';
 import { formatSiteLabel } from '../utils/siteUtils';
+import AssignmentAdjustModal from './AssignmentAdjustModal';
 
 interface Props {
   staff: Staff[];
@@ -11,9 +12,22 @@ interface Props {
   selectedMonth: string;
   onGenerate: (assignments: ShiftAssignment[]) => void;
   onClear: () => void;
+  /** 手動調整の保存。siteId の割当を staffIds で置き換える */
+  onUpdateAssignment: (siteId: string, staffIds: string[]) => void;
+  /** assignments ドキュメントの最新 serverUpdatedAt（調整の保存競合警告用） */
+  assignmentsServerUpdatedAt?: number;
 }
 
-export default function ShiftBuilder({ staff, workSites, assignments, selectedMonth, onGenerate, onClear }: Props) {
+export default function ShiftBuilder({ staff, workSites, assignments, selectedMonth, onGenerate, onClear, onUpdateAssignment, assignmentsServerUpdatedAt = 0 }: Props) {
+  // 手動調整モーダル: 対象 siteId と開いた時刻（保存競合警告の基準）
+  const [adjustSiteId, setAdjustSiteId] = useState<string | null>(null);
+  const adjustOpenedAtRef = useRef(0);
+
+  function openAdjust(siteId: string) {
+    adjustOpenedAtRef.current = Date.now();
+    setAdjustSiteId(siteId);
+  }
+
   const staffMap: Record<string, string> = {};
   const staffIndex: Record<string, Staff> = {};
   staff.forEach((s) => {
@@ -119,6 +133,7 @@ export default function ShiftBuilder({ staff, workSites, assignments, selectedMo
                   <th>必要人数</th>
                   <th>割当スタッフ</th>
                   <th>不足</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -188,6 +203,14 @@ export default function ShiftBuilder({ staff, workSites, assignments, selectedMo
                           <span className="ok-badge">OK</span>
                         )}
                       </td>
+                      <td className="action-cell">
+                        <button
+                          className="btn btn--sm btn--secondary"
+                          onClick={() => openAdjust(site.id)}
+                        >
+                          調整
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -202,6 +225,26 @@ export default function ShiftBuilder({ staff, workSites, assignments, selectedMo
           <p className="empty-msg">「シフトを自動作成」ボタンを押してください</p>
         </div>
       )}
+
+      {adjustSiteId && (() => {
+        const target = activeSites.find((w) => w.id === adjustSiteId);
+        if (!target) return null;
+        return (
+          <AssignmentAdjustModal
+            site={target}
+            staff={staff}
+            assignments={assignments}
+            workSites={activeSites}
+            openedAt={adjustOpenedAtRef.current}
+            assignmentsServerUpdatedAt={assignmentsServerUpdatedAt}
+            onSave={(siteId, staffIds) => {
+              onUpdateAssignment(siteId, staffIds);
+              setAdjustSiteId(null);
+            }}
+            onClose={() => setAdjustSiteId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

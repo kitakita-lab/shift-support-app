@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { Staff, WorkSite } from '../types';
-import { generateShifts } from './shiftGenerator';
+import { generateShifts, evaluateCandidateForSite } from './shiftGenerator';
 
 // ─────────────────────────────────────────────────────────────
 // generateShifts の characterization テスト（現在の挙動を「正」として固定）。
@@ -375,5 +375,98 @@ describe('generateShifts: sessionPriority（会期優先度）', () => {
     // 既存テストと同じ期待値（早い日付が枠を取る）
     expect(result[0]).toMatchObject({ siteId: 'mon', assignedStaffIds: ['A'] });
     expect(result[1]).toMatchObject({ siteId: 'tue', assignedStaffIds: [], shortage: 1 });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// evaluateCandidateForSite: 手動調整モーダルの警告・おすすめ理由の判定。
+// generateShifts の HARD 判定と同じ条件を「文章」として返すことを固定する。
+// 警告の有無は判定のみで、選択の禁止はしない（呼び出し側も禁止しない）。
+// ─────────────────────────────────────────────────────────────
+
+describe('evaluateCandidateForSite', () => {
+  const site = makeSite({ id: 'target', date: MON, siteName: 'WB小樽' });
+
+  it('制約に一切かからない候補は警告ゼロ（おすすめ）', () => {
+    const ev = evaluateCandidateForSite(makeStaff({ id: 'A' }), site, new Set(), [], []);
+    expect(ev.warnings).toEqual([]);
+    expect(ev.isPreferred).toBe(false);
+    expect(ev.assignedDayCount).toBe(0);
+    expect(ev.maxWorkDays).toBe(20);
+  });
+
+  it('優先現場一致は isPreferred=true（siteName 完全一致のみ）', () => {
+    const ev = evaluateCandidateForSite(
+      makeStaff({ id: 'A', preferredWorkSites: ['WB小樽'] }), site, new Set(), [], [],
+    );
+    expect(ev.isPreferred).toBe(true);
+    expect(ev.warnings).toEqual([]);
+  });
+
+  it('希望休の日は警告になる', () => {
+    const ev = evaluateCandidateForSite(
+      makeStaff({ id: 'A', requestedDaysOff: [MON] }), site, new Set(), [], [],
+    );
+    expect(ev.warnings).toEqual(['希望休の日です']);
+  });
+
+  it('勤務可能曜日外は警告になる（可の曜日を提示）', () => {
+    const ev = evaluateCandidateForSite(
+      makeStaff({ id: 'A', availableWeekdays: ['火', '木'] }), site, new Set(), [], [],
+    );
+    expect(ev.warnings).toEqual(['勤務可能曜日外（火・木のみ勤務可）']);
+  });
+
+  it('月間上限到達済みは警告になる', () => {
+    const ev = evaluateCandidateForSite(
+      makeStaff({ id: 'A', maxWorkDays: 2 }), site, new Set([TUE, WED]), [], [],
+    );
+    expect(ev.warnings).toEqual(['月間上限（2日）に到達済み']);
+  });
+
+  it('月間上限まで残り1日は注意として警告になる', () => {
+    const ev = evaluateCandidateForSite(
+      makeStaff({ id: 'A', maxWorkDays: 2 }), site, new Set([TUE]), [], [],
+    );
+    expect(ev.warnings).toEqual(['月間上限まで残り1日']);
+  });
+
+  it('同日に既に割当済みの場合、上限系の警告は出ない（新規勤務日を消費しないため）', () => {
+    // 他現場で MON に割当済み → この現場に足しても勤務日数は増えない
+    const ev = evaluateCandidateForSite(
+      makeStaff({ id: 'A', maxWorkDays: 1 }), site, new Set([MON]), [], ['イオン厚別'],
+    );
+    expect(ev.warnings).toEqual(['同日: イオン厚別 に割当済み']);
+  });
+
+  it('最大連勤超過は警告になる（挟み込みも数える）', () => {
+    // 火・木に割当済み、水（WED）の現場に足すと 3連勤 > 2
+    const wedSite = makeSite({ id: 'w', date: WED });
+    const ev = evaluateCandidateForSite(
+      makeStaff({ id: 'A', maxConsecutiveDays: 2 }), wedSite, new Set([TUE, THU]), [], [],
+    );
+    expect(ev.warnings).toEqual(['最大連勤（2日）を超えます']);
+  });
+
+  it('NGペアは相手の名前付きで警告になる', () => {
+    const partner = makeStaff({ id: 'B', name: '佐藤' });
+    const ev = evaluateCandidateForSite(
+      makeStaff({ id: 'A', ngPartnerIds: ['B'] }), site, new Set(), [partner], [],
+    );
+    expect(ev.warnings).toEqual(['NGペア: 佐藤']);
+  });
+
+  it('複数の制約に該当する場合はすべて列挙される', () => {
+    const partner = makeStaff({ id: 'B', name: '佐藤' });
+    const ev = evaluateCandidateForSite(
+      makeStaff({ id: 'A', requestedDaysOff: [MON], availableWeekdays: ['火'], ngPartnerIds: ['B'] }),
+      site, new Set(), [partner], ['イオン厚別'],
+    );
+    expect(ev.warnings).toEqual([
+      '希望休の日です',
+      '勤務可能曜日外（火のみ勤務可）',
+      'NGペア: 佐藤',
+      '同日: イオン厚別 に割当済み',
+    ]);
   });
 });

@@ -10,6 +10,7 @@ const LOG_RETENTION_DAYS = 90;
 
 export type ActivityAction =
   | 'shift_generate'
+  | 'shift_adjust'
   | 'shift_clear'
   | 'staff_add'
   | 'staff_delete'
@@ -19,6 +20,7 @@ export type ActivityAction =
 
 export const ACTION_LABELS: Record<ActivityAction, string> = {
   shift_generate:  'シフト自動作成',
+  shift_adjust:    'シフト調整',
   shift_clear:     'シフトクリア',
   staff_add:       'スタッフ追加',
   staff_delete:    'スタッフ削除',

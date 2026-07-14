@@ -171,6 +171,21 @@ export default function App() {
     ]);
   }
 
+  function handleUpdateAssignment(siteId: string, staffIds: string[]) {
+    const target = workSites.find((w) => w.id === siteId);
+    const label = target ? `${target.date} ${target.siteName}` : siteId;
+    saveSnapshot(`シフト調整（${label}）`, { staff, workSites, assignments, importLogs });
+    if (actor) logActivity(actor, 'shift_adjust', label);
+    const required = target?.requiredPeople ?? 0;
+    setAssignments((prev) =>
+      prev.map((a) =>
+        a.siteId === siteId
+          ? { ...a, assignedStaffIds: staffIds, shortage: Math.max(0, required - staffIds.length) }
+          : a
+      )
+    );
+  }
+
   function handleClearMonthlyShifts() {
     saveSnapshot(`シフトクリア（${selectedMonth}）`, { staff, workSites, assignments, importLogs });
     if (actor) logActivity(actor, 'shift_clear', selectedMonth);
@@ -353,6 +368,8 @@ export default function App() {
             selectedMonth={selectedMonth}
             onGenerate={handleGenerateShifts}
             onClear={handleClearMonthlyShifts}
+            onUpdateAssignment={handleUpdateAssignment}
+            assignmentsServerUpdatedAt={firestore.serverUpdatedAt.assignments}
           />
         )}
         {activeTab === 'export' && (
