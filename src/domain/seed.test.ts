@@ -60,7 +60,8 @@ describe('サンプルデータ全体', () => {
     expect(defaultPartTypes().every((t) => t.unitCost === 0)).toBe(true);
     expect(data.partTypes.filter((t) => t.unitCost > 0).map((t) => [t.name, t.unitCost, t.costUnit])).toEqual([
       ['テーブル 150×60', 500, 'day'],
-      ['椅子', 100, 'day'],
+      ['椅子（制作席）', 100, 'day'],
+      ['椅子（その他）', 100, 'day'],
       ['登録スペース（パーテーション区画）', 3000, 'event'],
     ]);
     expect(data.partTypes.every((t) => t.stockQty === 0)).toBe(true);   // 保有数は入れない（仮の数字で警告を出さない）
@@ -84,10 +85,10 @@ describe('ラソラ札幌 2026-11-13〜17・フラワーボトル（ikyu）の�
     expect(byDay).toEqual(['AB', 'AC', 'BC', 'AB', 'AC']);
     expect(lasora.assignments.every((a) => a.startTime === '10:00' && a.endTime === '18:00' && a.breakMinutes === 60 && a.rateOverride === null && a.transportOverride === null)).toBe(true);
   });
-  it('配置図：L字 2 組（テーブル 6 台）・椅子 22 脚ほか。全パーツが図面の中にあり、重なりなし・未出力の V1', () => {
+  it('配置図：L字 2 組（テーブル 6 台）・椅子 22 脚（制作席 16 ＋ その他 6）ほか。全パーツが図面の中にあり、重なりなし・未出力の V1', () => {
     const counts = Object.fromEntries(countParts(lasora.layout));
     expect(counts).toEqual({
-      'pt-table': 6, 'pt-chair': 22, 'pt-nego': 3, 'pt-reg': 1, 'pt-work': 1, 'pt-banner': 3, 'pt-pop-l': 2, 'pt-pop-s': 2, 'pt-display': 1, 'pt-eye': 1,
+      'pt-table': 6, 'pt-chair': 16, 'pt-chair-other': 6, 'pt-nego': 3, 'pt-reg': 1, 'pt-work': 1, 'pt-banner': 3, 'pt-pop-l': 2, 'pt-pop-s': 2, 'pt-display': 1, 'pt-eye': 1,
     });
     const labels = buildLabels(lasora.layout, data.partTypes);
     expect(labels.groups.map((g) => g.title)).toEqual(['L字①', 'L字②']);
@@ -111,13 +112,20 @@ describe('ラソラ札幌 2026-11-13〜17・フラワーボトル（ikyu）の�
     //          ＝ 36,800 ＋ 24,900 ＋ 23,100                                 ＝  84,800
     // 材料費 : 300 個 × 1.1 ×（120 ＋ 30×5 ＋ 25 ＝ 295）                    ＝  97,350
     // 会場費 : 0 ＋ 20,000 × 5 日 ＋ 0%                                      ＝ 100,000
-    // 備品費 : テーブル 6×500×5 ＋ 椅子 22×100×5 ＋ 登録スペース 1×3,000     ＝  29,000
+    // 備品費 : テーブル 6×500×5 ＋ 椅子（制作席 16 ＋ その他 6）×100×5 ＋ 登録スペース 1×3,000 ＝ 29,000
     // その他 : 12,000 ＋ 10,000                                              ＝  22,000
+    // 席数   : 制作席 16（Version 2 までは椅子の総数 22 を席数としていた。金額は変わらない）
     expect(summary(lasora)).toEqual({
       days: 5, revenue: 400000, laborCost: 84800, materialCost: 97350, venueFee: 100000,
-      partsCost: 29000, otherCost: 22000, totalCost: 333150, profit: 66850, seats: 22, totalHours: 70,
+      partsCost: 29000, otherCost: 22000, totalCost: 333150, profit: 66850, seats: 16, totalHours: 70,
     });
     expect(estimate(lasora, data).marginPct).toBeCloseTo(16.7125, 4);
+  });
+  it('席数と回転数（D-16）: 制作席 16・その他の椅子 6。必要な回転数は 300 ÷（16 席 × 5 日）＝ 3.75 回。上限回転数 4（仮）では席は足りる', () => {
+    const e = estimate(lasora, data);
+    expect([e.seats, e.otherSeats, e.requiredTurns]).toEqual([16, 6, 3.75]);
+    expect(lasora.contents.map((c) => c.maxTurns)).toEqual([4]);
+    expect(projectWarnings(lasora, data)).toEqual([]);            // 必要 75 席・日 ≦ 80 席・日
   });
 
   describe('検証シナリオ（画面で同じ操作をしたときの期待値）', () => {
@@ -125,15 +133,26 @@ describe('ラソラ札幌 2026-11-13〜17・フラワーボトル（ikyu）の�
     const base = summary(lasora);
     const after = (p: Project, d: AppData = data) => summary(p, d);
 
-    it('1. 椅子を 1 脚増やす → 備品費 +500（100 円 × 5 日）、席数 23、利益 −500', () => {
+    it('1. 椅子（制作席）を 1 脚増やす → 備品費 +500（100 円 × 5 日）、制作席 17、利益 −500', () => {
       const p = { ...lasora, layout: addPart(lasora.layout, chair) };
       const e = after(p);
-      expect([e.partsCost, e.seats, e.profit]).toEqual([29500, 23, 66350]);
+      expect([e.partsCost, e.seats, e.profit]).toEqual([29500, 17, 66350]);
       expect(projectWarnings(p, data)).toEqual([]);   // 追加した椅子は空いている場所に出るので警告なし
     });
-    it('2. 椅子を 1 脚減らす → 備品費 −500、席数 21', () => {
-      const e = after({ ...lasora, layout: removeLastPart(lasora.layout, 'pt-chair') });
-      expect([e.partsCost, e.seats, e.profit]).toEqual([28500, 21, 67350]);
+    it('2. 椅子（制作席）を 1 脚減らす → 備品費 −500、制作席 15。必要 75 席・日 ＝ 15 席 × 5 日なので、ちょうど足りる（警告なし）', () => {
+      const p = { ...lasora, layout: removeLastPart(lasora.layout, 'pt-chair') };
+      const e = after(p);
+      expect([e.partsCost, e.seats, e.profit]).toEqual([28500, 15, 67350]);
+      expect(projectWarnings(p, data)).toEqual([]);
+    });
+    it('2b. さらに 1 脚減らして制作席 14 → 席が足りない警告（必要 75 席・日 ＞ 14 席 × 5 日 ＝ 70 席・日）', () => {
+      const layout = removeLastPart(removeLastPart(lasora.layout, 'pt-chair'), 'pt-chair');
+      expect(projectWarnings({ ...lasora, layout }, data).map((w) => [w.target, w.severity])).toEqual([['layout:seats', 'warn']]);
+    });
+    it('2c. 椅子（その他）を増減しても、制作席・必要な回転数は変わらず、備品費だけ動く', () => {
+      const other = data.partTypes.find((t) => t.id === 'pt-chair-other')!;
+      const e = estimate({ ...lasora, layout: addPart(lasora.layout, other) }, data);
+      expect([e.seats, e.otherSeats, e.requiredTurns, e.partsCost]).toEqual([16, 7, 3.75, 29500]);
     });
     it('3. 組み合わせ配置「L字」を 1 つ追加 → テーブル 9 台、備品費 +7,500（3 台 × 500 円 × 5 日）、番号は ③-1〜③-3', () => {
       const layout = addComposite(lasora.layout, data.composites[0], data.partTypes);
@@ -172,9 +191,18 @@ describe('ラソラ札幌 2026-11-13〜17・フラワーボトル（ikyu）の�
       expect([after(p).laborCost, after(p).totalHours]).toEqual([75600, 63]);
       expect(projectWarnings(p, data)).toEqual([]);
     });
-    it('10. 椅子の保有数を 20 にする（パーツマスタ）→ 配置 22 脚が保有数を超えている警告が出る', () => {
-      const d = { ...data, partTypes: data.partTypes.map((t) => (t.id === 'pt-chair' ? { ...t, stockQty: 20 } : t)) };
-      expect(projectWarnings(lasora, d).map((w) => w.message)).toEqual(['椅子: 配置 22 個が保有数 20 個を超えています（追加手配が必要）。']);
+    it('10. 椅子（制作席）の保有数を 15 にする（パーツマスタ）→ 配置 16 脚が保有数を超えている警告が出る', () => {
+      const d = { ...data, partTypes: data.partTypes.map((t) => (t.id === 'pt-chair' ? { ...t, stockQty: 15 } : t)) };
+      expect(projectWarnings(lasora, d).map((w) => w.message)).toEqual(['椅子（制作席）: 配置 16 個が保有数 15 個を超えています（追加手配が必要）。']);
+    });
+    it('11. 予定個数を 300 → 320 にすると必要 80 席・日で、ちょうど足りる。321 にすると席が足りない警告が出る', () => {
+      const withCount = (n: number) => ({ ...lasora, contents: lasora.contents.map((c) => ({ ...c, plannedCount: n })) });
+      expect(projectWarnings(withCount(320), data)).toEqual([]);
+      expect(projectWarnings(withCount(321), data).map((w) => w.target)).toEqual(['layout:seats']);
+    });
+    it('12. 上限回転数を空欄にすると、席が足りなくても警告しない（任意入力）', () => {
+      const p = { ...lasora, contents: lasora.contents.map((c) => ({ ...c, plannedCount: 9999, maxTurns: null })) };
+      expect(projectWarnings(p, data)).toEqual([]);
     });
     it('何もしなければ基準値のまま', () => {
       expect(after(lasora)).toEqual(base);
@@ -185,11 +213,14 @@ describe('ラソラ札幌 2026-11-13〜17・フラワーボトル（ikyu）の�
 describe('デモ案件（12/5〜6）', () => {
   it('読み込み直後の試算。V1 との違いは、サンプルのパーツに仮の単価を入れたことによる備品費 13,400 だけ', () => {
     // 人件費 34,400／材料費 120×1.1×295 = 38,940／会場費 20,000×2 = 40,000／その他 12,000 は V1 と同じ
-    // 備品費 : テーブル 6×500×2 ＋ 椅子 22×100×2 ＋ 登録スペース 3,000 ＝ 13,400（V1 は 0）
+    // 備品費 : テーブル 6×500×2 ＋ 椅子 22（制作席 16 ＋ その他 6）×100×2 ＋ 登録スペース 3,000 ＝ 13,400（V1 は 0）
     expect(summary(demo)).toEqual({
       days: 2, revenue: 150000, laborCost: 34400, materialCost: 38940, venueFee: 40000,
-      partsCost: 13400, otherCost: 12000, totalCost: 138740, profit: 11260, seats: 22, totalHours: 28,
+      partsCost: 13400, otherCost: 12000, totalCost: 138740, profit: 11260, seats: 16, totalHours: 28,
     });
+    // 120 個 ÷（16 席 × 2 日）＝ 3.75 回。上限回転数 4（仮）→ 必要 30 席・日 ≦ 32 席・日で、警告なし
+    expect(estimate(demo, data).requiredTurns).toBe(3.75);
+    expect(projectWarnings(demo, data)).toEqual([]);
   });
   it('2 つの案件は期間が重ならないので、スタッフの掛け持ち警告は出ない', () => {
     const days = (p: Project) => new Set(p.assignments.map((a) => a.date));

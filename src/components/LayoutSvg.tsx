@@ -1,10 +1,15 @@
 // 配置図の描画。エディタ画面と PDF 出力で同じ SVG を使う（見たままが出力される）。
 // 座標の単位は cm。タイトル帯（上）と未確認事項欄（下）は図面領域の外に足す。
+//
+// 図は「図のモデル」（domain/figure.ts）だけを見て描く。レイアウトやマスタを直接は見ない。
+// モデルに無いものは図に出ないので、モデルから取った指紋が同じなら、図も同じになる（版の判定の前提）。
+// モデルの外から受け取るのは、版番号・作成日・編集用の表示（選択枠・補助グリッド）だけ。
 import { forwardRef, PointerEvent } from 'react';
-import { buildLabels, itemSize, noteLines } from '../domain/layout';
-import { EnvElement, Layout, PartType, PlacedItem, Tone } from '../types';
+import { FigureEnv, FigureItem, FigureModel, figureTitle } from '../domain/figure';
+import { Dir, PartType, Tone } from '../types';
 
-const HEAD = 100;
+/** タイトル帯の高さ。会期の行があるときは、その分だけ広げる */
+export const headHeight = (hasPeriod: boolean) => (hasPeriod ? 128 : 100);
 const FONT = "'Hiragino Sans','Noto Sans JP','Yu Gothic','Meiryo','IPAPGothic',sans-serif";
 
 const TONES: Record<Tone, { fill: string; stroke: string; text: string }> = {
@@ -17,6 +22,8 @@ const INK = '#22403a';
 const GREEN = '#1f8a5f';
 const BROWN = '#9a7b4f';
 
+/** 制作席以外の椅子（商談席・待合など）。制作席（青）と見分けられるよう、灰色にする */
+const CHAIR_OTHER = { fill: '#e6e6e6', stroke: '#9a9a9a', rx: 9, text: '#555555' };
 const PART_STYLE: Record<PartType['category'], { fill: string; stroke: string; rx: number; text: string }> = {
   table:     { fill: '#e8c49c', stroke: '#a67c52', rx: 3, text: '#5a4630' },
   chair:     { fill: '#b9d3ec', stroke: '#6b8fb3', rx: 9, text: '#33506e' },
@@ -45,7 +52,7 @@ function Lines({ x, y, lines, size, weight, fill, sub }: {
   );
 }
 
-function Arrow({ x, y, dir, len = 40 }: { x: number; y: number; dir: NonNullable<EnvElement['dir']>; len?: number }) {
+function Arrow({ x, y, dir, len = 40 }: { x: number; y: number; dir: Dir; len?: number }) {
   // (x, y) を矢印の中心とし、dir の向きに先端を向ける
   const rot = { right: 0, down: 90, left: 180, up: 270 }[dir];
   const h = len / 2;
@@ -56,7 +63,7 @@ function Arrow({ x, y, dir, len = 40 }: { x: number; y: number; dir: NonNullable
   );
 }
 
-function Env({ e, selected, onDown }: { e: EnvElement; selected: boolean; onDown?: (ev: PointerEvent, id: string) => void }) {
+function Env({ e, selected, onDown }: { e: FigureEnv; selected: boolean; onDown?: (ev: PointerEvent, id: string) => void }) {
   const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
   const lines = e.label ? e.label.split('\n') : [];
   let body: JSX.Element;
@@ -129,15 +136,15 @@ function Env({ e, selected, onDown }: { e: EnvElement; selected: boolean; onDown
   );
 }
 
-function Item({ it, pt, label, selected, onDown }: {
-  it: PlacedItem; pt: PartType | undefined; label: string; selected: boolean;
+function Item({ it, selected, onDown }: {
+  it: FigureItem; selected: boolean;
   onDown?: (ev: PointerEvent, id: string) => void;
 }) {
-  const s = itemSize(it, pt);
-  const cat = pt?.category ?? 'other';
-  const st = PART_STYLE[cat];
+  const s = { w: it.w, h: it.h };
+  const cat = it.category;
+  const st = cat === 'chair' && it.role === 'other' ? CHAIR_OTHER : PART_STYLE[cat];
   const cx = it.x + s.w / 2, cy = it.y + s.h / 2;
-  const lines = label ? label.split('\n') : [];
+  const lines = it.label ? it.label.split('\n') : [];
   const framed = cat === 'banner' || cat === 'pop';
   // 枠に収まる文字サイズ（最長行の文字数から概算）
   const longest = Math.max(1, ...lines.map((l) => l.length));
@@ -146,7 +153,7 @@ function Item({ it, pt, label, selected, onDown }: {
   const labelAbove = cat === 'pop';
   return (
     <g onPointerDown={onDown ? (ev) => onDown(ev, it.id) : undefined} style={onDown ? { cursor: 'move' } : { pointerEvents: 'none' }}>
-      <rect x={it.x} y={it.y} width={s.w} height={s.h} rx={Math.min(st.rx, s.w / 2, s.h / 2)} fill={pt ? st.fill : '#eee'} stroke={pt ? st.stroke : '#c00'} strokeWidth={1.8} strokeDasharray={pt ? undefined : '6 4'} />
+      <rect x={it.x} y={it.y} width={s.w} height={s.h} rx={Math.min(st.rx, s.w / 2, s.h / 2)} fill={it.known ? st.fill : '#eee'} stroke={it.known ? st.stroke : '#c00'} strokeWidth={1.8} strokeDasharray={it.known ? undefined : '6 4'} />
       {framed && <rect x={it.x + 5} y={it.y + 5} width={Math.max(0, s.w - 10)} height={Math.max(0, s.h - 10)} fill="#f3f0ea" stroke="#d8d2c4" strokeWidth={1} />}
       {lines.length > 0 && (labelAbove
         ? <Lines x={cx} y={it.y - 11} lines={[lines.join(' ')]} size={13} fill="#333" />
@@ -157,9 +164,10 @@ function Item({ it, pt, label, selected, onDown }: {
 }
 
 interface Props {
-  layout: Layout;
-  partTypes: PartType[];
-  title: string;
+  /** 図に描く内容（domain/figure.ts の figureModel で作る） */
+  model: FigureModel;
+  /** タイトルに入れる版番号（雛形では使わない） */
+  version?: number;
   /** 右上に小さく入れる情報（例: 作成日） */
   stamp?: string;
   selectedItemIds?: string[];
@@ -172,14 +180,14 @@ interface Props {
 }
 
 const LayoutSvg = forwardRef<SVGSVGElement, Props>(function LayoutSvg(
-  { layout, partTypes, title, stamp, selectedItemIds = [], selectedEnvId, onItemDown, onEnvDown, onBackgroundDown, gridCm = 0 },
+  { model, version = 1, stamp, selectedItemIds = [], selectedEnvId, onItemDown, onEnvDown, onBackgroundDown, gridCm = 0 },
   ref,
 ) {
-  const notes = noteLines(layout.notes);
+  const notes = model.notes;
   const foot = notes.length > 0 ? 50 + notes.length * 24 : 30;
-  const labels = buildLabels(layout, partTypes);
   const sel = new Set(selectedItemIds);
-  const W = layout.width, H = layout.height;
+  const W = model.width, H = model.height;
+  const HEAD = headHeight(!!model.period);
 
   return (
     <svg
@@ -190,8 +198,9 @@ const LayoutSvg = forwardRef<SVGSVGElement, Props>(function LayoutSvg(
       style={{ touchAction: 'none', userSelect: 'none' }}
     >
       <rect x={0} y={-HEAD} width={W} height={H + HEAD + foot} fill="#faf9f6" onPointerDown={onBackgroundDown} />
-      <text x={W / 2} y={-HEAD + 48} textAnchor="middle" fontSize={36} fontWeight={700} fill={INK}>{title}</text>
-      {layout.caption && <text x={W / 2} y={-HEAD + 82} textAnchor="middle" fontSize={18} fill="#555">{layout.caption}</text>}
+      <text x={W / 2} y={-HEAD + 48} textAnchor="middle" fontSize={36} fontWeight={700} fill={INK}>{figureTitle(model, version)}</text>
+      {model.period && <text x={W / 2} y={-HEAD + 80} textAnchor="middle" fontSize={21} fontWeight={700} fill={INK} data-testid="figure-period">会期 {model.period}</text>}
+      {model.caption && <text x={W / 2} y={-HEAD + (model.period ? 110 : 82)} textAnchor="middle" fontSize={18} fill="#555">{model.caption}</text>}
 
       {gridCm > 0 && (
         <g data-noexport="1" stroke="#000" strokeOpacity={0.06} strokeWidth={1} style={{ pointerEvents: 'none' }}>
@@ -200,14 +209,9 @@ const LayoutSvg = forwardRef<SVGSVGElement, Props>(function LayoutSvg(
         </g>
       )}
 
-      {layout.env.map((e) => <Env key={e.id} e={e} selected={selectedEnvId === e.id} onDown={onEnvDown} />)}
-      {layout.items.map((it) => (
-        <Item
-          key={it.id} it={it} pt={partTypes.find((t) => t.id === it.partTypeId)}
-          label={labels.items.get(it.id) ?? ''} selected={sel.has(it.id)} onDown={onItemDown}
-        />
-      ))}
-      {labels.groups.map((g) => (
+      {model.env.map((e) => <Env key={e.id} e={e} selected={selectedEnvId === e.id} onDown={onEnvDown} />)}
+      {model.items.map((it) => <Item key={it.id} it={it} selected={sel.has(it.id)} onDown={onItemDown} />)}
+      {model.groups.map((g) => (
         <g key={g.groupId} style={{ pointerEvents: 'none' }}>
           <text x={g.x} y={g.y} textAnchor="middle" fontSize={22} fontWeight={700} fill={INK}>{g.title}</text>
           {g.subtitle && <text x={g.x} y={g.y + 22} textAnchor="middle" fontSize={14} fill="#333">{g.subtitle}</text>}

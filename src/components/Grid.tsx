@@ -14,6 +14,8 @@ export interface Col<R> {
   get: (row: R) => string | number | null | undefined;
   /** 入力値（文字列）から新しい行を作る。未指定なら読み取り専用 */
   set?: (row: R, value: string) => R;
+  /** 行によって編集できない場合に false を返す（その行は値の表示だけになる）。未指定なら全行で編集可 */
+  editable?: (row: R) => boolean;
   align?: 'left' | 'right' | 'center';
   /** 警告メッセージ（あればセルを黄色表示） */
   warn?: (row: R) => string | undefined;
@@ -87,7 +89,7 @@ export default function Grid<R>({
                     'data-r': ri, 'data-c': c.key, onKeyDown: onKey,
                     style: { textAlign: align } as const,
                   };
-                  const editable = !!c.set && !!onChange && c.type !== 'readonly';
+                  const editable = !!c.set && !!onChange && c.type !== 'readonly' && (c.editable?.(row) ?? true);
                   return (
                     <td key={c.key} className={`${warn ? 'is-warn' : ''}${editable ? '' : ' is-ro'}`} title={warn}>
                       {!editable ? (

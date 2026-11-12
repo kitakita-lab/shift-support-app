@@ -133,6 +133,13 @@ export function PartMaster({ data, setMaster }: Props) {
     { key: 'name', title: 'パーツ名', width: 230, get: (p) => p.name, set: (p, v) => ({ ...p, name: v }) },
     { key: 'shortName', title: '図面上の表示名(空=非表示)', width: 170, get: (p) => p.shortName, set: (p, v) => ({ ...p, shortName: v }) },
     { key: 'category', title: '区分', width: 90, type: 'select', options: CATEGORIES, get: (p) => p.category, set: (p, v) => ({ ...p, category: (v || 'other') as PartType['category'] }) },
+    {
+      // 椅子だけに意味がある。制作席＝参加者が座って作る席（試算の席数に数える）／その他＝商談席・待合など（数えない。図では灰色）
+      key: 'seatRole', title: '椅子の役割', width: 96, type: 'select', options: [{ value: 'work', label: '制作席' }, { value: 'other', label: 'その他' }],
+      get: (p) => (p.category === 'chair' ? p.seatRole ?? 'work' : '—'),
+      set: (p, v) => (p.category === 'chair' ? { ...p, seatRole: v === 'other' ? 'other' : 'work' } : p),
+      editable: (p) => p.category === 'chair',
+    },
     { key: 'widthCm', title: '幅(cm)', width: 76, type: 'number', get: (p) => p.widthCm, set: (p, v) => ({ ...p, widthCm: n0(v) }), warn: (p) => (p.widthCm <= 0 ? '幅が 0 以下です' : undefined) },
     { key: 'depthCm', title: '奥行(cm)', width: 76, type: 'number', get: (p) => p.depthCm, set: (p, v) => ({ ...p, depthCm: n0(v) }), warn: (p) => (p.depthCm <= 0 ? '奥行が 0 以下です' : undefined) },
     { key: 'numbered', title: '番号', width: 70, type: 'select', options: [{ value: '1', label: '付ける' }, { value: '0', label: 'なし' }], get: (p) => (p.numbered ? '1' : '0'), set: (p, v) => ({ ...p, numbered: v === '1' }) },
@@ -152,7 +159,7 @@ export function PartMaster({ data, setMaster }: Props) {
     setMaster('composites', data.composites.map((c) => (c.id === sel ? { ...c, members: rows.map(({ _i, ...m }) => m) } : c)));
   return (
     <section>
-      <h2>定型パーツ<small>サイズが決まった部品。レイアウトの ［−］［＋］ で増減でき、個数×単価が試算の「備品費」に入ります</small></h2>
+      <h2>定型パーツ<small>サイズが決まった部品。レイアウトの ［−］［＋］ で増減でき、個数×単価が試算の「備品費」に入ります。区分が「椅子」のものは、役割（制作席／その他）を選べます</small></h2>
       <Grid
         rows={data.partTypes} cols={cols} rowKey={(p) => p.id} deletable
         onChange={(rows) => { if (confirmRemoval(data.partTypes, rows, used, 'パーツ')) setMaster('partTypes', rows); }}

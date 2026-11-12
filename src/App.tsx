@@ -84,8 +84,11 @@ export default function App() {
     store.addProject(p);
     setOpenId(p.id);
   };
-  // 複製は新しい案件として V1 から始める
-  const duplicate = (p: Project) => store.addProject(duplicateProject(p));
+  // 複製は新しい案件として V1 から始める。コンテンツ・費用・レイアウトを複製し、スタッフ配置は引き継がない（作業ログ D-19）
+  const duplicate = (p: Project) => {
+    store.addProject(duplicateProject(p));
+    if (p.assignments.length > 0) store.notify('info', `案件「${p.name || '名称未設定'}（コピー）」を作りました。コンテンツ・費用・レイアウトを複製しています（スタッフ配置 ${p.assignments.length} 件は引き継いでいません）。`);
+  };
   const remove = (p: Project) => {
     if (window.confirm(`案件「${p.name || '名称未設定'}」を削除します。元に戻せません。よろしいですか？`)) store.removeProject(p.id);
   };
@@ -191,7 +194,7 @@ export default function App() {
               rowActions={(r) => (
                 <>
                   <button className="cellbtn cellbtn--wide primary" onClick={() => setOpenId(r.p.id)}>開く</button>
-                  <button className="cellbtn cellbtn--wide" onClick={() => duplicate(r.p)}>複製</button>
+                  <button className="cellbtn cellbtn--wide" title="コンテンツ・費用・レイアウトを複製します（スタッフ配置は引き継ぎません）" onClick={() => duplicate(r.p)}>複製</button>
                   {signedIn && (
                     <button className="cellbtn cellbtn--wide" data-testid="copy-project" title={onShared ? 'この案件の写しを「この端末だけのデータ」に作ります' : 'この案件の写しを共有データに作ります'} onClick={() => copyTo(r.p)}>
                       {onShared ? '端末へコピー' : '共有へコピー'}

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { AppData, Assignment, PlacedItem, Project, Warning } from '../types';
 import { estimate } from './calc';
 import { addComposite } from './layout';
-import { defaultComposites } from './seed';
+import { defaultComposites, defaultPartTypes } from './seed';
 import { bottle, mkAssign, mkContent, mkData, mkProject, staffA, withParts } from './testkit';
 import { checkNewAssignment, projectWarnings } from './warnings';
 
@@ -285,13 +285,14 @@ describe('スタッフ配置', () => {
 describe('レイアウト', () => {
   const item = (id: string, partTypeId: string, x: number, y: number, extra: Partial<PlacedItem> = {}): PlacedItem => ({ id, partTypeId, x, y, rot: 0, ...extra });
   const withItems = (items: PlacedItem[], patch: Partial<Project> = {}) => { const p = mkProject(patch); return { ...p, layout: { ...p.layout, items } }; };
-  const chairs = (n: number) => Array.from({ length: n }, (_, i) => item(`c${i}`, 'pt-chair', i * 100, 0));
+  // 図面（1440×1130）の中に、重ならないように並べる
+  const chairs = (n: number) => Array.from({ length: n }, (_, i) => item(`c${i}`, 'pt-chair', (i % 14) * 100, Math.floor(i / 14) * 100));
 
   it('保有数：ちょうどは出ない、1 個超えたら警告', () => {
     const d = mkData({ partTypes: withParts({ 'pt-chair': { stockQty: 3 } }) });
     expect(ws(withItems(chairs(3)), d)).toEqual([]);
     expect(ws(withItems(chairs(4)), d)).toEqual([
-      { severity: 'warn', target: 'part:pt-chair', message: '椅子: 配置 4 個が保有数 3 個を超えています（追加手配が必要）。' },
+      { severity: 'warn', target: 'part:pt-chair', message: '椅子（制作席）: 配置 4 個が保有数 3 個を超えています（追加手配が必要）。' },
     ]);
   });
   it('保有数 0 は「管理しない」。何個置いても出ない', () => {
@@ -331,7 +332,7 @@ describe('レイアウト', () => {
   });
   it('重なり：警告文で「どれとどれ」が分かる（番号のないパーツはパーツ名で示す）', () => {
     const out = at(withItems([item('t1', 'pt-table', 0, 0), item('c1', 'pt-chair', 10, 10)]), 'layout:overlap');
-    expect(out[0].message).toBe('パーツが重なっています（1組: T1×椅子）。');
+    expect(out[0].message).toBe('パーツが重なっています（1組: T1×椅子（制作席））。');
   });
   it('重なり：4 組以上あっても警告は 1 件にまとめ、先頭 3 組＋「ほか」', () => {
     const out = at(withItems([0, 1, 2, 3, 4].map((i) => item(`t${i}`, 'pt-table', i * 10, 0))), 'layout:overlap');
@@ -345,11 +346,126 @@ describe('レイアウト', () => {
   });
 });
 
-describe('席数と予定個数の関係（作業ログ D-16：判断待ち）', () => {
-  it('現状：席数（椅子）と予定個数を比べる警告は無い。椅子 0 脚・予定 300 個でも発火しない', () => {
-    const p = mkProject({ contents: [mkContent({ plannedCount: 300 })] });
-    expect(estimate(p, data).seats).toBe(0);
-    expect(ws(p)).toEqual([]);
+describe('制作席の過不足（作業ログ D-16）', () => {
+  const item = (id: string, partTypeId: string, x: number, y: number): PlacedItem => ({ id, partTypeId, x, y, rot: 0 });
+  /** 制作席 work 脚・その他 other 脚を、図面の中に重ならないように並べる */
+  const seats = (work: number, other = 0) => [
+    ...Array.from({ length: work }, (_, i) => item(`w${i}`, 'pt-chair', (i % 14) * 100, Math.floor(i / 14) * 100)),
+    ...Array.from({ length: other }, (_, i) => item(`o${i}`, 'pt-chair-other', (i % 14) * 100, 600 + Math.floor(i / 14) * 100)),
+  ];
+  const proj = (items: PlacedItem[], contents: Project['contents'], patch: Partial<Project> = {}) => {
+    const p = mkProject({ contents, ...patch });
+    return { ...p, layout: { ...p.layout, items } };
+  };
+  const seatWs = (p: Project, d: AppData = data) => at(p, 'layout:seats', d);
+
+  it('上限回転数が空欄なら、席が 1 つも無くても・予定個数がどれだけ多くても警告しない（任意入力）', () => {
+    for (const maxTurns of [undefined, null, 0]) {
+      const p = proj([], [mkContent({ plannedCount: 300, maxTurns })]);
+      expect(estimate(p, data).seats).toBe(0);
+      expect(ws(p)).toEqual([]);
+    }
   });
-  it.todo('席数 × 回転数 × 日数 を上限として予定個数と比べる（D-16 で方式が決まったら実装）');
+  it('境界：必要量（予定個数 ÷ 上限回転数）が 制作席 × 日数 とちょうど同じなら警告しない。1 個でも超えたら警告', () => {
+    // 2 日間・制作席 10 → 20 席・日。上限回転数 4 → 80 個までは足りる
+    expect(seatWs(proj(seats(10), [mkContent({ plannedCount: 80, maxTurns: 4 })]))).toEqual([]);
+    const over = seatWs(proj(seats(10), [mkContent({ plannedCount: 81, maxTurns: 4 })]));
+    expect(over).toEqual([{
+      severity: 'warn', target: 'layout:seats',
+      message: '制作席が足りない計算です：必要 20.3 席・日（Σ 予定個数 ÷ 上限回転数）に対し、制作席 10 席 × 2 日 ＝ 20 席・日。席を増やす・日数を延ばす・予定個数か上限回転数を見直す、のいずれかが必要です。',
+    }]);
+  });
+  it('割り切れない回転数でも、ちょうどの境界で誤って警告しない（100 個 ÷ 3 回 × 3 … のような端数）', () => {
+    // 3 日間・制作席 1 → 3 席・日。上限回転数 3 → 9 個でちょうど
+    const three = { startDate: '2026-12-05', endDate: '2026-12-07', assignments: [mkAssign({ id: 'a1', date: '2026-12-05' }), mkAssign({ id: 'a2', date: '2026-12-06' }), mkAssign({ id: 'a3', date: '2026-12-07' })] };
+    expect(seatWs(proj(seats(1), [mkContent({ plannedCount: 9, maxTurns: 3 })], three))).toEqual([]);
+    expect(seatWs(proj(seats(1), [mkContent({ plannedCount: 10, maxTurns: 3 })], three))).toHaveLength(1);
+    // 0.1 回 × 30 個のような小数でも同じ
+    expect(seatWs(proj(seats(1), [mkContent({ plannedCount: 3, maxTurns: 1.5 })]))).toEqual([]);      // 必要 2 ＝ 1 席 × 2 日
+  });
+  it('数えるのは制作席だけ。その他の椅子（商談席・待合など）は何脚あっても席数に入らない', () => {
+    const c = [mkContent({ plannedCount: 81, maxTurns: 4 })];
+    expect(seatWs(proj(seats(10, 30), c))).toHaveLength(1);
+    expect(seatWs(proj(seats(11, 0), c))).toEqual([]);
+  });
+  it('役割が未設定の椅子（この項目が無かった頃のデータ）は制作席として数える', () => {
+    const d = mkData({ partTypes: defaultPartTypes().map((t) => (t.id === 'pt-chair' ? { ...t, seatRole: undefined } : t)) });
+    const p = proj(seats(10), [mkContent({ plannedCount: 80, maxTurns: 4 })]);
+    expect(estimate(p, d).seats).toBe(10);
+    expect(seatWs(p, d)).toEqual([]);
+  });
+  it('制作席が 0 脚で、上限回転数が入力されていれば警告（その他の椅子だけあっても同じ）', () => {
+    const c = [mkContent({ plannedCount: 10, maxTurns: 4 })];
+    expect(seatWs(proj([], c)).map((w) => w.message)).toEqual(['レイアウトに制作席（椅子）がありません。上限回転数が入力されているコンテンツがあります。']);
+    expect(seatWs(proj(seats(0, 5), c))).toHaveLength(1);
+  });
+  it('複数のコンテンツは同じ制作席を使う前提で、必要量を足し合わせる。上限回転数が空欄のコンテンツは足さない', () => {
+    const two = (n2: number, t2: number | null) => [mkContent({ id: 'pc1', plannedCount: 40, maxTurns: 4 }), mkContent({ id: 'pc2', plannedCount: n2, maxTurns: t2 })];
+    expect(seatWs(proj(seats(10), two(20, 2)))).toEqual([]);            // 40/4 ＋ 20/2 ＝ 20 ＝ 10 席 × 2 日
+    expect(seatWs(proj(seats(10), two(21, 2)))).toHaveLength(1);        // 20.5 ＞ 20
+    expect(seatWs(proj(seats(10), two(9999, null)))).toEqual([]);       // 2 つ目は空欄 → 1 つ目の 10 だけで判定
+  });
+  it('予定個数が 0・マイナスのコンテンツは必要量 0 として扱う（マイナスで他の分を打ち消さない）', () => {
+    const c = [mkContent({ id: 'pc1', plannedCount: 81, maxTurns: 4 }), mkContent({ id: 'pc2', plannedCount: -100, maxTurns: 4 })];
+    expect(seatWs(proj(seats(10), c))).toHaveLength(1);
+  });
+  it('期間が未入力のときは、席の過不足は判定しない（期間の警告だけが出る）', () => {
+    const p = proj(seats(1), [mkContent({ plannedCount: 999, maxTurns: 1 })], { startDate: '', endDate: '', assignments: [] });
+    expect(seatWs(p)).toEqual([]);
+    expect(at(p, 'project:endDate')).toHaveLength(1);
+  });
+  it('上限回転数がマイナスなら、その欄に警告を出す（席数の確認には使わない）', () => {
+    const p = proj(seats(1), [mkContent({ plannedCount: 999, maxTurns: -2 })]);
+    expect(seatWs(p)).toEqual([]);
+    expect(at(p, 'pc:pc1:maxTurns').map((w) => w.message)).toEqual(['上限回転数がマイナスです（席数の確認には使われません）。']);
+  });
+  it('試算の「必要な回転数」は 予定個数の合計 ÷（制作席 × 日数）。制作席か日数が 0 なら出さない', () => {
+    expect(estimate(proj(seats(10), [mkContent({ plannedCount: 75 })]), data).requiredTurns).toBe(3.75);
+    expect(estimate(proj(seats(0, 5), [mkContent({ plannedCount: 75 })]), data).requiredTurns).toBeNull();
+    expect(estimate(proj(seats(10), [mkContent({ plannedCount: 75 })], { startDate: '', endDate: '' }), data).requiredTurns).toBeNull();
+    expect(estimate(proj(seats(10, 4), [mkContent({ plannedCount: 75 })]), data).otherSeats).toBe(4);
+  });
+});
+
+describe('図面の外にあるパーツ（作業ログ D-20）', () => {
+  const item = (id: string, partTypeId: string, x: number, y: number, extra: Partial<PlacedItem> = {}): PlacedItem => ({ id, partTypeId, x, y, rot: 0, ...extra });
+  const withItems = (items: PlacedItem[], size: { width?: number; height?: number } = {}) => { const p = mkProject(); return { ...p, layout: { ...p.layout, ...size, items } }; };
+  const outside = (p: Project, d: AppData = data) => at(p, 'layout:outside', d);
+  // 図面は 1440×1130。テーブルは 150×60、椅子は 40×40
+
+  it('境界：図面の端にぴったり接しているだけなら出ない。1cm でもはみ出したら警告', () => {
+    expect(outside(withItems([item('t', 'pt-table', 1290, 1070)]))).toEqual([]);                 // 右下の角にぴったり
+    expect(outside(withItems([item('t', 'pt-table', 0, 0)]))).toEqual([]);                       // 左上の角にぴったり
+    expect(outside(withItems([item('t', 'pt-table', 1291, 0)]))).toHaveLength(1);                // 右に 1cm
+    expect(outside(withItems([item('t', 'pt-table', 0, 1071)]))).toHaveLength(1);                // 下に 1cm
+    expect(outside(withItems([item('t', 'pt-table', -1, 0)]))).toHaveLength(1);                  // 左に 1cm
+    expect(outside(withItems([item('t', 'pt-table', 0, -1)]))).toHaveLength(1);                  // 上に 1cm
+  });
+  it('向き（90°回転）を反映した寸法で判定する', () => {
+    expect(outside(withItems([item('t', 'pt-table', 1380, 0, { rot: 90 })]))).toEqual([]);       // 縦向きは幅 60 → 1380＋60 ＝ 1440 でぴったり
+    expect(outside(withItems([item('t', 'pt-table', 1380, 0)]))).toHaveLength(1);                // 横向きは幅 150 ではみ出す
+  });
+  it('警告文で、どのパーツか・何個かが分かる（4 個以上は「ほか」）。重なりの警告とは別に出る', () => {
+    const one = outside(withItems([item('t', 'pt-table', 1400, 0), item('c', 'pt-chair', 100, 100)]));
+    expect(one).toEqual([{ severity: 'warn', target: 'layout:outside', message: '図面の外にパーツがあります（1個: T1）。図面サイズを広げるか、パーツを図面の中に動かしてください。' }]);
+    const many = withItems(Array.from({ length: 5 }, (_, i) => item(`c${i}`, 'pt-chair', 1500 + i * 100, 0)));
+    expect(outside(many)[0].message).toBe('図面の外にパーツがあります（5個: 椅子（制作席）、椅子（制作席）、椅子（制作席） ほか）。図面サイズを広げるか、パーツを図面の中に動かしてください。');
+    expect(ws(many).map((w) => w.target)).toEqual(['layout:outside']);
+  });
+  it('図面サイズを小さくした結果はみ出した場合も出る（パーツは自動では動かさない）', () => {
+    const items = [item('t', 'pt-table', 1000, 500)];
+    expect(outside(withItems(items))).toEqual([]);
+    const shrunk = withItems(items, { width: 1100 });
+    expect(outside(shrunk)).toHaveLength(1);
+    expect(shrunk.layout.items).toEqual(items);
+  });
+  it('パーツマスタの寸法を大きくした結果はみ出した場合も出る', () => {
+    const p = withItems([item('t', 'pt-table', 1290, 0)]);
+    expect(outside(p)).toEqual([]);
+    expect(outside(p, mkData({ partTypes: withParts({ 'pt-table': { widthCm: 180 } }) }))).toHaveLength(1);
+  });
+  it('マスタから削除された種別のパーツも対象（仮の寸法 60×60 で判定）', () => {
+    expect(outside(withItems([item('g', 'gone', 1381, 0)]))).toHaveLength(1);
+    expect(outside(withItems([item('g', 'gone', 1380, 0)]))).toEqual([]);
+  });
 });

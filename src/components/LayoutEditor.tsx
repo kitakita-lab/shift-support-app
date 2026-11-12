@@ -1,11 +1,15 @@
 // ブースレイアウトエディタ。
 // - 左の表の ［−］［＋］ で定型パーツを増減（個数はそのまま試算に連動）
 // - 置いたパーツ／周辺環境はドラッグで位置調整。矢印キーで微調整、Delete で削除、Ctrl+Z で元に戻す
+//   （Delete は選択枠のとおりに消す＝グループを選んでいればグループごと。1 台だけ消すのは左の「削除」ボタン。作業ログ D-17）
 // - mode='template' は会場マスタの雛形編集用（周辺環境のみ）
+// - 版の表示と PDF 出力は、図の内容の指紋（domain/figure.ts）で決める。出力後に、エディタの外（案件名・会場名・会期・
+//   パーツマスタ）で図が変わった場合は、次の版（未出力）として表示し、次に出力した時点でその版として記録する（作業ログ D-21）
 import { KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { countParts } from '../domain/calc';
+import { FigureContext, SECTION_LABEL, figureModel, figureState, fingerprint, issue, pdfFileName } from '../domain/figure';
 import {
-  addComposite, addEnv, addPart, bumpIfIssued, dragSet, isIssued, itemSize, layoutTitle, markIssued,
+  addComposite, addEnv, addPart, bumpIfIssued, dragSet, itemSize,
   moveEnv, moveItems, nextVersion, removeEnv, removeItems, removeLastPart, rotateItem, undoTo, ungroup, updateItem,
 } from '../domain/layout';
 import { localDate } from '../domain/util';
@@ -35,6 +39,9 @@ interface Props {
   /** タイトルの材料（project モード） */
   projectName?: string;
   venueName?: string;
+  /** 会期（project モード）。図のタイトルの下と、PDF のファイル名に入る */
+  startDate?: string;
+  endDate?: string;
   warnings?: Warning[];
   /** 会場雛形の周辺環境を読み込み直す（project モード） */
   onReloadTemplate?: () => void;
@@ -45,7 +52,7 @@ interface Props {
 type Sel = { type: 'item'; ids: string[]; primary: string } | { type: 'env'; id: string } | null;
 
 export default function LayoutEditor({
-  mode, layout, onChange, partTypes, composites, projectName = '', venueName = '', warnings = [],
+  mode, layout, onChange, partTypes, composites, projectName = '', venueName = '', startDate = '', endDate = '', warnings = [],
   onReloadTemplate, onSaveAsTemplate,
 }: Props) {
   const [layer, setLayer] = useState<'parts' | 'env'>(mode === 'template' ? 'env' : 'parts');
@@ -65,6 +72,16 @@ export default function LayoutEditor({
 
   const shown = draft ?? layout;
   const counts = useMemo(() => countParts(shown), [shown]);
+
+  // ── 図に描く内容と、版の状態 ──
+  // 版の状態は、確定している内容（ドラッグ中の仮の位置ではなく）の指紋で決める
+  const ctx: FigureContext = useMemo(
+    () => ({ mode, projectName, venueName, startDate, endDate }), [mode, projectName, venueName, startDate, endDate],
+  );
+  const committed = useMemo(() => figureModel(layout, partTypes, ctx), [layout, partTypes, ctx]);
+  const model = useMemo(() => (draft ? figureModel(draft, partTypes, ctx) : committed), [draft, committed, partTypes, ctx]);
+  const fp = useMemo(() => fingerprint(committed), [committed]);
+  const state = useMemo(() => figureState(layout, fp), [layout, fp]);
 
   /** 確定した変更。発行済みの版なら次の版へ繰り上げ、Undo 履歴に積む */
   const commit = (next: Layout) => {
@@ -149,25 +166,34 @@ export default function LayoutEditor({
       commit(sel.type === 'item' ? moveItems(layout, sel.ids, dx, dy, partTypes, 0) : moveEnv(layout, sel.id, dx, dy, 0));
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
-      commit(sel.type === 'item' ? removeItems(layout, [sel.primary]) : removeEnv(layout, sel.id));
+      // 選択枠のとおりに消す（グループを選んでいれば、グループごと）
+      commit(sel.type === 'item' ? removeItems(layout, sel.ids) : removeEnv(layout, sel.id));
     }
   };
 
   // ── PDF 出力 ──
-  const title = mode === 'project' ? layoutTitle(projectName, venueName, layout.version) : `${venueName || '会場'} 雛形`;
   const exportPdf = async () => {
     if (!svgRef.current) return;
     setBusy(true);
     setSel(null);
     try {
-      await downloadSvgAsPdf(svgRef.current, `${title.replace(/[\\/:*?"<>|｜\s]+/g, '_')}.pdf`);
-      // 出力した版を「発行済み」にする。以後の編集は自動で次の版（V+1）になる
-      if (mode === 'project') onChange(markIssued(layout, localDate()));
+      await downloadSvgAsPdf(svgRef.current, pdfFileName(ctx, state.version));
+      // 図に表示していた版を、図の内容の指紋つきで「出力済み」にする。以後、図が変われば次の版になる
+      if (mode === 'project') onChange(issue(layout, fp, localDate()));
     } catch (err) {
       alert(err instanceof Error ? err.message : 'PDF 出力に失敗しました');
     } finally {
       setBusy(false);
     }
+  };
+  /** 版の状態の説明（ツールバー） */
+  const versionNote = (): string => {
+    if (state.status === 'issued') return `（出力済み・編集すると V${nextVersion(layout)} になります）`;
+    if (state.status === 'draft') return '（未出力）';
+    const s = state.since!;
+    return s.changed
+      ? `（未出力：V${s.version} の出力後に「${s.changed.map((x) => SECTION_LABEL[x]).join('」「')}」が変わりました）`
+      : `（未出力：V${s.version} は以前の版のアプリで出力したため、次は V${state.version} として出力します）`;
   };
 
   /** 図面サイズの確定（最小 100cm）。空欄は取り消し扱い。値が変わらなければ何もしない（履歴や版を無駄に進めない） */
@@ -220,10 +246,10 @@ export default function LayoutEditor({
         <span className="toolbar__spacer" />
         {mode === 'project' && (
           <>
-            <span className="toolbar__ver">
-              現在の版 <b>V{layout.version}</b>{isIssued(layout) ? '（出力済み・編集すると V' + nextVersion(layout) + ' になります）' : '（未出力）'}
+            <span className="toolbar__ver" data-testid="version-state" data-status={state.status}>
+              現在の版 <b>V{state.version}</b>{versionNote()}
             </span>
-            <button className="primary" onClick={exportPdf} disabled={busy}>{busy ? '出力中…' : `PDF ダウンロード（V${layout.version}）`}</button>
+            <button className="primary" onClick={exportPdf} disabled={busy}>{busy ? '出力中…' : `PDF ダウンロード（V${state.version}）`}</button>
           </>
         )}
       </div>
@@ -288,9 +314,10 @@ export default function LayoutEditor({
                     <div className="panel__btns">
                       <button onClick={() => commit(rotateItem(layout, selItem.id, partTypes))}>⟳ 90°回転</button>
                       {selGroup && <button onClick={() => { commit(ungroup(layout, selGroup.id)); setSel(null); }}>グループ解除</button>}
-                      <button onClick={() => commit(removeItems(layout, [selItem.id]))}>削除</button>
+                      <button onClick={() => commit(removeItems(layout, [selItem.id]))}>{selGroup ? 'この 1 台を削除' : '削除'}</button>
                       {selGroup && <button onClick={() => commit(removeItems(layout, layout.items.filter((i) => i.groupId === selGroup.id).map((i) => i.id)))}>グループごと削除</button>}
                     </div>
+                    {selGroup && <div className="panel__hint">Delete キーは、選択枠のとおりグループごと削除します（Ctrl+Z で戻せます）。</div>}
                   </>
                 ) : <div className="panel__hint">図面上のパーツをクリックすると選択、ドラッグで移動できます。表示名の改行は「｜」。</div>}
               </div>
@@ -339,8 +366,9 @@ export default function LayoutEditor({
             <ul className="warnlist">{layoutWarnings.map((w, i) => <li key={i} className={`warnlist__${w.severity}`}>⚠ {w.message}</li>)}</ul>
           )}
           <LayoutSvg
-            ref={svgRef} layout={shown} partTypes={partTypes} title={title}
-            stamp={mode === 'project' ? `作成日 ${localDate()}` : undefined}
+            ref={svgRef} model={model} version={state.version}
+            // 出力済みで図が変わっていない版は、最初に出力した日を表示する（同じ版の PDF は日付まで同じになる）
+            stamp={mode === 'project' ? `作成日 ${state.status === 'issued' && state.issuedAt ? state.issuedAt : localDate()}` : undefined}
             selectedItemIds={sel?.type === 'item' ? sel.ids : []}
             selectedEnvId={sel?.type === 'env' ? sel.id : null}
             onItemDown={layer === 'parts' ? onItemDown : undefined} onEnvDown={layer === 'env' ? onEnvDown : undefined} onBackgroundDown={() => setSel(null)}

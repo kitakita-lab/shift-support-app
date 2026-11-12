@@ -7,6 +7,7 @@ import {
   addPart, applyTemplate, bumpIfIssued, emptyLayout, isIssued, layoutTitle, markIssued, nextVersion, undoTo, updateItem,
 } from './layout';
 import { defaultPartTypes, duplicateProject, sampleData, sampleTemplate } from './seed';
+import { projectWarnings } from './warnings';
 
 const parts = defaultPartTypes();
 const chair = parts.find((p) => p.id === 'pt-chair')!;
@@ -238,8 +239,26 @@ describe('案件の複製', () => {
     copy.assignments.length = 0;
     expect(src).toEqual(snapshot);
   });
-  it('現状の仕様：スタッフ配置もそのまま複製される（同じ日のままなら双方に掛け持ち警告が出る）。作業ログ D-19 の判断待ち', () => {
+  it('スタッフ配置は引き継がない。コンテンツ・費用・レイアウトは複製される（作業ログ D-19）', () => {
     const src = sampleData().projects[0];
-    expect(duplicateProject(src).assignments.map(({ id: _id, ...a }) => a)).toEqual(src.assignments.map(({ id: _id, ...a }) => a));
+    const copy = duplicateProject(src);
+    expect(src.assignments.length).toBeGreaterThan(0);
+    expect(copy.assignments).toEqual([]);
+    expect(copy.contents).toEqual(src.contents);
+    expect(copy.otherCosts).toEqual(src.otherCosts);
+    expect([copy.fixedRevenue, copy.venueFeeFixed, copy.venueFeePerDay, copy.venueFeeRatePct]).toEqual([src.fixedRevenue, src.venueFeeFixed, src.venueFeePerDay, src.venueFeeRatePct]);
+    expect(copy.layout.items).toEqual(src.layout.items);
+    expect(copy.layout.env).toEqual(src.layout.env);
+    expect([copy.venueId, copy.startDate, copy.endDate]).toEqual([src.venueId, src.startDate, src.endDate]);
+  });
+  it('複製した直後は、元の案件にも複製にも掛け持ちの警告が出ない（配置が無いので重ならない）。複製には「誰も配置されていない日」の参考表示が日数分出る', () => {
+    const d = sampleData();
+    const src = d.projects[1];
+    const copy = duplicateProject(src);
+    const data = { ...d, projects: [...d.projects, copy] };
+    const double = (p: typeof src) => projectWarnings(p, data).filter((w) => w.message.includes('別案件'));
+    expect(double(src)).toEqual([]);
+    expect(double(copy)).toEqual([]);
+    expect(projectWarnings(copy, data).filter((w) => w.target.startsWith('day:'))).toHaveLength(5);
   });
 });

@@ -56,7 +56,13 @@ export interface PartType {
   costUnit: CostUnit;
   /** 保有数。0 は「管理しない」。超過すると警告のみ（禁止しない） */
   stockQty: number;
+  /**
+   * 椅子の役割（区分が「椅子」のときだけ意味がある）。work＝制作席（参加者が座って作る席）／other＝それ以外（商談席・待合など）。
+   * 未設定は work として読む（この項目が無かった頃のデータの席数が、黙って変わらないようにするため）。
+   */
+  seatRole?: SeatRole;
 }
+export type SeatRole = 'work' | 'other';
 
 /** 複数パーツの組み合わせ（L字など）。置くと1グループとして扱う */
 export interface CompositeMember {
@@ -125,6 +131,12 @@ export interface LayoutGroup {
 export interface IssuedVersion {
   version: number;
   issuedAt: string;
+  /**
+   * 出力したときの「図に描かれる内容」の指紋（区分ごと。domain/figure.ts）。
+   * いまの図の指紋と比べて、出力後に図が変わったかどうか・何が変わったかを判定する。
+   * この項目が無い記録は、指紋を記録する前の版（Version 2 まで）で出力したもの。
+   */
+  fp?: Record<string, string>;
 }
 
 export interface Layout {
@@ -168,6 +180,10 @@ export interface ProjectContent {
   priceOverride: number | null;
   /** 材料の予備率（%）。材料費 = 個数 × (1+予備率) × 1個原価 */
   sparePct: number;
+  /**
+   * 上限回転数（制作席 1 席が 1 日に受けられる回数）。任意。空欄（null・未設定・0 以下）なら、席数の過不足を警告しない。
+   */
+  maxTurns?: number | null;
 }
 
 export interface Assignment {

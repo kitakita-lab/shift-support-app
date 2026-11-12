@@ -122,6 +122,11 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
       placeholder: (c) => String(data.contents.find((x) => x.id === c.contentId)?.price ?? ''),
     },
     { key: 'sparePct', title: '予備率(%)', width: 80, type: 'number', get: (c) => c.sparePct, set: (c, v) => ({ ...c, sparePct: n0(v) }) },
+    {
+      // 任意。入力すると、制作席が足りない計算のときに警告する（空欄なら警告しない）
+      key: 'maxTurns', title: '上限回転数(回/席・日)', width: 150, type: 'number', get: (c) => c.maxTurns ?? null, set: (c, v) => ({ ...c, maxTurns: nNull(v) }),
+      placeholder: () => '任意', warn: (c) => wOf(`pc:${c.id}:maxTurns`) ?? (num(c.maxTurns) > 0 ? wOf('layout:seats') : undefined),
+    },
     { key: 'unit', title: '材料原価/個', width: 100, type: 'readonly', align: 'right', get: (c) => yen(unitMaterialCost(data.contents.find((x) => x.id === c.contentId))) },
     { key: 'mat', title: '材料費', width: 100, type: 'readonly', align: 'right', get: (c) => yen(lineOf(c)?.materialCost ?? 0) },
     { key: 'rev', title: '参加費売上', width: 100, type: 'readonly', align: 'right', get: (c) => yen(lineOf(c)?.revenue ?? 0) },
@@ -257,7 +262,7 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
         {sheet === 'layout' && (
           <LayoutEditor
             mode="project" layout={p.layout} partTypes={data.partTypes} composites={data.composites}
-            projectName={p.name} venueName={venue?.name ?? ''} warnings={warnings}
+            projectName={p.name} venueName={venue?.name ?? ''} startDate={p.startDate} endDate={p.endDate} warnings={warnings}
             onChange={(layout) => onChange((x) => ({ ...x, layout }))}
             onReloadTemplate={venue ? () => {
               if (!window.confirm(`周辺環境を会場「${venue.name}」の雛形で置き換えます（配置済みパーツは残ります）。よろしいですか？`)) return;
@@ -296,9 +301,12 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
                 <tr><th className="grid__rownum">11</th><td className="is-ro"><div className="grid__ro">利益率</div></td>
                   <td className="is-ro"><div className="grid__ro num">{est.marginPct == null ? '—' : `${est.marginPct.toFixed(1)}%`}</div></td>
                   <td className="is-ro"><div className="grid__ro formula">利益 ÷ 売上 計</div></td></tr>
-                <tr><th className="grid__rownum">12</th><td className="is-ro"><div className="grid__ro">参考: 総労働時間／席数（椅子の数）</div></td>
-                  <td className="is-ro"><div className="grid__ro num">{est.totalHours.toFixed(1)}h／{est.seats}席</div></td>
-                  <td className="is-ro"><div className="grid__ro formula">席数はレイアウトの椅子カテゴリの個数</div></td></tr>
+                <tr><th className="grid__rownum">12</th><td className="is-ro"><div className="grid__ro">参考: 総労働時間／制作席／その他の椅子</div></td>
+                  <td className="is-ro"><div className="grid__ro num" data-testid="est-seats">{est.totalHours.toFixed(1)}h／制作席 {est.seats}席／その他 {est.otherSeats}脚</div></td>
+                  <td className="is-ro"><div className="grid__ro formula">制作席＝レイアウトの椅子のうち、役割が「制作席」のもの（役割はパーツ画面で設定）</div></td></tr>
+                <tr><th className="grid__rownum">13</th><td className="is-ro"><div className="grid__ro">参考: 必要な回転数（制作席 1 席・1 日あたり）</div></td>
+                  <td className={wOf('layout:seats') ? 'is-warn' : 'is-ro'} title={wOf('layout:seats')}><div className="grid__ro num" data-testid="est-turns">{est.requiredTurns == null ? '—' : `${est.requiredTurns.toFixed(1)}回`}</div></td>
+                  <td className="is-ro"><div className="grid__ro formula">Σ 予定個数 ÷（制作席 × {est.days}日）。実施コンテンツに「上限回転数」を入力すると、席が足りない計算のときに警告します</div></td></tr>
               </tbody>
             </table>
 
