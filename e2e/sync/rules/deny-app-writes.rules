@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// ★ テスト専用（実環境では使わない）。書き込みが権限不足で拒否される状況を作る:
+//   スタッフと案件の置き場所に書けない（読むことはできる）。それ以外は現在のルールと同じ。
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /teams/intention-dev/{coll}/{docId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && !(coll in ['wsStaff', 'wsProjects']);
+    }
+  }
+}

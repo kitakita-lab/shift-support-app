@@ -37,7 +37,8 @@ export default function App() {
   const signedIn = store.canShare;
   const onShared = space === 'shared';
   // 名簿を扱えるのは、管理者と、メンバー制がまだ適用されていない間（準備のため）のログイン中の人
-  const canManageMembers = signedIn && shared.phase !== 'off' && shared.phase !== 'checking' && (shared.role === 'owner' || shared.role === 'open' || (!shared.enforced && shared.role !== 'none'));
+  const canManageMembers = signedIn && !['off', 'checking', 'unregistered', 'error'].includes(shared.phase)
+    && (shared.role === 'owner' || shared.role === 'open' || (!shared.enforced && shared.role !== 'none'));
   const tabs = canManageMembers ? [...TABS, { id: 'members' as Tab, label: 'メンバー' }] : TABS;
 
   // 置き場所を切り替えたら、開いている案件を閉じる（別の入れ物の案件なので）

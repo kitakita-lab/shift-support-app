@@ -202,14 +202,20 @@ export function endMigration(fields: Body): Promise<void> {
   return withTimeout(updateDoc(dref(META_COLL, META_DOC), forUpdate(fields)), 30000);
 }
 
-/** まとめて書き込み、サーバーが受け付けるまで待つ（移行用）。1 回に送る量を抑えて分割する */
+/**
+ * まとめて書き込み、サーバーが受け付けるまで待つ（移行用）。
+ * 置き場所（コレクション）ごとに区切り、さらに 1 回に送る量を抑えて分割する。
+ * 途中の 1 回が拒否されたら、そこで止まって例外を投げる（それより前に送った分は書かれたまま残る。
+ * やり直せば同じ場所に上書きされるだけなので、重複しない）。
+ */
 export async function writeAllServer(docs: PlannedDoc[], onProgress?: (done: number, total: number) => void): Promise<void> {
   const MAX_DOCS = 100, MAX_BYTES = 1_500_000;
   let i = 0;
   while (i < docs.length) {
     const batch = writeBatch(db());
+    const coll = docs[i].coll;
     let n = 0, bytes = 0;
-    while (i < docs.length && n < MAX_DOCS) {
+    while (i < docs.length && n < MAX_DOCS && docs[i].coll === coll) {
       const size = JSON.stringify(docs[i].body).length * 2;
       if (n > 0 && bytes + size > MAX_BYTES) break;
       batch.set(dref(docs[i].coll, docs[i].id), docs[i].body);

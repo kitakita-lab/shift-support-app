@@ -178,7 +178,12 @@ export class SharedSession {
   private docs = new Map<string, DocState>();
   private items = new WeakMap<Body, unknown>();
   private busy = false;
+  /** 最後に届いた形式の情報（この端末で移行・初期設定を実行している間は画面に反映しないので、覚えておく） */
+  private lastMeta: Body | null = null;
   private lastCheck = 0;
+  private recheckTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 購読の失敗が続いた回数（使える状態になったら 0 に戻す。繰り返すようなら止める） */
+  private listenFailures = 0;
   private ticker: ReturnType<typeof setInterval> | null = null;
   private readonly actor: Actor;
   private readonly email: string;
@@ -205,7 +210,9 @@ export class SharedSession {
     window.addEventListener('focus', this.onFocus);
     window.addEventListener('pagehide', this.onHide);
     document.addEventListener('visibilitychange', this.onVisibility);
-    this.ticker = setInterval(() => this.refreshStatus(), 3000);
+    // 表示（未送信の件数など）の更新と、ほかの画面（タブ）が送る前に閉じられた変更の引き取り
+    let n = 0;
+    this.ticker = setInterval(() => { this.refreshStatus(); if (++n % 4 === 0) void this.adopt(); }, 3000);
     void this.check();
   }
   stop(): void {
@@ -219,6 +226,7 @@ export class SharedSession {
     window.removeEventListener('pagehide', this.onHide);
     document.removeEventListener('visibilitychange', this.onVisibility);
     if (this.ticker) clearInterval(this.ticker);
+    if (this.recheckTimer) clearTimeout(this.recheckTimer);
     for (const ds of this.docs.values()) if (ds.timer) clearTimeout(ds.timer);
   }
   private onOnline = () => {
@@ -285,6 +293,29 @@ export class SharedSession {
     }
   }
 
+  /**
+   * 使っている最中に、登録状況を確かめ直す（名簿が変わった・書き込みが権限不足で拒否された、など）。
+   * 画面はそのままにして、結果が変わったときだけ反映する（確かめ直すたびに画面が切り替わらないようにする）。
+   */
+  async recheck(): Promise<void> {
+    if (this.stopped) return;
+    if (this.view.phase !== 'ready') { await this.check(); return; }
+    const gen = this.gen;
+    this.lastCheck = Date.now();
+    let access: Access;
+    try { access = await withTimeout(checkAccess(this.email), 12000); } catch { return; }   // 確かめられないときは、そのまま
+    if (this.dead(gen)) return;
+    saveAccess(this.user.uid, access);
+    if (access.role === 'none') { await this.check(); return; }                            // 使えなくなった → 未登録の表示へ
+    if (access.role !== this.view.role || access.enforced !== this.view.enforced) this.emit({ role: access.role, enforced: access.enforced });
+  }
+  /** 確かめ直しを予約する（短い間に何度も確かめない） */
+  private scheduleRecheck(): void {
+    if (this.stopped || this.recheckTimer) return;
+    const wait = Math.max(0, 5000 - (Date.now() - this.lastCheck));
+    this.recheckTimer = setTimeout(() => { this.recheckTimer = null; void this.recheck(); }, wait);
+  }
+
   private canAdmin(): boolean { return this.view.role === 'owner' || this.view.role === 'open'; }
 
   private async decide(meta: Body | null, gen: number): Promise<void> {
@@ -316,6 +347,7 @@ export class SharedSession {
   }
 
   private onMeta(body: Body | null): void {
+    this.lastMeta = body;
     if (this.stopped || this.busy) return;
     const p = this.view.phase;
     if (body && Number(body.formatVersion) > FORMAT_VERSION) {
@@ -354,10 +386,18 @@ export class SharedSession {
     this.composed = {};
   }
   private onListenError(code: string): void {
-    if (this.stopped) return;
-    // 読む権限が無くなった（名簿から外された・ルールが変わった）など。状態を確かめ直す
-    if (Date.now() - this.lastCheck > 5000) void this.check();
-    else { this.detach(); this.emit({ phase: 'error', error: `共有データを読み込めませんでした（${reason(code)}）。` }); }
+    if (this.stopped || !this.attached) return;
+    // 読む権限が無くなった（名簿から外された・ルールが変わった）など。購読は止まっているので、状態を確かめ直す
+    this.detach();
+    this.listenFailures += 1;
+    if (this.listenFailures > 3) {
+      this.emit({ phase: 'error', error: `共有データを読み込めませんでした（${reason(code)}）。` });
+      return;
+    }
+    this.emit({ phase: 'checking' });
+    const wait = Math.max(0, 5000 - (Date.now() - this.lastCheck));
+    if (this.recheckTimer) clearTimeout(this.recheckTimer);
+    this.recheckTimer = setTimeout(() => { this.recheckTimer = null; void this.check(); }, wait);
   }
   private onDocs(coll: string, changes: DocChange[], info: SnapInfo): void {
     if (this.stopped || !this.attached) return;
@@ -378,6 +418,7 @@ export class SharedSession {
     this.dirty.add(coll);
     if (this.view.phase !== 'ready' && COLLS.every((c) => this.first[c.coll])) {
       for (const c of COLLS) this.dirty.add(c.coll);
+      this.listenFailures = 0;
       this.view = { ...this.view, phase: 'ready', error: '', job: '' };
       this.rebuild(true);
       void this.adopt();
@@ -557,9 +598,7 @@ export class SharedSession {
     this.gc(key);
     this.dirty.add(coll);
     this.rebuild();
-    if (code === 'permission-denied' || code === 'unauthenticated') {
-      if (Date.now() - this.lastCheck > 5000) void this.check();
-    }
+    if (code === 'permission-denied' || code === 'unauthenticated') this.scheduleRecheck();
   }
   /** 共有に反映できなかった変更を、利用者に知らせる（案件は控えを残す） */
   private report(coll: string, lost: Inflight & { code: string }, partly: boolean): void {
@@ -727,7 +766,7 @@ export class SharedSession {
       this.attach();
     } catch (e) {
       this.busy = false;
-      this.emit({ job: '', error: `共有データを用意できませんでした（${reason(errorCode(e))}）。` });
+      this.emit({ job: '', meta: this.lastMeta, error: `共有データを用意できませんでした（${reason(errorCode(e))}）。` });
     }
   }
 
@@ -773,7 +812,7 @@ export class SharedSession {
         if (!report.ok) {
           await endMigration({ status: 'failed', error: '照合で一致しないデータがありました', report: record, failedAt: Date.now() });
           this.busy = false;
-          if (gen === this.gen) this.emit({ phase: 'needs-migration', job: '', report, error: '保存した内容が移行元と一致しなかったため、移行を完了していません。以前の形式のデータは変わっていません。' });
+          if (gen === this.gen) this.emit({ phase: 'needs-migration', job: '', report, meta: this.lastMeta, error: '保存した内容が移行元と一致しなかったため、移行を完了していません。以前の形式のデータは変わっていません。' });
           return;
         }
         await endMigration({ status: 'done', finishedAt: Date.now(), finishedBy: this.actor, report: record });
@@ -781,13 +820,13 @@ export class SharedSession {
       }
       this.busy = false;
       if (gen !== this.gen) return;
-      this.emit({ job: '共有データを読み込んでいます…', meta: await readMetaServer().catch(() => this.view.meta) });
+      this.emit({ job: '共有データを読み込んでいます…', meta: await readMetaServer().catch(() => this.lastMeta) });
       this.attach();
     } catch (e) {
       const why = reason(errorCode(e));
       if (begun) { try { await endMigration({ status: 'failed', error: why, failedAt: Date.now() }); } catch { /* 記録できなくても、印が付かないので未完了のまま */ } }
       this.busy = false;
-      if (gen === this.gen) this.emit({ phase: 'needs-migration', job: '', error: `移行を完了できませんでした（${why}）。以前の形式のデータは変わっていません。「やり直す」で、最初から安全にやり直せます。` });
+      if (gen === this.gen) this.emit({ phase: 'needs-migration', job: '', meta: this.lastMeta, error: `移行を完了できませんでした（${why}）。以前の形式のデータは変わっていません。「やり直す」で、最初から安全にやり直せます。` });
     }
   }
 
@@ -806,7 +845,7 @@ export class SharedSession {
     } catch (e) {
       return `名簿を変更できませんでした（${reason(errorCode(e))}）。`;
     }
-    if (email === this.email) void this.check();
+    if (email === this.email) void this.recheck();
     return '';
   }
   async removeMember(email: string, current: Member[]): Promise<string> {
@@ -819,7 +858,7 @@ export class SharedSession {
     } catch (e) {
       return `名簿を変更できませんでした（${reason(errorCode(e))}）。`;
     }
-    if (email === this.email) void this.check();
+    if (email === this.email) void this.recheck();
     return '';
   }
 }

@@ -1,7 +1,8 @@
 // 同期テスト（複数端末）の共通部品。ローカルの Firebase エミュレータ（架空のプロジェクト demo-kkl）だけを相手にする。
 // 実際の Firebase プロジェクトには一切つながない。
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { ROOT, loadPlaywright } from '../playwright.mjs';
 
@@ -20,6 +21,20 @@ export function eq(actual, expected, label) {
   if (a !== e) throw new Error(`${label}: 期待 ${e} ／ 実際 ${a}`);
 }
 export function ok(cond, label) { if (!cond) throw new Error(label); }
+/** キーの順序によらない比較用の文字列 */
+export function canon(v) {
+  if (v === null || v === undefined || typeof v !== 'object') return JSON.stringify(v ?? null);
+  if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
+  return `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}`;
+}
+/** 内容が同じこと（キーの順序は問わない）。違う場合は、最初に違いが出たあたりを示す */
+export function same(actual, expected, label) {
+  const a = canon(actual), e = canon(expected);
+  if (a === e) return;
+  let i = 0;
+  while (i < a.length && a[i] === e[i]) i += 1;
+  throw new Error(`${label}: 内容が違います（${i} 文字目付近）期待 …${e.slice(Math.max(0, i - 60), i + 80)}… ／ 実際 …${a.slice(Math.max(0, i - 60), i + 80)}…`);
+}
 /** 条件が満たされるまで待つ（既定 6 秒）。最後の値を返す */
 export async function until(fn, pred = (v) => !!v, timeout = 6000) {
   const t0 = Date.now();
@@ -78,6 +93,17 @@ export const admin = {
     } while (token);
     return out;
   },
+  /** コレクションの全ドキュメントを、名前と中身に分けて返す（中身に id という項目があっても混ざらない）。名前順 */
+  async docs(collPath) {
+    const out = [];
+    let token = '';
+    do {
+      const r = await (await fetch(`${DOCS}/${collPath}?pageSize=300${token ? `&pageToken=${token}` : ''}`, { headers: ADMIN })).json();
+      for (const d of r.documents ?? []) out.push({ id: d.name.split('/').pop(), body: fromValue({ mapValue: { fields: d.fields ?? {} } }) });
+      token = r.nextPageToken ?? '';
+    } while (token);
+    return out.sort((a, b) => a.id.localeCompare(b.id));
+  },
   async set(docPath, obj) {
     const r = await fetch(`${DOCS}/${docPath}`, { method: 'PATCH', headers: ADMIN, body: JSON.stringify({ fields: toValue(obj).mapValue.fields }) });
     if (!r.ok) throw new Error(`書き込めません（${docPath}）: ${await r.text()}`);
@@ -85,6 +111,18 @@ export const admin = {
   async delete(docPath) { await fetch(`${DOCS}/${docPath}`, { method: 'DELETE', headers: ADMIN }); },
 };
 const T = `teams/${TEAM}`;
+export const LEGACY_COLLS = ['workshopData', 'workshopProjects'];
+export const V3_COLLS = ['wsStaff', 'wsVenues', 'wsContents', 'wsPartTypes', 'wsComposites', 'wsProjects', 'wsMeta', 'wsBackups'];
+/** 指定した置き場所の全ドキュメントを、そのままの形で読む（「1 件も変わっていない」ことの比較に使う） */
+export async function rawAll(colls) {
+  const out = {};
+  for (const c of colls) out[c] = await admin.docs(`${T}/${c}`);
+  return out;
+}
+/** メンバー名簿を置く（管理者権限。ルールは通らない） */
+export async function roster(members) {
+  for (const [email, role] of Object.entries(members)) await admin.set(`${T}/members/${email}`, { role, addedAt: 1, addedBy: 'test' });
+}
 
 /**
  * サーバー上の共有データを、形式によらず同じ形で読む。
@@ -112,9 +150,9 @@ export const names = (xs) => xs.map((x) => x.name).sort();
 
 // ── アプリの起動 ────────────────────────────────────────────
 /** 開発サーバーを起動する（接続先はエミュレータ） */
-export async function startApp({ cwd = ROOT, port, env = {} } = {}) {
+export async function startApp({ cwd = ROOT, port, env = {}, args = [] } = {}) {
   const p = port ?? 5300 + Math.floor(Math.random() * 400);
-  const child = spawn(process.execPath, [path.join(cwd, 'node_modules/vite/bin/vite.js'), '--port', String(p), '--strictPort', '--host', '127.0.0.1'], {
+  const child = spawn(process.execPath, [path.join(cwd, 'node_modules/vite/bin/vite.js'), '--port', String(p), '--strictPort', '--host', '127.0.0.1', ...args], {
     cwd, stdio: 'ignore',
     env: { ...process.env, VITE_FIREBASE_API_KEY: 'demo-key', VITE_FIREBASE_PROJECT_ID: PROJECT, VITE_FIREBASE_EMULATOR: '1', ...env },
   });
@@ -125,6 +163,54 @@ export async function startApp({ cwd = ROOT, port, env = {} } = {}) {
   }
   child.kill();
   throw new Error(`開発サーバーを起動できませんでした（${cwd}）`);
+}
+
+// ── 古いアプリ（Version 2）─────────────────────────────────────
+// 実際の Version 2 のコード（PR #85 の時点）を一時フォルダに取り出し、接続先だけをエミュレータに向けて起動する。
+const V2_COMMIT = '9daa441199ff493bc3cd048b074c24c02bb9e777';
+let _legacy;
+export async function legacyApp() {
+  if (_legacy) return _legacy;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kkl-v2-client-'));
+  const tar = spawnSync('git', ['archive', '--format=tar', V2_COMMIT], { cwd: ROOT, maxBuffer: 1 << 28 });
+  if (tar.status !== 0) throw new Error(`Version 2 のコード（${V2_COMMIT.slice(0, 7)}）を取り出せません。git fetch origin claude/focused-brahmagupta-np0iry を実行してください`);
+  if (spawnSync('tar', ['-x', '-C', dir], { input: tar.stdout }).status !== 0) throw new Error('Version 2 のコードを展開できません');
+  fs.copyFileSync(path.join(ROOT, 'e2e/sync/legacy-client/firebase.ts'), path.join(dir, 'src/firebase.ts'));
+  fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
+  // 依存の下ごしらえ（キャッシュ）を、本体の開発サーバーと取り合わないように分ける
+  fs.writeFileSync(path.join(dir, 'vite.legacy.config.ts'), "import { mergeConfig } from 'vite';\nimport base from './vite.config';\nexport default mergeConfig(base, { cacheDir: './.vite-legacy' });\n");
+  const app = await startApp({ cwd: dir, args: ['--config', 'vite.legacy.config.ts'] });
+  _legacy = { ...app, dir, stop: () => { app.stop(); fs.rmSync(dir, { recursive: true, force: true }); _legacy = undefined; } };
+  return _legacy;
+}
+export function stopLegacyApp() { _legacy?.stop(); }
+
+let _legacyDocs;
+/**
+ * 以前の形式（V1・V2）の共有データを用意する。
+ * 初回は、実際の Version 2 のアプリを操作して作る（サンプル読込＋スタッフ 1 人＋案件 1 件）。2 回目以降は、その写しをそのまま置く。
+ * rules: この確認項目で使うルール（初回は、V2 が書けるように現在のルールへ一時的に切り替える）
+ */
+export async function seedLegacy(mk, rules = 'firestore.rules') {
+  if (!_legacyDocs) {
+    await admin.loadRules('firestore.rules');
+    const app = await legacyApp();
+    const L = await mk('V2', app.url);
+    const l = await L.open();
+    await signIn(l, 'owner@example.com');
+    await loadSample(l);
+    await addStaff(l, '追加スタッフ', 1234);
+    await createProject(l, '追加の案件');
+    const done = await until(() => server('legacy'), (s) => s.projects.length === 3 && s.staff.length === 4 && s.staff.some((x) => x.hourlyRate === 1234) && s.projects.some((p) => p.name === '追加の案件'), 12000);
+    ok(done.projects.length === 3 && done.staff.length === 4, `Version 2 のアプリで以前の形式のデータを作れませんでした: ${JSON.stringify([names(done.projects), names(done.staff)])}`);
+    await sleep(1500);
+    await L.close();
+    _legacyDocs = await rawAll(LEGACY_COLLS);
+    await admin.loadRules(rules);
+    return _legacyDocs;
+  }
+  for (const c of LEGACY_COLLS) for (const d of _legacyDocs[c]) await admin.set(`${T}/${c}/${d.id}`, d.body);
+  return _legacyDocs;
 }
 
 // ── 端末（ブラウザの独立したコンテキスト 1 つ＝端末 1 台） ────────
@@ -151,6 +237,9 @@ export async function device(url, name = 'device') {
     return page;
   };
   d.offline = (v) => ctx.setOffline(v);
+  // Firestore との通信だけを止める（アプリ自体は開けるが、サーバーにつながらない状態）。新しく張る通信に効く
+  const FS = `${FS_HOST}/**`;
+  d.block = async (v) => { if (v) await ctx.route(FS, (r) => r.abort()); else await ctx.unroute(FS); };
   d.close = () => ctx.close();
   return d;
 }
@@ -175,6 +264,28 @@ export async function signIn(page, email, opts = {}) {
 export async function signOut(page) {
   await page.evaluate(() => window.__kkl.signOut());
   await page.waitForSelector('.auth-user', { state: 'detached' });
+}
+/** 画面の「ログアウト」ボタンを押す（未送信の変更があると確認が出る） */
+export const signOutUi = (page) => page.getByRole('button', { name: 'ログアウト' }).click();
+export const waitShared = (page, timeout = 20000) => page.waitForSelector('[data-testid="space"][data-space="shared"]', { timeout });
+export const waitPhase = (page, phase, timeout = 20000) => page.waitForSelector(`[data-testid="space"][data-phase="${phase}"]`, { timeout });
+export const shownSpace = (page) => page.locator('[data-testid="space"]').getAttribute('data-space');
+/** 端末内（ブラウザの IndexedDB）に Firestore が持っている控えの、ドキュメントの場所の一覧（文字列） */
+export function cachedKeys(page) {
+  return page.evaluate(async () => {
+    const dbs = (await indexedDB.databases()).filter((d) => (d.name ?? '').startsWith('firestore/'));
+    const keys = [];
+    for (const info of dbs) {
+      const db = await new Promise((res, rej) => { const r = indexedDB.open(info.name); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+      for (const name of Array.from(db.objectStoreNames)) {
+        if (!/^remoteDocuments|^documentOverlays|^mutations$|^documentMutations$/.test(name)) continue;
+        const ks = await new Promise((res) => { const q = db.transaction(name).objectStore(name).getAllKeys(); q.onsuccess = () => res(q.result); q.onerror = () => res([]); });
+        keys.push(...ks.map((k) => `${name}:${JSON.stringify(k)}`));
+      }
+      db.close();
+    }
+    return keys.join('\n');
+  });
 }
 /** 表示する置き場所を切り替える（V3 のみ。V2 は置き場所が 1 つなので何もしない） */
 export async function space(page, which) {
@@ -258,4 +369,25 @@ export async function runAll(ctx) {
     console.log(`${skipped ? '－' : detail ? '✗' : '✓'} ${s.id} ${s.title}${detail ? `\n      → ${detail}` : ''}${skipped ? `\n      （${skipped}）` : ''}`);
   }
   return results;
+}
+
+/** 登録した確認項目を実行して、結果のまとめを出す（各ファイルの最後で呼ぶ） */
+export async function runFile(title, cleanup = () => {}) {
+  const app = process.env.APP_URL ? { url: process.env.APP_URL, stop: () => {} } : await startApp();
+  let results = [];
+  try {
+    const probe = await device(app.url, 'probe');
+    const format = await appFormat(await probe.open());
+    await probe.close();
+    console.log(`\n${title}\n対象: ${app.url}（共有データの形式: ${format === 'v3' ? 'Version 3' : 'V1・V2'}）\n`);
+    results = await runAll({ url: app.url, format });
+  } finally {
+    await closeBrowser();
+    app.stop();
+    await cleanup();
+  }
+  const failed = results.filter((r) => !r.ok && !r.skipped);
+  const skipped = results.filter((r) => r.skipped);
+  console.log(`\n${results.length} 項目中 ${results.length - failed.length - skipped.length} 合格／${failed.length} 不合格${skipped.length ? `／${skipped.length} 対象外` : ''}${failed.length ? `（${failed.map((r) => r.id).join(', ')}）` : ''}`);
+  process.exit(failed.length ? 1 : 0);
 }
