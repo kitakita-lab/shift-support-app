@@ -14,7 +14,7 @@ import {
   FORMAT_VERSION, LEGACY_DATA_COLL, LEGACY_PROJECT_COLL, MASTER_KEYS, MEMBER_COLL, META_COLL, META_DOC,
   PROBE_COLL, PROBE_DOC, collPath, docPath,
 } from './paths';
-import { Body, LegacyData, PlannedDoc } from './sharedLogic';
+import { Body, LegacyData, PlannedDoc, isValidMemberEmail, normalizeEmail } from './sharedLogic';
 
 export interface Actor { uid: string; displayName: string }
 type Unsub = () => void;
@@ -136,16 +136,46 @@ export async function listMembers(): Promise<Member[]> {
     }))
     .sort((a, b) => a.addedAt - b.addedAt || a.email.localeCompare(b.email));
 }
-/**
- * 名簿に登録する・役割を変える（email は小文字にそろえたもの）。
- * トランザクションで書く: つながっていなければその場で失敗し、送信待ちに残らない
- * （「失敗」と表示したあとで、後日つながったときに適用される、ということが起きない）。
- */
-export function putMember(email: string, role: 'owner' | 'member', addedBy: string, addedAt = Date.now()): Promise<void> {
-  return withTimeout(runTransaction(db(), async (tx) => { tx.set(dref(MEMBER_COLL, email), { role, addedAt, addedBy }); }), 20000);
+/** 「最後の管理者」を、管理者でなくそうとした */
+export class LastOwnerError extends Error {
+  code = 'last-owner';
+  constructor() { super('last-owner'); }
 }
-export function deleteMember(email: string): Promise<void> {
-  return withTimeout(runTransaction(db(), async (tx) => { tx.delete(dref(MEMBER_COLL, email)); }), 20000);
+/**
+ * 名簿の変更（登録・役割の変更・削除）。next が null なら削除。トランザクションで書く。
+ *   - つながっていなければその場で失敗し、送信待ちに残らない
+ *     （「失敗」と表示したあとで、後日つながったときに適用される、ということが起きない）。
+ *   - 有効な管理者を「管理者でなくする」変更（降格・削除）は、**同じトランザクションの中で**、ほかの有効な管理者（others）が
+ *     いまも管理者であることを共有側から読んで確かめてから書く。画面が持っている一覧では判定しない。
+ *     確かめたドキュメントが書き込みまでに変わると、トランザクションはやり直しになるので、
+ *     2 人の管理者が同時に自分を外しても、後から届いたほうは「管理者がいなくなる」として拒否される（LastOwnerError）。
+ * others は、呼び出し側がサーバーから読み直した名簿のうち、対象以外の有効な管理者のメールアドレス。
+ */
+function changeMember(email: string, next: { role: 'owner' | 'member'; addedAt: number; addedBy: string } | null, others: string[]): Promise<void> {
+  return withTimeout(runTransaction(db(), async (tx) => {
+    const ref = dref(MEMBER_COLL, email);
+    const cur = await tx.get(ref);
+    // 照合に使われる登録（キーが小文字のメールアドレス）の管理者だけが、実際の管理者
+    const wasOwner = cur.exists() && (cur.data() as Body).role === 'owner' && email === normalizeEmail(email) && isValidMemberEmail(email);
+    if (wasOwner && next?.role !== 'owner') {
+      let remains = false;
+      for (const other of others) {
+        if (other === email) continue;
+        const o = await tx.get(dref(MEMBER_COLL, other));
+        if (o.exists() && (o.data() as Body).role === 'owner') { remains = true; break; }
+      }
+      if (!remains) throw new LastOwnerError();
+    }
+    if (next) tx.set(ref, next);
+    else tx.delete(ref);
+  }), 20000);
+}
+/** 名簿に登録する・役割を変える（email は小文字にそろえたもの） */
+export function putMember(email: string, role: 'owner' | 'member', addedBy: string, addedAt: number, others: string[]): Promise<void> {
+  return changeMember(email, { role, addedAt, addedBy }, others);
+}
+export function deleteMember(email: string, others: string[]): Promise<void> {
+  return changeMember(email, null, others);
 }
 
 // ── 形式の情報（wsMeta/state） ────────────────────────────────

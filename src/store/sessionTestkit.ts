@@ -161,6 +161,12 @@ function guarded<T>(attempt: number, fn: () => T): Promise<T> {
     return fn();
   });
 }
+function guardLastOwner(email: string, staysOwner: boolean, others: string[] | undefined): void {
+  if (!others || staysOwner) return;
+  const isOwner = (e: string) => fake.server.get(`${MEMBER_COLL}/${e}`)?.role === 'owner';
+  const effective = email === email.trim().toLowerCase() && /^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email);
+  if (isOwner(email) && effective && !others.some((o) => o !== email && isOwner(o))) throw err('last-owner');
+}
 const collDocs = (coll: string) => [...fake.server].filter(([p]) => p.startsWith(`${coll}/`)).map(([p, body]) => ({ id: p.slice(coll.length + 1), body }));
 
 // ── テストからの操作 ──
@@ -218,9 +224,12 @@ export const remote = {
       email: d.id, role: d.body.role === 'owner' ? ('owner' as const) : ('member' as const), addedAt: Number(d.body.addedAt) || 0, addedBy: String(d.body.addedBy ?? ''),
     }));
   },
-  putMember: (email: string, role: 'owner' | 'member', addedBy: string, addedAt = 1) =>
-    transaction(() => { fake.server.set(`${MEMBER_COLL}/${email}`, { role, addedAt, addedBy }); }),
-  deleteMember: (email: string) => transaction(() => { fake.server.delete(`${MEMBER_COLL}/${email}`); }),
+  // others を渡されたとき（修正後の呼び出し方）は、実物と同じく、共有側のいまの名簿で「最後の管理者」を確かめる。
+  // 渡されないとき（修正前の呼び出し方）は、確かめずに書く
+  putMember: (email: string, role: 'owner' | 'member', addedBy: string, addedAt = 1, others?: string[]) =>
+    transaction(() => { guardLastOwner(email, role === 'owner', others); fake.server.set(`${MEMBER_COLL}/${email}`, { role, addedAt, addedBy }); }),
+  deleteMember: (email: string, others?: string[]) =>
+    transaction(() => { guardLastOwner(email, false, others); fake.server.delete(`${MEMBER_COLL}/${email}`); }),
   initFresh(defaults: PlannedDoc[], source: string, actor: Actor): Promise<'created' | 'exists'> {
     return transaction(() => {
       if (fake.server.has(META)) return 'exists' as const;

@@ -15,7 +15,7 @@ import { AppData, Project } from '../types';
 import { hydrateItem, hydrateProject } from './localData';
 import {
   OutboxEntry, aliveTabs, allEntries, clearOutbox, countOutbox, exclusive, leftovers, otherTabsOpen, putOutbox, removeEntry,
-  removeOutbox, retireOwn,
+  removeOutbox, retireOwn, safeRevs,
 } from './outbox';
 import { BACKUP_COLL, FORMAT_VERSION, MASTER_COLL, MASTER_KEYS, MasterKey, PROJECT_COLL, TEAM_ID } from './paths';
 import {
@@ -192,7 +192,16 @@ const labelOf = (coll: string, item: unknown): string => {
   return `${KIND_LABEL[coll] ?? ''}「${(typeof name === 'string' && name) || '名称未設定'}」`;
 };
 
-interface Inflight { rev: string; kind: 'create' | 'update' | 'delete'; body: Body | null; label: string; at: number }
+interface Inflight {
+  rev: string;
+  kind: 'create' | 'update' | 'delete';
+  /** 送ったあとの中身の全体（拒否されたときの控え用） */
+  body: Body | null;
+  /** この書き込みで送った項目の名前（届いたと確認できたら、「届いたと確認できていない項目」から外す） */
+  keys: string[];
+  label: string;
+  at: number;
+}
 /**
  * 前回（この画面を開く前）から引き取った、送信前だった変更の情報。変更そのものは overlay.adopted にある。
  * これがある間は、そのドキュメントへの変更を送らない（先に、共有側の状態を確かめる）。
@@ -203,10 +212,16 @@ interface Adopted {
   /** 控えに残っていた、変更後の中身。partial なら変えた項目だけ */
   body: Body;
   partial: boolean;
-  /** 一連の変更を始めたときの、共有側の印。null＝共有側に無かった */
+  /** 一連の変更を始めたときの、共有側の印。null＝共有側に無かった（最初に引き取った残りのもの） */
   baseRev: string | null;
-  /** 共有側の印がこのどれかなら、その後だれも触っていない（自分が送った書き込みの印など） */
+  /** 引き取った残りが送信した書き込みの印 */
   revs: string[];
+  /**
+   * 共有側の印がこのどれかなら、引き取った変更を始めてから誰も触っていない。
+   * **引き取った残り自身の履歴だけ**で決める（その上に重ねた今回の編集や、この画面の送信の印は入れない）。
+   * 複数の残りをまとめたときは、すべての残りに共通する印だけにする。
+   */
+  safe: string[];
   /** 送信待ちに渡したことがある（＝端末内の送信待ちから、後で送られた可能性がある） */
   sent: boolean;
   /** 控えが書かれた時刻（複数あれば最も古いもの）／引き取った時刻 */
@@ -645,9 +660,11 @@ export class SharedSession {
       uid: this.user.uid, coll, id,
       kind: kind !== 'delete' && a?.kind === 'create' ? 'create' : kind,
       fields: [...ds.fields], body, ...(partial ? { partial: true } : {}), label: ds.label,
-      // 引き取った変更を抱えている間は、その「誰も触っていないと分かる印」も一緒に残す
+      // 引き取った変更を抱えている間は、引き取った残りの履歴（誰も触っていないと分かる印）だけを残す。
+      // その上に重ねた今回の編集の基準の印は混ぜない（混ぜると、次に引き取る画面が、古い変更まで「安全」と判定してしまう）
       baseRev: a ? a.baseRev : ds.baseRev ?? null,
-      revs: a ? [...a.revs, ...(typeof ds.baseRev === 'string' ? [ds.baseRev] : []), ...ds.revs] : [...ds.revs],
+      revs: a ? [...a.revs] : [...ds.revs],
+      ...(a ? { safe: [...a.safe] } : {}),
       dirty: !!ds.overlay.pending || !!a,
     });
     if (!ok) this.storageFull();
@@ -685,7 +702,7 @@ export class SharedSession {
     for (const k of Object.keys(body)) ds.fields.add(k);
     this.persist(coll, id, ds, 'create');
     this.dirty.add(coll);
-    this.send(coll, id, 'create', rev, body, () => createDoc(coll, id, { ...body, rev, updatedBy: this.actor }));
+    this.send(coll, id, 'create', rev, body, Object.keys(body), () => createDoc(coll, id, { ...body, rev, updatedBy: this.actor }));
   }
   private patch(coll: string, id: string, patch: Body, label: string): void {
     if (Object.keys(patch).length === 0) return;
@@ -713,7 +730,7 @@ export class SharedSession {
     ds.label = label;
     this.persist(coll, id, ds, 'delete');
     this.dirty.add(coll);
-    this.send(coll, id, 'delete', genId(), null, () => removeDoc(coll, id));
+    this.send(coll, id, 'delete', genId(), null, [], () => removeDoc(coll, id));
   }
   /** 待っている変更を送る */
   private issue(coll: string, id: string): void {
@@ -729,11 +746,11 @@ export class SharedSession {
     ds.revs.push(rev);
     this.persist(coll, id, ds, ds.fresh ? 'create' : 'update');
     this.dirty.add(coll);
-    this.send(coll, id, 'update', rev, body, () => patchDoc(coll, id, { ...patch, rev, updatedBy: this.actor }));
+    this.send(coll, id, 'update', rev, body, Object.keys(patch), () => patchDoc(coll, id, { ...patch, rev, updatedBy: this.actor }));
   }
-  private send(coll: string, id: string, kind: Inflight['kind'], rev: string, body: Body | null, fn: () => Promise<void>): void {
+  private send(coll: string, id: string, kind: Inflight['kind'], rev: string, body: Body | null, keys: string[], fn: () => Promise<void>): void {
     const ds = this.ds(coll, id);
-    ds.inflight.push({ rev, kind, body, label: ds.label, at: Date.now() });
+    ds.inflight.push({ rev, kind, body, keys, label: ds.label, at: Date.now() });
     let p: Promise<void>;
     try { p = fn(); } catch (e) { p = Promise.reject(e); }
     p.then(() => this.settled(coll, id, rev, null), (e) => this.settled(coll, id, rev, errorCode(e)));
@@ -762,11 +779,18 @@ export class SharedSession {
       if (f.kind !== 'create' && Date.now() - f.at > LATE_MS) this.noteLate(f.kind === 'delete' ? `${f.label}の削除` : f.label, f.at);
     }
     ds.overlay = o;
+    // 結果が分かった書き込みの項目は、「届いたと確認できていない項目」から外す（あとから同じ項目を変えていれば、残す）。
+    // 届いた項目を残したままにすると、この一連の変更の残りを後で送り直すときに、確認済みの項目まで古い値で送り直してしまう
+    // （その間にほかの人がその項目を変えていたら、巻き戻してしまう）。拒否された項目は、手元からも外したので、送るものが無い
+    const still = (k: string) => (!!o.pending && k in o.pending) || o.issued.some((i) => k in i.patch) || (!!o.adopted && k in o.adopted);
+    for (const k of f.keys) if (!still(k)) ds.fields.delete(k);
     if (ds.inflight.length === 0 && !ds.overlay.pending) {
       // このドキュメントについて、この画面から送るものが無くなった
       if (ds.lost) this.report(coll, ds.lost, code === null);
       ds.lost = null;
       this.finishIfIdle(coll, id, ds);
+    } else if (!code && f.kind !== 'delete' && !ds.overlay.deleted) {
+      this.persist(coll, id, ds, ds.fresh ? 'create' : 'update');     // 一連の変更は続く: 控えを、残っている項目だけに書き直す
     }
     this.gc(key);
     this.dirty.add(coll);
@@ -860,7 +884,9 @@ export class SharedSession {
       body: { ...(prev?.body ?? {}), ...e.body },
       partial: (prev ? prev.partial : true) && !!e.partial,
       baseRev: prev ? prev.baseRev : e.baseRev,
-      revs: [...(prev?.revs ?? []), ...(prev && e.baseRev !== null ? [e.baseRev] : []), ...e.revs],
+      revs: [...(prev?.revs ?? []), ...e.revs],
+      // 複数の残りをまとめるときは、どの残りから見ても「誰も触っていない」と言える印だけを残す
+      safe: prev ? prev.safe.filter((x) => safeRevs(e).includes(x)) : safeRevs(e),
       sent: (prev?.sent ?? false) || e.revs.length > 0,
       at: Math.min(prev?.at ?? e.at, e.at),
       takenAt: prev?.takenAt ?? now,
@@ -933,11 +959,10 @@ export class SharedSession {
       this.gc(key);
       return;
     }
-    // 共有側の印が「変更を始めたときのもの」か「自分が送ったもの」なら、その後だれも触っていない
-    const safe = new Set<string>([...a.revs, ...ds.revs]);
-    if (a.baseRev !== null) safe.add(a.baseRev);
-    if (typeof ds.baseRev === 'string') safe.add(ds.baseRev);
-    if (!safe.has(rev)) { this.leftBehind(coll, id, ds, 'changed', server); return; }
+    // 共有側の印が、引き取った残りの「変更を始めたときのもの」か「その残りが送ったもの」なら、その後だれも触っていない。
+    // 判定に使うのは、引き取った残り自身の履歴だけ。この画面でその上に重ねた編集の基準の印（ds.baseRev）や、
+    // この画面の送信の印（ds.revs）は使わない（それらは「いまの共有側」を基準にしているので、古い残りの裏付けにならない）
+    if (!a.safe.includes(rev)) { this.leftBehind(coll, id, ds, 'changed', server); return; }
     // 引き取った変更を、今回の変更の下に重ねて送る
     const o = ds.overlay;
     ds.overlay = { ...o, adopted: null, pending: { ...patch, ...(o.pending ?? {}) } };
@@ -1189,31 +1214,44 @@ export class SharedSession {
 
   // ── メンバー名簿（管理者用） ──
   listMembers(): Promise<Member[]> { return withTimeout(listMembers(), 15000); }
+  /**
+   * 名簿を変える前に、共有側のいまの名簿を読み直す（画面が表示している一覧は、古くなっていることがある）。
+   * 返すのは、対象の登録と、対象以外の有効な管理者。読めなければ理由（文字列）を返す。
+   */
+  private async freshRoster(email: string): Promise<{ existing: Member | undefined; others: string[] } | string> {
+    try {
+      const fresh = await this.listMembers();
+      return { existing: fresh.find((m) => m.email === email), others: effectiveOwners(fresh).filter((m) => m.email !== email).map((m) => m.email) };
+    } catch (e) {
+      return `名簿を変更できませんでした（いまの名簿を確認できません: ${reason(errorCode(e))}）。`;
+    }
+  }
+  private memberError(e: unknown, what: '変更' | '削除'): string {
+    // 「最後の管理者」の判定は、書き込みと同じトランザクションの中で、共有側のいまの名簿に対して行っている（remote.ts）
+    if (errorCode(e) === 'last-owner') return `管理者が 1 人もいなくなるため、${what}できません（先に別の管理者を登録してください）。`;
+    return `名簿を変更できませんでした（${reason(errorCode(e))}）。`;
+  }
   /** 追加・役割の変更。問題があれば理由を返す（成功なら空文字） */
-  async saveMember(raw: string, role: 'owner' | 'member', current: Member[]): Promise<string> {
+  async saveMember(raw: string, role: 'owner' | 'member'): Promise<string> {
     const email = normalizeEmail(raw);
     if (!isValidMemberEmail(email)) return 'メールアドレスの形式が正しくありません。';
-    const existing = current.find((m) => m.email === email);
-    if (existing && existing.role === 'owner' && role !== 'owner' && effectiveOwners(current).length <= 1) {
-      return '管理者が 1 人もいなくなるため、変更できません（先に別の管理者を登録してください）。';
-    }
+    const roster = await this.freshRoster(email);
+    if (typeof roster === 'string') return roster;
     try {
-      await putMember(email, role, this.email, existing?.addedAt || Date.now());
+      await putMember(email, role, this.email, roster.existing?.addedAt || Date.now(), roster.others);
     } catch (e) {
-      return `名簿を変更できませんでした（${reason(errorCode(e))}）。`;
+      return this.memberError(e, '変更');
     }
     if (email === this.email) void this.recheck();
     return '';
   }
-  async removeMember(email: string, current: Member[]): Promise<string> {
-    const owners = effectiveOwners(current);
-    if (owners.some((x) => x.email === email) && owners.length <= 1) {
-      return '管理者が 1 人もいなくなるため、削除できません（先に別の管理者を登録してください）。';
-    }
+  async removeMember(email: string): Promise<string> {
+    const roster = await this.freshRoster(email);
+    if (typeof roster === 'string') return roster;
     try {
-      await deleteMember(email);
+      await deleteMember(email, roster.others);
     } catch (e) {
-      return `名簿を変更できませんでした（${reason(errorCode(e))}）。`;
+      return this.memberError(e, '削除');
     }
     if (email === this.email) void this.recheck();
     return '';

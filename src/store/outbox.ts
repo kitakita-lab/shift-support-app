@@ -39,6 +39,12 @@ export interface OutboxEntry {
   baseRev: string | null;
   /** この一連の変更で、送信した書き込みの印（送った順） */
   revs: string[];
+  /**
+   * 共有側の印がこのどれかなら「この控えの変更を始めてから、誰も触っていない」と言える印の一覧。
+   * 省略時は baseRev と revs（＝この控え自身の履歴）。前回の残りを引き取って書き直した控えでは、引き取った残りの履歴だけを入れる
+   * （その上に重ねた新しい編集や、別の残りの基準の印を混ぜない。混ぜると、古い変更が「安全」と判定されてしまう）。
+   */
+  safe?: string[];
   /** 最後に送信したあとにも、まだ送っていない変更がある */
   dirty: boolean;
   /** この控えを書いた画面（タブ）の印 */
@@ -99,7 +105,9 @@ function entriesOf(uid: string): OutboxEntry[] {
       try {
         const e = JSON.parse(localStorage.getItem(k) ?? 'null') as OutboxEntry | null;
         if (e && e.coll && e.id && e.sid && Array.isArray(e.fields)) {
-          out.push({ ...e, revs: Array.isArray(e.revs) ? e.revs : [], baseRev: e.baseRev ?? null, dirty: e.dirty !== false });
+          const entry: OutboxEntry = { ...e, revs: Array.isArray(e.revs) ? e.revs : [], baseRev: e.baseRev ?? null, dirty: e.dirty !== false };
+          if (!Array.isArray(e.safe)) delete entry.safe;
+          out.push(entry);
         } else {
           localStorage.removeItem(k);
         }
@@ -107,6 +115,11 @@ function entriesOf(uid: string): OutboxEntry[] {
     }
   } catch { /* localStorage が使えない */ }
   return out.sort((a, b) => a.at - b.at);
+}
+
+/** 共有側の印がこの中にあれば、「この控えの変更を始めてから、誰も触っていない」と言える */
+export function safeRevs(e: OutboxEntry): string[] {
+  return e.safe ?? [...(e.baseRev !== null ? [e.baseRev] : []), ...e.revs];
 }
 
 /** ほかの画面も含めて、控えが残っている件数（ログアウト前の確認に使う） */

@@ -826,6 +826,67 @@ add('A18', '「この端末だけのデータ」の案件を開いたままロ�
   eq(await projectRows(c), localRows, '「この端末だけのデータ」は、そのまま残っていること');
 }, V3);
 
+// Codex のレビュー（PR #86 の 1 回目）P2: 「最後の管理者」の確認は、画面が持っている古い一覧ではなく、共有側のいまの名簿で行う
+add('A19', '2 人の管理者が、それぞれ古い一覧を表示したまま自分をメンバーに下げても、後のほうは止まり、管理者が 1 人残る', async ({ device: mk }) => {
+  await roster({ 'owner1@example.com': 'owner', 'owner2@example.com': 'owner' });
+  const O1 = await mk('O1'), O2 = await mk('O2');
+  const o1 = await O1.open(), o2 = await O2.open();
+  await signIn(o1, 'owner1@example.com');
+  await signIn(o2, 'owner2@example.com');
+  await openMembers(o1);
+  await openMembers(o2);                       // どちらの画面も「管理者 2 人」の一覧を表示している
+  for (const o of [o1, o2]) eq(await until(() => memberRows(o), (r) => r.length === 2), ['owner1@example.com=owner', 'owner2@example.com=owner'], '最初に表示した一覧');
+  await o1.locator('[data-testid="members"] tr[data-email="owner1@example.com"] select').selectOption('member');
+  await until(() => admin.get(`${T}/members/owner1@example.com`), (m) => m?.role === 'member', 15000);
+  // 2 人目は、一覧を読み直さないまま、自分をメンバーに下げようとする
+  eq(await memberRows(o2), ['owner1@example.com=owner', 'owner2@example.com=owner'], '2 人目の画面の一覧（古いまま）');
+  await o2.locator('[data-testid="members"] tr[data-email="owner2@example.com"] select').selectOption('member');
+  ok((await until(() => membersError(o2), (t) => t.includes('1 人もいなくなる'), 15000)).includes('1 人もいなくなる'), `2 人目の表示: 「${await membersError(o2)}」`);
+  await sleep(1500);
+  eq((await admin.get(`${T}/members/owner2@example.com`))?.role, 'owner', 'サーバーの名簿（2 人目は管理者のまま）');
+  eq((await admin.docs(`${T}/members`)).filter((d) => d.body.role === 'owner').length, 1, '管理者が 1 人残っていること');
+}, MEMBER_RULES);
+
+add('A20', '2 人の管理者が、それぞれ古い一覧を表示したまま自分を名簿から外しても、後のほうは止まり、管理者が 1 人残る', async ({ device: mk }) => {
+  await roster({ 'owner1@example.com': 'owner', 'owner2@example.com': 'owner' });
+  const O1 = await mk('O1'), O2 = await mk('O2');
+  const o1 = await O1.open(), o2 = await O2.open();
+  await signIn(o1, 'owner1@example.com');
+  await signIn(o2, 'owner2@example.com');
+  await openMembers(o1);
+  await openMembers(o2);
+  for (const o of [o1, o2]) eq(await until(() => memberRows(o), (r) => r.length === 2), ['owner1@example.com=owner', 'owner2@example.com=owner'], '最初に表示した一覧');
+  await o1.locator('[data-testid="members"] tr[data-email="owner1@example.com"] button').click();   // 自分を外す（確認は OK）
+  await until(() => admin.get(`${T}/members/owner1@example.com`), (m) => m === null, 15000);
+  eq(await memberRows(o2), ['owner1@example.com=owner', 'owner2@example.com=owner'], '2 人目の画面の一覧（古いまま）');
+  await o2.locator('[data-testid="members"] tr[data-email="owner2@example.com"] button').click();
+  ok((await until(() => membersError(o2), (t) => t.includes('1 人もいなくなる'), 15000)).includes('1 人もいなくなる'), `2 人目の表示: 「${await membersError(o2)}」`);
+  await sleep(1500);
+  eq((await admin.get(`${T}/members/owner2@example.com`))?.role, 'owner', 'サーバーの名簿（2 人目は管理者のまま）');
+}, MEMBER_RULES);
+
+add('A21', '2 人の管理者が、まったく同時に自分をメンバーに下げても、通るのは片方だけで、管理者が 1 人残る', async ({ device: mk }) => {
+  await roster({ 'owner1@example.com': 'owner', 'owner2@example.com': 'owner' });
+  const O1 = await mk('O1'), O2 = await mk('O2');
+  const o1 = await O1.open(), o2 = await O2.open();
+  await signIn(o1, 'owner1@example.com');
+  await signIn(o2, 'owner2@example.com');
+  await openMembers(o1);
+  await openMembers(o2);
+  for (const o of [o1, o2]) await until(() => memberRows(o), (r) => r.length === 2);
+  await Promise.all([
+    o1.locator('[data-testid="members"] tr[data-email="owner1@example.com"] select').selectOption('member'),
+    o2.locator('[data-testid="members"] tr[data-email="owner2@example.com"] select').selectOption('member'),
+  ]);
+  // どちらが通るかは決まっていない。確かめるのは「通ったのは片方だけ」「管理者が 1 人残っている」こと
+  const owners = async () => (await admin.docs(`${T}/members`)).filter((d) => d.body.role === 'owner').map((d) => d.id);
+  await until(owners, (xs) => xs.length === 1, 20000);
+  await sleep(3000);
+  eq((await owners()).length, 1, '管理者が 1 人残っていること');
+  const errors = [await membersError(o1), await membersError(o2)].filter((t) => t.includes('1 人もいなくなる'));
+  eq(errors.length, 1, `止められたのは片方だけであること: ${JSON.stringify([await membersError(o1), await membersError(o2)])}`);
+}, MEMBER_RULES);
+
 add('M17', '移行をやり直した・完了させたあとは、古い試行からは 1 件も書けない（完了後のデータを移行前の内容で上書きしない。完了の印も外せない）', async ({ device: mk }) => {
   const A = await mk('A');
   const a = await A.open();

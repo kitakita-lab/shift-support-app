@@ -340,6 +340,144 @@ describe('前回の残り（送る前に画面が閉じられた変更）', () =
   });
 });
 
+// Codex のレビュー（PR #86 の 1 回目）P1 と、同じ種類の抜け:
+// 引き取った古い変更が、あとから重ねた編集や別の残りの「基準の印」で「誰も触っていない」と判定されてはいけない。
+describe('前回の残りを「誰も触っていない」と判定する根拠', () => {
+  const byB = () => setServer(P, 'p1', { ...serverDoc(P, 'p1'), memo: 'B の新しいメモ', rev: 'rB' });
+
+  it('確認が済む前に別の項目を編集しても、ほかの人が変更していたら上書きしない（確認に時間がかかっている間の編集）', async () => {
+    let t = await openTab();
+    await ready(t);
+    t.session.updateProject('p1', memo('A の古いメモ'));
+    t.kill();                                       // 送る前に消えた（控えの基準は r0）
+    byB();                                          // その間に B が保存した
+    fake.readDelay = 3000;                          // サーバーからの読み取りが遅い（確認に時間がかかる）
+    t = await openTab();
+    await ready(t, 30000);
+    await tick(300);                                // 引き取りは済み、共有側の確認はまだ終わっていない
+    expect(project(t, 'p1')?.memo).toBe('A の古いメモ');
+    t.session.updateProject('p1', rename('A が今回付けた名前'));   // この時点の共有側の印は rB
+    await tick(20000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'B の新しいメモ', name: '案件', rev: 'rB' });
+    expect(t.notices).toHaveLength(1);
+    expect(t.notices[0]).toContain('自動では反映していません');
+    expect(t.stashes).toHaveLength(1);
+    expect(t.stashes[0]).toMatchObject({ memo: 'A の古いメモ', name: 'A が今回付けた名前' });   // 反映しなかった変更は、どちらも控えに残る
+    expect(outboxEntries()).toHaveLength(0);
+    expect(view(t).unsent).toBe(0);
+  });
+
+  it('確認が済む前に別の項目を編集しても、ほかの人が変更していたら上書きしない（つながらないまま開き直して編集）', async () => {
+    let t = await openTab();
+    await ready(t);
+    t.session.updateProject('p1', memo('A の古いメモ'));
+    t.kill();
+    byB();
+    setOnline(false);
+    t = await openTab();                            // 端末内の控えには、B の保存後の内容（rB）が入っている
+    await ready(t);
+    await tick(200);
+    t.session.updateProject('p1', rename('A が今回付けた名前'));
+    await tick(1000);
+    setOnline(true);
+    await tick(5000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'B の新しいメモ', name: '案件', rev: 'rB' });
+    expect(t.notices).toHaveLength(1);
+    expect(t.stashes).toHaveLength(1);
+    expect(outboxEntries()).toHaveLength(0);
+  });
+
+  it('引き取った残りに編集を重ねた画面が、送る前にまた閉じられても、次に開いた画面は古い変更を送らない', async () => {
+    let t = await openTab();
+    await ready(t);
+    t.session.updateProject('p1', memo('A の古いメモ'));
+    t.kill();
+    byB();
+    setOnline(false);
+    t = await openTab();
+    await ready(t);
+    await tick(200);
+    t.session.updateProject('p1', rename('A が今回付けた名前'));
+    await tick(100);
+    t.kill();                                       // 残りと今回の編集をまとめた控えを残して、また消えた
+    expect(outboxEntries()).toHaveLength(1);
+    setOnline(true);
+    t = await openTab();
+    await ready(t);
+    await tick(5000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'B の新しいメモ', name: '案件', rev: 'rB' });
+    expect(t.notices).toHaveLength(1);
+    expect(t.stashes).toHaveLength(1);
+    expect(t.stashes[0]).toMatchObject({ memo: 'A の古いメモ', name: 'A が今回付けた名前' });
+    expect(outboxEntries()).toHaveLength(0);
+  });
+
+  it('基準の違う 2 つの残りをまとめて引き取ったとき、新しいほうの基準で、古いほうの変更を送らない', async () => {
+    const x1 = await openTab();
+    const x2 = await openTab();
+    await ready(x1);
+    await ready(x2);
+    x1.session.updateProject('p1', memo('画面 1 の古いメモ'));
+    x1.kill();                                      // 残り 1: 基準は r0
+    byB();
+    await tick(50);                                 // 画面 2 に、B の保存（rB）が届く
+    x2.session.updateProject('p1', rename('画面 2 の名前'));
+    x2.kill();                                      // 残り 2: 基準は rB
+    expect(outboxEntries()).toHaveLength(2);
+    const t = await openTab();
+    await ready(t);
+    await tick(5000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'B の新しいメモ', rev: 'rB' });   // 古いメモで上書きしていない
+    expect(t.notices).toHaveLength(1);
+    expect(t.stashes).toHaveLength(1);
+    expect(t.stashes[0]).toMatchObject({ memo: '画面 1 の古いメモ', name: '画面 2 の名前' });
+    expect(outboxEntries()).toHaveLength(0);
+  });
+
+  it('基準が同じ 2 つの残りは、誰も触っていなければ、まとめて送る', async () => {
+    const x1 = await openTab();
+    const x2 = await openTab();
+    await ready(x1);
+    await ready(x2);
+    x1.session.updateProject('p1', memo('画面 1 のメモ'));
+    x2.session.updateProject('p1', rename('画面 2 の名前'));
+    x1.kill();
+    x2.kill();
+    const t = await openTab();
+    await ready(t);
+    await tick(5000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: '画面 1 のメモ', name: '画面 2 の名前' });
+    expect(t.notices).toEqual([]);
+    expect(outboxEntries()).toHaveLength(0);
+  });
+
+  it('一連の変更のうち、届いたと確認できた項目は、残りを送るときに送り直さない（その後のほかの人の変更を巻き戻さない）', async () => {
+    let t = await openTab();
+    await ready(t);
+    t.session.updateProject('p1', memo('A のメモ'));
+    await tick(720);                                // メモを送信中
+    t.session.updateProject('p1', rename('A の名前'));   // 一連の変更が続く
+    await tick(200);                                // メモは届いた（確認済み）。名前は送信待ち
+    expect(serverDoc(P, 'p1')?.memo).toBe('A のメモ');
+    setServer(P, 'p1', { ...serverDoc(P, 'p1'), memo: 'B が書き直したメモ', rev: 'rB' });   // B がメモを書き直した
+    await tick(520);                                // A の名前を送信中（一連の変更は、まだ続いている）
+    t.session.updateProject('p1', (p) => ({ ...p, status: '確定' }));
+    await tick(100);                                // A の名前が届く（共有側の印は A のものになる）
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'B が書き直したメモ', name: 'A の名前' });
+    t.kill();                                       // 最後の変更（状態）だけが、送る前に残った
+    const left = outboxEntries();
+    expect(left).toHaveLength(1);
+    expect(left[0].fields).not.toContain('memo');   // 届いたと確認できた項目は、控えの「変えた項目」に残さない
+    expect(left[0].fields).not.toContain('name');
+    t = await openTab();
+    await ready(t);
+    await tick(5000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'B が書き直したメモ', name: 'A の名前', status: '確定' });
+    expect(t.notices).toEqual([]);
+    expect(outboxEntries()).toHaveLength(0);
+  });
+});
+
 describe('同じブラウザの 2 つの画面', () => {
   it('片方が保存しても、もう片方の控えを消さない。閉じられた画面の変更は、黙って消えない', async () => {
     const t1 = await openTab();
@@ -665,22 +803,57 @@ describe('メンバー名簿', () => {
     await ready(t);
     for (const m of list) setServer(MEMBER_COLL, m.email, { role: m.role, addedAt: 1, addedBy: 'x' });
     // 有効な管理者は b だけなので、外すことも、メンバーに下げることもできない
-    expect(await t.session.removeMember('b@example.com', list)).toContain('管理者が 1 人もいなくなる');
-    expect(await t.session.saveMember('b@example.com', 'member', list)).toContain('管理者が 1 人もいなくなる');
+    const refuse1 = t.session.removeMember('b@example.com');
+    await tick(500);
+    expect(await refuse1).toContain('管理者が 1 人もいなくなる');
+    const refuse2 = t.session.saveMember('b@example.com', 'member');
+    await tick(500);
+    expect(await refuse2).toContain('管理者が 1 人もいなくなる');
     expect(serverDoc(MEMBER_COLL, 'b@example.com')?.role).toBe('owner');
     // 無効な登録は、外せる
-    const run = t.session.removeMember('Owner@Example.com', list);
+    const run = t.session.removeMember('Owner@Example.com');
     await tick(500);
     expect(await run).toBe('');
     expect(serverDoc(MEMBER_COLL, 'Owner@Example.com')).toBeUndefined();
+  });
+
+  // Codex のレビュー（PR #86 の 1 回目）P2: 「最後の管理者」の確認を、画面が持っている古い一覧ではなく、共有側のいまの名簿で行う
+  it('2 人の管理者が、それぞれ古い一覧のまま自分をメンバーに下げても、後のほうは止める', async () => {
+    const t = await openTab();
+    await ready(t);
+    for (const e of ['a@example.com', 'b@example.com']) setServer(MEMBER_COLL, e, { role: 'owner', addedAt: 1, addedBy: 'x' });
+    const stale = [member('a@example.com', 'owner'), member('b@example.com', 'owner')];   // どちらの画面も、最初に読んだ一覧のまま
+    const save = t.session.saveMember as unknown as (email: string, role: string, current?: unknown) => Promise<string>;
+    const first = save.call(t.session, 'a@example.com', 'member', stale);
+    await tick(1000);
+    expect(await first).toBe('');
+    const second = save.call(t.session, 'b@example.com', 'member', stale);
+    await tick(1000);
+    expect(await second).toContain('管理者が 1 人もいなくなる');
+    expect(serverDoc(MEMBER_COLL, 'b@example.com')?.role).toBe('owner');
+  });
+
+  it('2 人の管理者が、それぞれ古い一覧のまま自分を名簿から外しても、後のほうは止める', async () => {
+    const t = await openTab();
+    await ready(t);
+    for (const e of ['a@example.com', 'b@example.com']) setServer(MEMBER_COLL, e, { role: 'owner', addedAt: 1, addedBy: 'x' });
+    const stale = [member('a@example.com', 'owner'), member('b@example.com', 'owner')];
+    const remove = t.session.removeMember as unknown as (email: string, current?: unknown) => Promise<string>;
+    const first = remove.call(t.session, 'a@example.com', stale);
+    await tick(1000);
+    expect(await first).toBe('');
+    const second = remove.call(t.session, 'b@example.com', stale);
+    await tick(1000);
+    expect(await second).toContain('管理者が 1 人もいなくなる');
+    expect(serverDoc(MEMBER_COLL, 'b@example.com')?.role).toBe('owner');
   });
 
   it('圏外では、名簿の変更はその場で失敗する（送信待ちに残らない）', async () => {
     const t = await openTab();
     await ready(t);
     setOnline(false);
-    const run = t.session.saveMember('new@example.com', 'member', []);
-    await tick(500);
+    const run = t.session.saveMember('new@example.com', 'member');
+    await tick(20000);                              // 名簿の読み直しが時間切れになるまで
     expect(await run).toContain('名簿を変更できませんでした');
     setOnline(true);
     await tick(5000);

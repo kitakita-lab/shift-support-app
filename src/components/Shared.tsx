@@ -231,7 +231,7 @@ export function MembersPanel({ shared, session }: { shared: SharedView; session:
   };
   const add = async () => {
     if (!session || !members) return;
-    if (await run(() => session.saveMember(email, role, members))) { setEmail(''); setRole('member'); }
+    if (await run(() => session.saveMember(email, role))) { setEmail(''); setRole('member'); }
   };
   const list = members ?? [];
   // 実際に管理者として通る登録の数（キーが「小文字のメールアドレス」でない登録は、ルールの照合に一致しない）
@@ -241,7 +241,7 @@ export function MembersPanel({ shared, session }: { shared: SharedView; session:
     if (next === m.role) return;
     if (m.email === shared.email && m.role === 'owner'
       && !window.confirm('自分自身を「管理者」から「メンバー」に変更します。\n変更後は、名簿の変更と、共有データの初期設定・移行ができなくなります（戻すには、ほかの管理者に変更してもらう必要があります）。\n\nよろしいですか？')) return;
-    void run(() => session!.saveMember(m.email, next, list));
+    void run(() => session!.saveMember(m.email, next));
   };
 
   return (
@@ -285,7 +285,7 @@ export function MembersPanel({ shared, session }: { shared: SharedView; session:
                     className="cellbtn" title="名簿から外す" disabled={busy}
                     onClick={() => {
                       const self = m.email === shared.email;
-                      if (window.confirm(`${m.email} を名簿から外します。${self ? '\n\n⚠ 自分自身です。外すと、メンバー制の適用後は共有データを使えなくなります。' : ''}\n\nよろしいですか？`)) void run(() => session!.removeMember(m.email, list));
+                      if (window.confirm(`${m.email} を名簿から外します。${self ? '\n\n⚠ 自分自身です。外すと、メンバー制の適用後は共有データを使えなくなります。' : ''}\n\nよろしいですか？`)) void run(() => session!.removeMember(m.email));
                     }}
                   >×</button>
                 </td>
@@ -312,7 +312,7 @@ export function MembersPanel({ shared, session }: { shared: SharedView; session:
         <p className="panel__hint">メールアドレスは小文字にそろえて登録します。管理者は、名簿の変更と、共有データの初期設定・移行ができます。</p>
         {members && owners === 0 && shared.email && (
           <div className="panel__btns">
-            <button data-testid="member-self-owner" disabled={busy} onClick={() => void run(() => session!.saveMember(shared.email, 'owner', list))}>
+            <button data-testid="member-self-owner" disabled={busy} onClick={() => void run(() => session!.saveMember(shared.email, 'owner'))}>
               自分（{shared.email}）を最初の管理者として登録する
             </button>
           </div>
