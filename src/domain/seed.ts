@@ -1,7 +1,7 @@
 // 初期マスタとサンプルデータ。
 // 注意: ここにある寸法・単価はすべて「仮の値」。実寸・実単価はマスタ画面で必ず上書きすること。
 import {
-  AppData, Composite, Content, EnvElement, Layout, PartType, PlacedItem, Project, Staff, Venue,
+  AppData, Assignment, Composite, Content, EnvElement, Layout, PartType, PlacedItem, Project, Staff, Venue,
 } from '../types';
 import { DEFAULT_CAPTION, emptyLayout } from './layout';
 import { genId } from './util';
@@ -169,6 +169,18 @@ export function newProject(venue?: Venue): Project {
   };
 }
 
+/** 案件の複製。新しい案件として扱い、配置図は V1・未出力から始める */
+export function duplicateProject(p: Project): Project {
+  const copy = structuredClone(p);
+  return {
+    ...copy,
+    id: genId(),
+    name: `${p.name}（コピー）`,
+    status: '計画中',
+    layout: { ...copy.layout, version: 1, issued: [] },
+  };
+}
+
 export function newVenue(): Venue {
   return { id: genId(), name: '', feeFixed: 0, feePerDay: 0, feeRatePct: 0, memo: '', template: emptyLayout() };
 }
@@ -180,15 +192,31 @@ export function emptyData(): AppData {
   };
 }
 
-/** 動作確認用サンプル。金額・人名はすべて架空 */
+/** サンプルのスタッフ配置（10:00〜18:00・休憩 60 分＝実働 7 時間） */
+function sampleAssignment(staff: Staff, date: string): Assignment {
+  return {
+    id: genId(), staffId: staff.id, date, startTime: '10:00', endTime: '18:00', breakMinutes: 60,
+    rateOverride: null, transportOverride: null, memo: '',
+  };
+}
+
+/**
+ * 動作確認用サンプル。案件は 2 件：
+ *   1. ikyu（デモ）12/5〜6（2日間）… 最初からあるデモ
+ *   2. ikyu 11/13〜17（5日間）… ラソラ札幌・フラワーボトルの実案件の土台。読み込めばそのまま配置と試算の検証を始められる
+ * 案件名は図のタイトルと PDF のファイル名の先頭になる。同じ会場で名前も同じだと 2 つの図の見分けがつかないので、デモ側に「（デモ）」を付けてある。
+ * 金額・個数・人員・時間・寸法はすべて「仮置き」で、人名は架空。確定値はマスタと案件の画面で上書きすること。
+ * 読み込み直後の試算の期待値は docs/作業ログ.md と seed.test.ts を参照。
+ */
 export function sampleData(): AppData {
   const staff: Staff[] = [
-    { id: genId(), name: 'スタッフA（サンプル）', hourlyRate: 1200, transportPerDay: 800, memo: '' },
-    { id: genId(), name: 'スタッフB（サンプル）', hourlyRate: 1100, transportPerDay: 600, memo: '' },
-    { id: genId(), name: 'スタッフC（サンプル）', hourlyRate: 1100, transportPerDay: 0, memo: '' },
+    { id: genId(), name: 'スタッフA（サンプル）', hourlyRate: 1200, transportPerDay: 800, memo: '時給・交通費は仮置き' },
+    { id: genId(), name: 'スタッフB（サンプル）', hourlyRate: 1100, transportPerDay: 600, memo: '時給・交通費は仮置き' },
+    { id: genId(), name: 'スタッフC（サンプル）', hourlyRate: 1100, transportPerDay: 0, memo: '時給・交通費は仮置き' },
   ];
+  const [a, b, c] = staff;
   const content: Content = {
-    id: genId(), name: 'フラワーボトル', price: 0, memo: '単価はサンプル値',
+    id: genId(), name: 'フラワーボトル', price: 0, memo: '参加費・材料単価は仮置き（サンプル値）',
     materials: [
       { id: genId(), name: 'ボトル', unitCost: 120, qtyPerUnit: 1 },
       { id: genId(), name: '花材', unitCost: 30, qtyPerUnit: 5 },
@@ -197,26 +225,59 @@ export function sampleData(): AppData {
   };
   const venue: Venue = {
     id: genId(), name: 'ラソラ札幌', feeFixed: 0, feePerDay: 20000, feeRatePct: 0,
-    memo: '雛形は参考配置図を目視でなぞったサンプル。寸法は未確認', template: sampleTemplate(),
+    memo: '会場費は仮置き。雛形は参考配置図を目視でなぞったサンプルで、寸法は未確認', template: sampleTemplate(),
   };
-  const base = newProject(venue);
-  const mk = (s: Staff, date: string) => ({
-    id: genId(), staffId: s.id, date, startTime: '10:00', endTime: '18:00', breakMinutes: 60,
-    rateOverride: null, transportOverride: null, memo: '',
-  });
-  const project: Project = {
-    ...base,
-    name: 'ikyu',
+  // レイアウトと備品費の連動を確かめられるよう、主な什器に仮の単価を入れておく（初期マスタは単価 0 のまま）
+  const sampleCost: Record<string, Pick<PartType, 'unitCost' | 'costUnit'>> = {
+    [T]: { unitCost: 500, costUnit: 'day' },      // テーブル: 500 円/日（仮）
+    [CH]: { unitCost: 100, costUnit: 'day' },     // 椅子: 100 円/日（仮）
+    [REG]: { unitCost: 3000, costUnit: 'event' }, // 登録スペース: 3,000 円/案件（仮）
+  };
+  const partTypes = defaultPartTypes().map((t) => ({ ...t, ...sampleCost[t.id] }));
+
+  const demoBase = newProject(venue);
+  const demo: Project = {
+    ...demoBase,
+    name: 'ikyu（デモ）',
     startDate: '2026-12-05',
     endDate: '2026-12-06',
     fixedRevenue: 150000,
     contents: [{ id: genId(), contentId: content.id, plannedCount: 120, priceOverride: null, sparePct: 10 }],
-    assignments: [mk(staff[0], '2026-12-05'), mk(staff[1], '2026-12-05'), mk(staff[0], '2026-12-06'), mk(staff[2], '2026-12-06')],
+    assignments: [sampleAssignment(a, '2026-12-05'), sampleAssignment(b, '2026-12-05'), sampleAssignment(a, '2026-12-06'), sampleAssignment(c, '2026-12-06')],
     otherCosts: [{ id: genId(), name: '印刷費（POP・バナー）', amount: 12000 }],
-    layout: { ...base.layout, ...sampleItems(), notes: '実寸（ブース・通路幅）\n防災条件（避難経路・消火設備）\n電源の位置' },
+    layout: { ...demoBase.layout, ...sampleItems(), notes: '実寸（ブース・通路幅）\n防災条件（避難経路・消火設備）\n電源の位置' },
   };
+
+  // ── ラソラ札幌 2026-11-13(金)〜17(火)・フラワーボトル（ikyu）の土台。数値はすべて仮置き ──
+  const lasoraBase = newProject(venue);
+  const lasora: Project = {
+    ...lasoraBase,
+    name: 'ikyu',
+    startDate: '2026-11-13',
+    endDate: '2026-11-17',
+    memo: '【仮置き】ラソラ札幌 11/13〜17 の土台。金額・個数・人員・時間・寸法はすべて仮の値。確定値に置き換えて使う',
+    fixedRevenue: 400000,                                    // 受託料（仮）
+    contents: [{ id: genId(), contentId: content.id, plannedCount: 300, priceOverride: null, sparePct: 10 }],   // 60 個/日 × 5 日（仮）
+    // 1 日 2 人（仮）。A: 4 日、B: 3 日、C: 3 日
+    assignments: [
+      sampleAssignment(a, '2026-11-13'), sampleAssignment(b, '2026-11-13'),
+      sampleAssignment(a, '2026-11-14'), sampleAssignment(c, '2026-11-14'),
+      sampleAssignment(b, '2026-11-15'), sampleAssignment(c, '2026-11-15'),
+      sampleAssignment(a, '2026-11-16'), sampleAssignment(b, '2026-11-16'),
+      sampleAssignment(a, '2026-11-17'), sampleAssignment(c, '2026-11-17'),
+    ],
+    otherCosts: [
+      { id: genId(), name: '印刷費（POP・バナー）※仮', amount: 12000 },
+      { id: genId(), name: '運搬・送料 ※仮', amount: 10000 },
+    ],
+    layout: {
+      ...lasoraBase.layout, ...sampleItems(),
+      notes: '什器（テーブル・椅子など）の台数とサイズは仮置き\n実寸（ブース・通路幅）\n防災条件（避難経路・消火設備）\n電源の位置',
+    },
+  };
+
   return {
     staff, venues: [venue], contents: [content],
-    partTypes: defaultPartTypes(), composites: defaultComposites(), projects: [project],
+    partTypes, composites: defaultComposites(), projects: [demo, lasora],
   };
 }
