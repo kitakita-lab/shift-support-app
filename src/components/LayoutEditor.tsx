@@ -6,7 +6,7 @@ import { KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } fro
 import { countParts } from '../domain/calc';
 import {
   addComposite, addEnv, addPart, bumpIfIssued, dragSet, isIssued, itemSize, layoutTitle, markIssued,
-  moveEnv, moveItems, removeEnv, removeItems, removeLastPart, rotateItem, undoTo, ungroup, updateItem,
+  moveEnv, moveItems, nextVersion, removeEnv, removeItems, removeLastPart, rotateItem, undoTo, ungroup, updateItem,
 } from '../domain/layout';
 import { localDate } from '../domain/util';
 import { downloadSvgAsPdf } from '../export/pdf';
@@ -54,7 +54,13 @@ export default function LayoutEditor({
   const [draft, setDraft] = useState<Layout | null>(null);
   const [busy, setBusy] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
-  const drag = useRef<{ cx: number; cy: number; base: Layout; moved: boolean } | null>(null);
+  const drag = useRef<{
+    /** 押した位置（画面上） */
+    cx: number; cy: number;
+    /** 押した位置を図面座標に直したもの・動かす元のレイアウト。どちらも最初に動いた時点で確定する */
+    origin: { x: number; y: number } | null; base: Layout | null;
+    moved: boolean;
+  } | null>(null);
   const history = useRef<Layout[]>([]);
 
   const shown = draft ?? layout;
@@ -83,17 +89,21 @@ export default function LayoutEditor({
   }, [layout, sel]);
 
   // ── ドラッグ ──
-  // 移動量は「画面上で指（マウス）が動いた量」を図面の縮尺で cm に直して求める。
-  // 図の画面上の位置を基準にすると、ドラッグ中に図がずれたとき（狭い画面では、パーツを選んだ瞬間に
-  // 図の上にある「選択中のパーツ」欄が伸びて図が下へ押される）に、その分だけパーツが飛んでしまう。
-  const toCm = (dxPx: number, dyPx: number) => {
+  /** 画面上の点を、いまの図の位置・縮尺で図面座標（cm）に直す */
+  const toSvg = (clientX: number, clientY: number) => {
     const m = svgRef.current?.getScreenCTM();
-    return m && m.a && m.d ? { dx: dxPx / m.a, dy: dyPx / m.d } : { dx: 0, dy: 0 };
+    if (!m) return { x: 0, y: 0 };
+    const p = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
+    return { x: p.x, y: p.y };
   };
   const startDrag = (ev: PointerEvent, s: Sel) => {
     ev.stopPropagation();
     (ev.currentTarget as Element).setPointerCapture?.(ev.pointerId);
-    drag.current = { cx: ev.clientX, cy: ev.clientY, base: layout, moved: false };
+    // ここでは押した位置だけを覚える。図面上の起点と、動かす元のレイアウトは、最初に動いた時点で決める（onMove）。
+    // 押した瞬間に決めてしまうと、押したことで起きる変化を取りこぼす:
+    //   - 狭い画面では、パーツを選ぶと図の上の「選択中のパーツ」欄が伸びて図が下へ押され、その分だけパーツが飛ぶ
+    //   - 図面サイズを打ちかけのまま図を押すと、その入力が確定する前のレイアウトを動かしてしまい、サイズの変更が消える
+    drag.current = { cx: ev.clientX, cy: ev.clientY, origin: null, base: null, moved: false };
     setSel(s);
   };
   const onItemDown = (ev: PointerEvent, id: string) => {
@@ -107,12 +117,17 @@ export default function LayoutEditor({
   const onMove = (ev: PointerEvent) => {
     const d = drag.current;
     if (!d || !sel) return;
-    const { dx, dy } = toCm(ev.clientX - d.cx, ev.clientY - d.cy);
+    // 起点＝「押した位置」を、表示が落ち着いたいまの図の位置で図面座標に直したもの。
+    // 以後は図面座標どうしの差で移動量を出すので、ドラッグ中にページをスクロールしてもパーツはカーソルに付いてくる
+    d.origin ??= toSvg(d.cx, d.cy);
+    const p = toSvg(ev.clientX, ev.clientY);
+    const dx = p.x - d.origin.x, dy = p.y - d.origin.y;
     if (!d.moved && Math.hypot(dx, dy) < 3) return;
-    d.moved = true;
+    if (!d.moved) { d.moved = true; d.base = layout; }
+    const base = d.base ?? layout;
     setDraft(sel.type === 'item'
-      ? moveItems(d.base, sel.ids, dx, dy, partTypes, grid)
-      : moveEnv(d.base, sel.id, dx, dy, grid));
+      ? moveItems(base, sel.ids, dx, dy, partTypes, grid)
+      : moveEnv(base, sel.id, dx, dy, grid));
   };
   const onUp = () => {
     if (drag.current?.moved && draft) commit(draft);
@@ -153,6 +168,13 @@ export default function LayoutEditor({
     } finally {
       setBusy(false);
     }
+  };
+
+  /** 図面サイズの確定（最小 100cm）。空欄は取り消し扱い。値が変わらなければ何もしない（履歴や版を無駄に進めない） */
+  const setSize = (key: 'width' | 'height', v: string) => {
+    if (v.trim() === '') return;
+    const n = Math.max(100, n0(v));
+    if (Number.isFinite(n) && n !== layout[key]) commit({ ...layout, [key]: n });
   };
 
   const selItem = sel?.type === 'item' ? layout.items.find((i) => i.id === sel.primary) : undefined;
@@ -199,7 +221,7 @@ export default function LayoutEditor({
         {mode === 'project' && (
           <>
             <span className="toolbar__ver">
-              現在の版 <b>V{layout.version}</b>{isIssued(layout) ? '（出力済み・編集すると V' + (layout.version + 1) + ' になります）' : '（未出力）'}
+              現在の版 <b>V{layout.version}</b>{isIssued(layout) ? '（出力済み・編集すると V' + nextVersion(layout) + ' になります）' : '（未出力）'}
             </span>
             <button className="primary" onClick={exportPdf} disabled={busy}>{busy ? '出力中…' : `PDF ダウンロード（V${layout.version}）`}</button>
           </>
@@ -279,12 +301,12 @@ export default function LayoutEditor({
               <div className="panel__btns">
                 {ENV_KINDS.map((k) => <button key={k.kind} onClick={() => commit(addEnv(layout, k.kind))}>＋ {k.label}</button>)}
               </div>
-              {/* 1 文字ごとに反映すると途中の値（1→12→120…）で図面が作り直されて打てないため、Enter か欄を離れた時に確定する。最小 100cm */}
+              {/* 1 文字ごとに反映すると途中の値（1→12→120…）で図面が作り直されて打てないため、Enter か欄を離れた時に確定する */}
               <label className="panel__row">図面サイズ(cm) 幅
-                <NumInput value={String(layout.width)} commitOnBlur onValue={(v) => commit({ ...layout, width: Math.max(100, n0(v)) })} />
+                <NumInput value={String(layout.width)} commitOnBlur onValue={(v) => setSize('width', v)} />
               </label>
               <label className="panel__row">図面サイズ(cm) 高さ
-                <NumInput value={String(layout.height)} commitOnBlur onValue={(v) => commit({ ...layout, height: Math.max(100, n0(v)) })} />
+                <NumInput value={String(layout.height)} commitOnBlur onValue={(v) => setSize('height', v)} />
               </label>
               {mode === 'project' && (
                 <div className="panel__btns">

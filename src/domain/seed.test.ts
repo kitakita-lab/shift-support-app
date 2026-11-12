@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { AppData, Project } from '../types';
 import { countParts, estimate } from './calc';
-import { addComposite, addPart, bbox, buildLabels, findOverlaps, isIssued, itemSize, removeLastPart } from './layout';
+import { addComposite, addPart, bbox, buildLabels, findOverlaps, isIssued, itemSize, layoutTitle, removeLastPart } from './layout';
 import { defaultPartTypes, emptyData, sampleData } from './seed';
 import { listDates } from './util';
 import { projectWarnings } from './warnings';
@@ -24,9 +24,14 @@ const summary = (p: Project, d: AppData = data) => {
 describe('サンプルデータ全体', () => {
   it('案件は 2 件：デモ（12/5〜6）と、ラソラ札幌 11/13〜17 の土台', () => {
     expect(data.projects.map((p) => [p.name, venueName(p), p.startDate, p.endDate, contentNames(p)])).toEqual([
-      ['ikyu', 'ラソラ札幌', '2026-12-05', '2026-12-06', ['フラワーボトル']],
+      ['ikyu（デモ）', 'ラソラ札幌', '2026-12-05', '2026-12-06', ['フラワーボトル']],
       ['ikyu', 'ラソラ札幌', '2026-11-13', '2026-11-17', ['フラワーボトル']],
     ]);
+  });
+  it('2 つの案件は図のタイトル（＝PDF のファイル名）が重ならない', () => {
+    const titles = data.projects.map((p) => layoutTitle(p.name, venueName(p) ?? '', p.layout.version));
+    expect(titles).toEqual(['ikyu（デモ）｜ラソラ札幌 イベント配置図 V1', 'ikyu｜ラソラ札幌 イベント配置図 V1']);
+    expect(new Set(titles).size).toBe(titles.length);
   });
   it('どちらの案件も、読み込んだ直後は警告・参考とも 0 件（検証で出た警告はすべて自分の操作が原因だと分かる）', () => {
     for (const p of data.projects) expect(projectWarnings(p, data)).toEqual([]);

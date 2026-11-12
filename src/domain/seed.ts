@@ -202,8 +202,9 @@ function sampleAssignment(staff: Staff, date: string): Assignment {
 
 /**
  * 動作確認用サンプル。案件は 2 件：
- *   1. ikyu 12/5〜6（2日間）… 最初からあるデモ
+ *   1. ikyu（デモ）12/5〜6（2日間）… 最初からあるデモ
  *   2. ikyu 11/13〜17（5日間）… ラソラ札幌・フラワーボトルの実案件の土台。読み込めばそのまま配置と試算の検証を始められる
+ * 案件名は図のタイトルと PDF のファイル名の先頭になる。同じ会場で名前も同じだと 2 つの図の見分けがつかないので、デモ側に「（デモ）」を付けてある。
  * 金額・個数・人員・時間・寸法はすべて「仮置き」で、人名は架空。確定値はマスタと案件の画面で上書きすること。
  * 読み込み直後の試算の期待値は docs/作業ログ.md と seed.test.ts を参照。
  */
@@ -237,7 +238,7 @@ export function sampleData(): AppData {
   const demoBase = newProject(venue);
   const demo: Project = {
     ...demoBase,
-    name: 'ikyu',
+    name: 'ikyu（デモ）',
     startDate: '2026-12-05',
     endDate: '2026-12-06',
     fixedRevenue: 150000,

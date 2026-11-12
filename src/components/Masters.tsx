@@ -67,7 +67,9 @@ export function VenueMaster({ data, setMaster }: Props) {
       {venue && (
         <>
           <h3>雛形の編集：{venue.name || '（名称未設定）'}<small>ここでの変更は、今後この会場で新しく作る案件に反映されます（既存案件は変わりません）</small></h3>
+          {/* key を会場ごとに変える: 「元に戻す」の履歴を会場をまたいで持ち越さない（別の会場の雛形で上書きしてしまうため） */}
           <LayoutEditor
+            key={venue.id}
             mode="template" layout={venue.template} partTypes={data.partTypes} composites={data.composites} venueName={venue.name}
             onChange={(template) => setMaster('venues', data.venues.map((v) => (v.id === venue.id ? { ...v, template } : v)))}
           />

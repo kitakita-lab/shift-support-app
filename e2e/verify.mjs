@@ -225,6 +225,38 @@ add('B6', '日本語入力の変換確定の Enter ではセルが移動しな�
   eq(await active(), 'name@0', 'Shift+Enter の後のフォーカス');
 });
 
+add('B7', 'Tab で入った欄の中をクリックすると、その位置にカーソルが入って追記できる（全部が置き換わらない）', async ({ page }) => {
+  await setup(page);
+  await page.locator('table.kv tr', { hasText: '状態' }).locator('select').focus();
+  await page.keyboard.press('Tab');
+  const fixed = page.locator('table.kv tr', { hasText: '固定売上' }).locator('input');
+  const before = await fixed.inputValue();
+  const b = await fixed.boundingBox();
+  await page.mouse.click(b.x + b.width - 6, b.y + b.height / 2);   // 数字の末尾あたり
+  await type(page, '9');
+  eq(await fixed.inputValue(), `${before}9`, '固定売上');
+});
+add('B8', '図面サイズ: 打ちかけのまま図をドラッグしても変更が消えない。空欄で離れても、同じ値を打ち直しても何も変わらない', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  await exportPdf(page);                                            // V1 を出力済みにしておく
+  await page.getByRole('button', { name: '周辺環境（雛形）' }).click();
+  const w = page.locator('label', { hasText: '図面サイズ(cm) 幅' }).locator('input');
+  const width = () => page.locator('svg.layout-svg').getAttribute('viewBox').then((v) => v.split(' ')[2]);
+  await w.click(); await page.keyboard.press('Control+A'); await type(page, '1440.0'); await page.keyboard.press('Enter');
+  eq(await versionText(page), '現在の版 V1（出力済み・編集すると V2 になります）', '同じ値を打ち直した後の版');
+  await w.click(); await page.keyboard.press('Control+A'); await page.keyboard.press('Backspace');
+  await page.locator('.panel__hint').first().click();
+  eq([await width(), await versionText(page)], ['1440', '現在の版 V1（出力済み・編集すると V2 になります）'], '空欄で離れた後');
+  await w.click(); await page.keyboard.press('Control+A'); await type(page, '1600');   // 確定しないまま…
+  const t = await page.locator('svg.layout-svg text', { hasText: 'DECO HOME' }).first().boundingBox();
+  await page.mouse.move(t.x + 5, t.y + 5);
+  await page.mouse.down();                                          // …図の中の周辺環境をドラッグ
+  await page.mouse.move(t.x + 45, t.y + 35, { steps: 5 });
+  await page.mouse.up();
+  eq(await until(width, (v) => v === '1600'), '1600', '打ちかけのままドラッグした後の図面の幅');
+});
+
 // C. スタッフ配置と警告
 add('C1', '配置表のクリックで配置／解除でき、人件費が連動する', async ({ page }) => {
   await setup(page);
@@ -310,6 +342,22 @@ add('C5', '会場をマスタから消すと、その会場を使っている案
   eq(await warnCount(page), 1, '警告件数');
   await page.locator('.warnbtn').click();
   ok((await page.locator('.warnlist li').allInnerTexts()).some((t) => t.includes('会場がマスタから削除されています')), '警告一覧の文言');
+});
+
+add('C6', '会場の雛形エディタの「元に戻す」は、別の会場の雛形に影響しない', async ({ page }) => {
+  await loadSample(page);
+  await tab(page, '会場');
+  await page.getByRole('button', { name: '＋ 会場を追加' }).click();
+  await page.locator('[data-c="name"]').nth(1).fill('別会場');
+  const rows = page.locator('.grid tbody tr');
+  const count = (i) => rows.nth(i).locator('td').nth(4).innerText();
+  const [a0, b0] = [await count(0), await count(1)];
+  await rows.nth(0).getByRole('button', { name: '雛形を編集' }).click();
+  await page.getByRole('button', { name: '＋ 文字' }).click();      // 1 つ目の会場を編集
+  await rows.nth(1).getByRole('button', { name: '雛形を編集' }).click();   // 2 つ目の会場の編集に切り替え
+  const undo = page.getByRole('button', { name: /元に戻す/ });
+  if (await undo.isEnabled()) await undo.click();
+  eq([await count(0), await count(1)], [String(Number(a0) + 1), b0], '雛形の要素数（1 つ目は編集後のまま、2 つ目は変わらない）');
 });
 
 // D. レイアウトと試算の連動
@@ -413,6 +461,24 @@ add('D5', '画面幅の狭い端末（縦並びの表示）でも、図が幅い
   }
 }, { viewport: { width: 390, height: 844 } });
 
+add('D6', 'ドラッグの途中でページをスクロールしても、パーツはカーソルに付いてくる', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  const label = page.locator('svg.layout-svg tspan', { hasText: /^商談席1$/ });
+  const b = await label.boundingBox();
+  await page.mouse.move(b.x + 3, b.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(b.x + 13, b.y + 13, { steps: 3 });
+  await page.mouse.wheel(0, 150);
+  await sleep(150);
+  await page.mouse.move(b.x + 14, b.y + 14);
+  await sleep(100);
+  const b2 = await label.boundingBox();
+  await page.mouse.up();
+  const off = [Math.round(b2.x - (b.x + 11)), Math.round(b2.y - (b.y + 11))];
+  ok(Math.abs(off[0]) <= 4 && Math.abs(off[1]) <= 4, `カーソルとパーツのずれ (${off})px`);
+}, { viewport: { width: 1440, height: 600 } });
+
 // E. PDF と版数
 add('E1', 'PDF をダウンロードできる（A4 横・1 ページ・画像 1 枚）。保存名に案件名・会場名・版数が入る', async ({ page }) => {
   await setup(page);
@@ -515,6 +581,19 @@ add('E6', '日本時間の朝 8:30 に出力しても、作成日と出力履歴
   await exportPdf(page);
   eq(await issuedText(page), '出力履歴: V1（2026-11-13）', '出力履歴');
 }, { fixedTime: '2026-11-12T23:30:00Z' });
+
+add('E7', '「編集すると V? になります」の表示と、実際に編集したときの版が一致する', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  await exportPdf(page);                                            // V1
+  await page.getByRole('button', { name: '椅子を増やす' }).click();
+  await exportPdf(page);                                            // V2
+  await page.getByRole('button', { name: /元に戻す/ }).click();     // V1 を出力した時点の状態へ
+  const said = /編集すると (V\d+) になります/.exec(await versionText(page))?.[1];
+  await page.getByRole('button', { name: '椅子を増やす' }).click();
+  const got = /現在の版 (V\d+)/.exec(await versionText(page))?.[1];
+  ok(said && said === got, `表示は ${said}、実際は ${got}`);
+});
 
 // ── 実行 ────────────────────────────────────────────────────
 async function startServer() {

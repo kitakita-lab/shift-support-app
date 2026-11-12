@@ -12,30 +12,40 @@ type Props = Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 
   onValue: (v: string) => void;
   /** 空欄と 0 が同じ意味の欄。フォーカス中は 0 を空欄で見せ、打った数字の後ろに 0 が残らないようにする */
   blankIsZero?: boolean;
-  /** 入力途中の値を反映すると困る欄（図面サイズなど）は、確定したときだけ反映する */
+  /** 入力途中の値を反映すると困る欄（図面サイズなど）は、確定したときだけ反映する。何も打たずに離れた場合は何もしない */
   commitOnBlur?: boolean;
 };
 
-export default function NumInput({ value, onValue, blankIsZero, commitOnBlur, onFocus, onBlur, onKeyDown, ...rest }: Props) {
-  // フォーカス中は打った文字列をそのまま持つ（"-" や "1." のような入力途中の状態を壊さない）
+export default function NumInput({
+  value, onValue, blankIsZero, commitOnBlur, onFocus, onBlur, onKeyDown, onMouseDown, ...rest
+}: Props) {
+  const [focused, setFocused] = useState(false);
+  // 利用者が打った文字列（打つまでは null）。"-" や "1." のような入力途中の状態を壊さないために、そのまま持つ
   const [draft, setDraft] = useState<string | null>(null);
-  const fresh = useRef(false);
+  // いまのマウスの押下でフォーカスが入ったか（すでにフォーカスのある欄を押したのなら、カーソルを置きたいだけ）
+  const pressFocus = useRef(false);
+
+  // 打つまでは元の値を見せる（フォーカス中に他から値が変われば追従する）
+  const shown = draft ?? (focused && blankIsZero && value !== '' && Number(value) === 0 ? '' : value);
 
   return (
     <input
       {...rest}
       type="number"
-      value={draft ?? value}
+      value={shown}
+      onMouseDown={(e) => {
+        pressFocus.current = document.activeElement !== e.currentTarget;
+        onMouseDown?.(e);
+      }}
       onFocus={(e) => {
-        setDraft(blankIsZero && value !== '' && Number(value) === 0 ? '' : value);
-        fresh.current = true;
+        setFocused(true);
         e.currentTarget.select();
         onFocus?.(e);
       }}
       onMouseUp={(e) => {
-        // クリックでフォーカスした直後の mouseup で全選択が外れるブラウザがあるため、最初の 1 回だけ選び直す
-        if (!fresh.current) return;
-        fresh.current = false;
+        // クリックでフォーカスした直後の mouseup で全選択が外れるブラウザがあるため、そのときだけ選び直す
+        if (!pressFocus.current) return;
+        pressFocus.current = false;
         e.preventDefault();
         e.currentTarget.select();
       }}
@@ -44,13 +54,13 @@ export default function NumInput({ value, onValue, blankIsZero, commitOnBlur, on
         if (!commitOnBlur) onValue(e.target.value);
       }}
       onBlur={(e) => {
-        if (commitOnBlur && draft != null && draft !== value) onValue(draft);
+        if (commitOnBlur && draft != null) onValue(draft);
         setDraft(null);
-        fresh.current = false;
+        setFocused(false);
+        pressFocus.current = false;
         onBlur?.(e);
       }}
       onKeyDown={(e) => {
-        fresh.current = false;
         // ↑↓ で値が ±1 されるのを止める（表計算のつもりで押すと、気づかないうちに数字が変わるため）
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
         if (commitOnBlur && e.key === 'Enter') e.currentTarget.blur();
