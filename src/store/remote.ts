@@ -4,6 +4,8 @@
 //   - 新しく作るもの … 「作成」（setDoc）
 //   - 既にあるものの変更 … 「更新」（updateDoc）。相手が削除済みなら Firestore が拒否するので、消したものが復活しない
 //   - 削除 … deleteDoc
+//   - 共有側のいまの状態を確かめてから書くもの（前回の残りの送信・共有へのコピー・名簿の変更・移行）… トランザクション。
+//     つながっていなければその場で失敗し、端末内の送信待ちには残らない
 // V1・V2 の形式の場所（workshopData・workshopProjects）は読むだけで、書き込む処理は作らない。
 import {
   DocumentReference, FirestoreError, Transaction, collection, deleteDoc, deleteField, doc, getDocFromCache, getDocFromServer,
@@ -14,7 +16,7 @@ import {
   FORMAT_VERSION, LEGACY_DATA_COLL, LEGACY_PROJECT_COLL, MASTER_KEYS, MEMBER_COLL, META_COLL, META_DOC,
   PROBE_COLL, PROBE_DOC, collPath, docPath,
 } from './paths';
-import { Body, LegacyData, PlannedDoc, isValidMemberEmail, normalizeEmail } from './sharedLogic';
+import { Body, LegacyData, PlannedDoc, RecoveryVerdict, isValidMemberEmail, normalizeEmail } from './sharedLogic';
 
 export interface Actor { uid: string; displayName: string }
 type Unsub = () => void;
@@ -75,6 +77,76 @@ export const patchDoc = (coll: string, id: string, patch: Body): Promise<void> =
 export const removeDoc = (coll: string, id: string): Promise<void> => deleteDoc(dref(coll, id));
 /** 送信待ちの書き込みが、すべてサーバーに届く（または拒否される）まで待つ */
 export const waitPending = (): Promise<void> => waitForPendingWrites(db());
+
+// ── 確かめてから書く（トランザクション。圏外ならその場で失敗し、送信待ちに残らない） ─────────
+/**
+ * 時間を区切って行うトランザクション。失敗（時間切れを含む）を呼び出し側に知らせたあとは、SDK のやり直しも止める
+ * （知らせたあとで、あらためて読み直して書く、ということが起きないように）。
+ * 止められないのは、時間切れの瞬間に、もう送ってしまっていた書き込みだけ（届いたかどうかは、あとで読んで確かめる）。
+ */
+function bounded<T>(ms: number, fn: (tx: Transaction) => Promise<T>): Promise<T> {
+  let over = false;
+  const run = runTransaction(db(), async (tx) => {
+    const stop = () => { if (over) throw Object.assign(new Error('timeout'), { code: 'timeout' }); };   // FirestoreError でない失敗は、SDK がやり直さない
+    stop();
+    const out = await fn(tx);
+    stop();
+    return out;
+  });
+  return withTimeout(run, ms).catch((e) => { over = true; throw e; });
+}
+/**
+ * 前回の残りを送る。「共有側のいまの状態を確かめる」ことと「書く」ことを、1 つのトランザクションで行う。
+ *   - judge が 'send' を返したときだけ、patch を「更新」として書く。それ以外は何も書かない。
+ *   - 読んでから書くまでに共有側が変わったら、トランザクションはやり直しになり、judge がもう一度呼ばれる
+ *     （確かめたあとで届いたほかの人の変更を、古い内容で上書きしない）。
+ *   - つながっていなければ、その場で失敗する。端末内の送信待ちには残らない
+ *     （確かめた結果が古くなってから書き込みが送られる、ということが起きない）。
+ * 返すのは、最後に読んだ共有側の内容と、その判定。
+ *
+ * 注意: この書き込みは、端末内の送信待ちの列を通らない。
+ *   - 送信待ちに、同じドキュメントへの古い書き込みが残っている間に呼ぶと、その古い書き込みがあとから届いて、順番が入れ替わる。
+ *     呼ぶ側は、送信待ちが空になってから呼ぶ（sharedSession.ts の resolveAdopted）。
+ *   - 書いた内容は、購読には少し遅れて届く（端末内の控えは、それまで古い内容のまま）。
+ *     呼ぶ側は、続けて同じドキュメントへふつうの書き込みを送る前に、readDocServer で控えを最新にする。
+ */
+export function recoverDoc(
+  coll: string, id: string, patch: Body, judge: (server: Body | null) => RecoveryVerdict,
+): Promise<{ verdict: RecoveryVerdict; server: Body | null }> {
+  return bounded(20000, async (tx) => {
+    const ref = dref(coll, id);
+    const snap = await tx.get(ref);
+    const server = snap.exists() ? (snap.data() as Body) : null;
+    const verdict = judge(server);
+    if (verdict === 'send') tx.update(ref, forUpdate(patch));
+    return { verdict, server };
+  });
+}
+/**
+ * まだ無いものだけを作る（「共有へコピー」用）。「無いことを確かめる」ことと「作る」ことを、1 つのトランザクションで行う。
+ * 既にあるものは上書きしない（確かめたあとで、ほかの人が同じ ID のものを作っていても、上書きしない）。
+ * つながっていなければその場で失敗し、送信待ちに残らない。既にあったもの（作らなかったもの）の場所を返す。
+ * 1 回に扱う件数を少なくしている理由は、writeAllGuarded と同じ（ルールが名簿を見る回数の上限）。
+ * 途中で失敗した場合、それより前の回のものは作られている（呼ぶ側は、欠けても困らないものを先に並べる）。
+ */
+export async function createMissing(docs: PlannedDoc[]): Promise<string[]> {
+  const MAX_DOCS = 8;
+  const found: string[] = [];
+  for (let i = 0; i < docs.length; i += MAX_DOCS) {
+    const chunk = docs.slice(i, i + MAX_DOCS);
+    found.push(...await bounded(30000, async (tx) => {
+      // 読み取りは、すべて書き込みより前に行う（トランザクションの決まり）
+      const snaps = await Promise.all(chunk.map((d) => tx.get(dref(d.coll, d.id))));
+      const existing: string[] = [];
+      chunk.forEach((d, j) => {
+        if (snaps[j].exists()) existing.push(`${d.coll}/${d.id}`);
+        else tx.set(dref(d.coll, d.id), d.body);
+      });
+      return existing;
+    }));
+  }
+  return found;
+}
 
 // ── 読み取り（サーバーから。圏外なら失敗する） ─────────────────────────
 export async function readDocServer(coll: string, id: string): Promise<Body | null> {

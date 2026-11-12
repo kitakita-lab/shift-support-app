@@ -19,14 +19,14 @@ import {
 } from './outbox';
 import { BACKUP_COLL, FORMAT_VERSION, MASTER_COLL, MASTER_KEYS, MasterKey, PROJECT_COLL, TEAM_ID } from './paths';
 import {
-  Access, Actor, DocChange, Member, Role, SnapInfo, beginMigration, checkAccess, createDoc, deleteMember, endMigration,
+  Access, Actor, DocChange, Member, Role, SnapInfo, beginMigration, checkAccess, createDoc, createMissing, deleteMember, endMigration,
   errorCode, initFresh, listMembers, patchDoc, putMember, readCollServer, readDocServer, readLegacy, readMetaCache, readMetaServer,
-  removeDoc, waitPending, watchCollection, watchMeta, withTimeout, writeAllGuarded,
+  recoverDoc, removeDoc, waitPending, watchCollection, watchMeta, withTimeout, writeAllGuarded,
 } from './remote';
 import {
-  Body, LegacyData, MASTER_LABEL, MigrationReport, Overlay, PlannedDoc, ProjectCopy, ServerDoc, applyOverlay, changedFields,
-  composeDocs, diffById, emptyOverlay, isValidMemberEmail, legacyHasData, nextOrder, normalizeEmail, planMigration,
-  sameContent, settleOverlay, stripMeta, verifyMigration,
+  Body, LegacyData, MASTER_LABEL, MigrationReport, Overlay, PlannedDoc, ProjectCopy, RecoveryVerdict, ServerDoc, applyOverlay,
+  changedFields, composeDocs, diffById, emptyOverlay, isValidMemberEmail, judgeRecovery, legacyHasData, nextOrder, normalizeEmail,
+  planMigration, sameContent, settleOverlay, stripMeta, verifyMigration,
 } from './sharedLogic';
 
 export type { Member, Role };
@@ -224,6 +224,8 @@ interface Adopted {
   safe: string[];
   /** 送信待ちに渡したことがある（＝端末内の送信待ちから、後で送られた可能性がある） */
   sent: boolean;
+  /** この画面が、共有側を確かめたうえで書き終えた（あとは、購読がその内容を受け取ったことを確かめて、片付けるだけ） */
+  landed?: boolean;
   /** 控えが書かれた時刻（複数あれば最も古いもの）／引き取った時刻 */
   at: number;
   takenAt: number;
@@ -251,10 +253,15 @@ interface DocState {
   adopted: Adopted | null;
   /** 前回から引き取った「削除」。送り直しはしない。共有側に残っていたら、知らせる */
   adoptedDelete: { label: string; at: number; takenAt: number } | null;
+  /** 引き取った変更を、共有側と突き合わせている最中（この間は、このドキュメントに別の残りを足さない） */
+  checking: boolean;
 }
 
-/** 中身の比較から除く、付随的な項目（並び順・更新時刻・印・最後に書いた人） */
-const BOOKKEEPING = ['order', 'updatedAt', 'rev', 'updatedBy'];
+/**
+ * 書き込みそのものが受け付けられなかった（やり直しても通らない）ことを表す理由。
+ * これ以外の失敗（通信できない・時間切れ・ほかの人の保存と重なった）は、次の機会にやり直す。
+ */
+const REFUSED = ['permission-denied', 'invalid-argument', 'out-of-range', 'unimplemented', 'data-loss'];
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const isOnline = () => (typeof navigator === 'undefined' ? true : navigator.onLine !== false);
 const stamp = (d = new Date()) => {
@@ -621,7 +628,7 @@ export class SharedSession {
     if (!ds) {
       ds = {
         overlay: emptyOverlay(), timer: null, inflight: [], fields: new Set(), fresh: false, label: '', lost: null,
-        baseRev: undefined, revs: [], adopted: null, adoptedDelete: null,
+        baseRev: undefined, revs: [], adopted: null, adoptedDelete: null, checking: false,
       };
       this.docs.set(key, ds);
     }
@@ -845,6 +852,8 @@ export class SharedSession {
         for (const e of leftovers(this.user.uid)) {
           // 書いた画面がまだ開いている控えは、その画面のもの。見分けられない環境では、しばらく更新の無いものだけを引き取る
           if (alive ? alive.has(e.sid) : now - e.at < ORPHAN_AGE_MS) continue;
+          // 共有側と突き合わせている最中のドキュメントには、足さない（突き合わせた内容と、片付ける内容がずれないように。次の機会に引き取る）
+          if (this.docs.get(`${e.coll}/${e.id}`)?.checking) continue;
           this.takeOver(e);
         }
       });
@@ -898,10 +907,22 @@ export class SharedSession {
     this.dirty.add(e.coll);
   }
   /**
-   * 引き取った変更を、共有側のいまの状態を確かめて片付ける（古い内容で、ほかの人の新しい変更を巻き戻さないため）:
+   * 引き取った変更を、共有側のいまの状態と突き合わせて片付ける（古い内容で、ほかの人の新しい変更を巻き戻さないため）:
    *   - 既に届いていた・内容が同じ → 何もしない
    *   - 誰も触っていない           → 送る（必ず「既にあるものの更新」として。削除されたものは復活しない）
    *   - ほかの人が変更していた・削除されていた → 上書きしない。表示し、案件は控えを残す
+   * 「突き合わせる」ことと「送る」ことは、1 つのトランザクションで行う（remote.ts の recoverDoc）。
+   * 突き合わせたあと、書き込みが届くまでの間にほかの人が保存しても、古い内容で上書きしない。
+   * つながっていなければ、送らずに次の機会を待つ（突き合わせた結果が古くなってから送られる、ということが無い）。
+   * 書き込みそのものが受け付けられなかった場合（権限が無い・内容を受け付けられない＝やり直しても通らない）は、
+   * 繰り返さずに、理由を表示し、案件は控えを残す。
+   *
+   * この書き込みは、端末内の送信待ちの列を通らない。そのために、前後で次の 2 つを守る:
+   *   1. 先に、送信待ちが空になるのを待つ。空にならなければ、今回は何もしない
+   *      （送信待ちに残っている古い書き込みが、あとから届いて、いま送る内容を上書きしないように）。
+   *   2. 片付ける前に、共有側のいまの内容を読み直して、購読が持っている内容をそこまで進める
+   *      （書いた内容は、購読には少し遅れて届く。それまでに重ねて表示するのをやめたり、続けて編集を送ったりすると、
+   *        画面が古い内容に戻る）。読み直せなければ、片付けずに次の機会を待つ（画面には出し続ける）。
    */
   private async resolveAdopted(): Promise<void> {
     if (this.stopped || this.resolving || this.view.phase !== 'ready' || !isOnline()) return;
@@ -910,8 +931,8 @@ export class SharedSession {
     this.resolving = true;
     const gen = this.gen;
     try {
-      // 端末内に送信待ちで残っている前回の書き込みが、先にサーバーへ届く（または拒否される）のを待つ
-      await Promise.race([waitPending().catch(() => { /* 待てなくても、下で 1 件ずつ確かめる */ }), sleep(8000)]);
+      const drained = await Promise.race([waitPending().then(() => true, () => false), sleep(8000).then(() => false)]);
+      if (!drained) return;
       for (const key of keys) {
         if (this.dead(gen) || this.view.phase !== 'ready') return;
         const ds = this.docs.get(key);
@@ -919,59 +940,91 @@ export class SharedSession {
         const i = key.indexOf('/');
         const coll = key.slice(0, i);
         const id = key.slice(i + 1);
-        let server: Body | null;
-        try { server = await withTimeout(readDocServer(coll, id), 10000); } catch { break; }   // 確かめられない → 次の機会に
+        const a = ds.adopted;
+        const mine = () => this.docs.get(key) === ds && ds.adopted === a;   // 待っている間に、利用者がこのドキュメントを削除した、などで変わる
+        const patch: Body = { ...(ds.overlay.adopted ?? {}) };
+        let verdict: RecoveryVerdict = 'same';
+        let server: Body | null = null;
+        let refused = '';
+        ds.checking = true;
+        try {
+          if (a && !a.landed) {
+            const rev = genId();
+            try {
+              ({ verdict, server } = await recoverDoc(coll, id, { ...patch, rev, updatedBy: this.actor }, (s) => judgeRecovery(patch, a.safe, s)));
+            } catch (e) {
+              // やり直しても通らない失敗（権限が無い・内容を受け付けられない）は、繰り返さずに、下で知らせる
+              refused = errorCode(e);
+              if (!REFUSED.includes(refused)) throw e;
+            }
+            if (verdict === 'send' && !refused && mine()) {
+              // 書けた。この書き込みの印も「誰も触っていない」しるしに加えて、控えに残す
+              // （片付ける前にこの画面が閉じられても、次に引き取る画面が、重ねてある編集を正しく扱えるように）
+              a.landed = true;
+              a.safe = [...a.safe, rev];
+              ds.revs.push(rev);
+              this.persist(coll, id, ds, ds.fresh ? 'create' : 'update');
+            }
+          }
+          // 上書きしない場合（changed・gone）・書き込みが受け付けられなかった場合は、読み直さない
+          // （重ねて表示していた分は、控えに回して画面から外す）
+          if (!refused && (!a || verdict === 'same' || verdict === 'send')) server = await withTimeout(readDocServer(coll, id), 10000);
+        } catch {
+          break;                                       // 確かめられない（圏外など）→ 次の機会に
+        } finally {
+          ds.checking = false;
+        }
         if (this.dead(gen) || this.view.phase !== 'ready') return;
-        if (this.docs.get(key) !== ds) continue;
-        this.decideAdopted(coll, id, ds, server);
+        if (!mine()) continue;
+        if (refused) {
+          this.dirty.add(coll);
+          this.leftBehind(coll, id, ds, 'refused', null, refused);
+          if (refused === 'permission-denied') this.scheduleRecheck();   // 名簿から外された・ルールが変わった、かもしれない
+          continue;
+        }
+        this.applyRecovery(coll, id, ds, patch, verdict, server);
       }
     } finally {
       this.resolving = false;
       this.rebuild();
     }
   }
-  private decideAdopted(coll: string, id: string, ds: DocState, server: Body | null): void {
+  /**
+   * 突き合わせの結果を、手元に反映する（書き込みは、recoverDoc のトランザクションで済んでいる）。
+   * server は、same・send のときは「読み直した、共有側のいまの内容」、changed・gone のときは「突き合わせたときの内容」。
+   */
+  private applyRecovery(coll: string, id: string, ds: DocState, patch: Body, verdict: RecoveryVerdict, server: Body | null): void {
     const key = `${coll}/${id}`;
     this.dirty.add(coll);
+    const a = ds.adopted;
     const del = ds.adoptedDelete;
     if (del) {
       ds.adoptedDelete = null;
       if (server) this.hooks.notify('warn', `${del.label}の削除が、共有データに反映されていませんでした。必要な場合は、もう一度削除してください。`);
       else if (Date.now() - del.at > LATE_MS) this.noteLate(`${del.label}の削除`, del.at);
     }
-    const a = ds.adopted;
+    if (a && verdict === 'gone') { this.leftBehind(coll, id, ds, a.kind === 'create' && a.baseRev === null ? 'missing' : 'deleted', null); return; }
+    if (a && verdict === 'changed') { this.leftBehind(coll, id, ds, 'changed', server); return; }
+    // 購読が持っている内容を、読み直した内容まで進める（購読にも、同じ内容がすぐに届く）
+    const map = this.server[coll];
+    const old = map?.get(id);
+    if (map && !server) map.delete(id);
+    else if (map && server) map.set(id, { body: old && sameContent(old.body, server) ? old.body : server, pending: old?.pending ?? false });
     if (!a) { this.finishIfIdle(coll, id, ds); this.gc(key); return; }
-    if (!server) { this.leftBehind(coll, id, ds, a.kind === 'create' && a.baseRev === null ? 'missing' : 'deleted', null); return; }
-    const patch = ds.overlay.adopted ?? {};
-    const rev = typeof server.rev === 'string' ? server.rev : '';
-    const differing = Object.keys(patch).filter((f) => !BOOKKEEPING.includes(f) && !sameContent(server[f], patch[f]));
-    if (differing.length === 0) {
-      // 既に届いていた（または、内容が同じ）。長く送信待ちだったものが届いた場合は、知らせる
-      if (a.sent && a.kind !== 'create' && Date.now() - a.at > LATE_MS) this.noteLate(a.label, a.at);
-      ds.overlay = { ...ds.overlay, adopted: null };
-      ds.adopted = null;
-      if (ds.overlay.pending) {
-        if (ds.timer) this.persist(coll, id, ds, ds.fresh ? 'create' : 'update');   // 入力中: 止まるのを待ってから送る
-        else this.issue(coll, id);
-      } else {
-        this.finishIfIdle(coll, id, ds);
-      }
-      this.gc(key);
-      return;
-    }
-    // 共有側の印が、引き取った残りの「変更を始めたときのもの」か「その残りが送ったもの」なら、その後だれも触っていない。
-    // 判定に使うのは、引き取った残り自身の履歴だけ。この画面でその上に重ねた編集の基準の印（ds.baseRev）や、
-    // この画面の送信の印（ds.revs）は使わない（それらは「いまの共有側」を基準にしているので、古い残りの裏付けにならない）
-    if (!a.safe.includes(rev)) { this.leftBehind(coll, id, ds, 'changed', server); return; }
-    // 引き取った変更を、今回の変更の下に重ねて送る
-    const o = ds.overlay;
-    ds.overlay = { ...o, adopted: null, pending: { ...patch, ...(o.pending ?? {}) } };
+    // 既に届いていた（この画面が書いたのではない）もののうち、長く送信待ちだったものは、知らせる
+    if (!a.landed && a.sent && a.kind !== 'create' && Date.now() - a.at > LATE_MS) this.noteLate(a.label, a.at);
+    // 引き取った分は片付いた。その上に重ねた今回の変更があれば、ふつうの変更として続けて送る
+    const o = { ...ds.overlay, adopted: null };
+    ds.overlay = o;
     ds.adopted = null;
-    ds.baseRev = rev;
-    this.issue(coll, id);
+    for (const k of Object.keys(patch)) if (!(o.pending && k in o.pending) && !o.issued.some((x) => k in x.patch)) ds.fields.delete(k);
+    if (o.pending && !ds.timer) this.issue(coll, id);
+    else if (o.pending || ds.inflight.length) this.persist(coll, id, ds, ds.fresh ? 'create' : 'update');   // 入力中（止まってから送る）／この画面の送信が残っている
+    else this.finishIfIdle(coll, id, ds);
+    this.gc(key);
   }
   /** 引き取った変更を、共有に反映しない場合の表示（上書きしない。案件は「この端末だけのデータ」に控えを残す） */
-  private leftBehind(coll: string, id: string, ds: DocState, why: 'deleted' | 'missing' | 'changed', server: Body | null): void {
+  private leftBehind(coll: string, id: string, ds: DocState, why: 'deleted' | 'missing' | 'changed' | 'refused', server: Body | null, code = ''): void {
     const a = ds.adopted;
     if (!a) return;
     const o = ds.overlay;
@@ -987,7 +1040,9 @@ export class SharedSession {
     }
     const text = why === 'deleted' ? `${a.label}は、ほかの端末で削除されていたため、前回送信前だった変更を共有データに反映できませんでした。`
       : why === 'missing' ? `前回作成した${a.label}は、共有データに保存されていませんでした（保存の前に画面が閉じられたか、その後に削除されています）。`
-      : `${a.label}には、前回送信前だった変更が残っていましたが、その後に共有側で内容が変更されていたため、自動では反映していません（新しい内容を、古い内容で上書きしないため）。`;
+      : why === 'changed' ? `${a.label}には、前回送信前だった変更が残っていましたが、その後に共有側で内容が変更されていたため、自動では反映していません（新しい内容を、古い内容で上書きしないため）。`
+      : code === 'permission-denied' ? `${a.label}に残っていた、前回送信前だった変更は、共有データに書き込む権限がないため、反映されませんでした。`
+      : `${a.label}に残っていた、前回送信前だった変更を、共有データに保存できませんでした（${reason(code)}）。`;
     this.hooks.notify('warn', `${text}${kept}`);
     if (ds.timer) { clearTimeout(ds.timer); ds.timer = null; }
     ds.overlay = { ...o, adopted: null, pending: null, base: undefined };
@@ -1103,21 +1158,47 @@ export class SharedSession {
   }
   /**
    * 「この端末だけのデータ」からコピーしてきた案件と、一緒に足すマスタを共有に入れる（既にあるものは上書きしない）。
-   * 共有側の最新の内容を受け取れていないとき（圏外・端末内の控えを表示中）は、何もせず false を返す
-   * （「共有側に無い」と判断したものが実際にはあった場合に、上書きしてしまうため）。
+   *   - 共有側の最新の内容を受け取れていないとき（圏外・端末内の控えを表示中）は、何もしない。
+   *   - 作るのは、共有側にまだ無いものだけ。「無いことを確かめる」ことと「作る」ことは、1 つのトランザクションで行う
+   *     （remote.ts の createMissing）。確かめたあとで、ほかの人が同じ ID のものを作っていても、上書きしない。
+   *     つながっていなければ、その場で失敗する（送信待ちに残らないので、あとから勝手に作られない）。
+   *   - 送信待ちに変更が残っている間は、作らない（理由は下）。
+   * 返すのは、できたかどうか。できたときは、一緒に足すつもりだったマスタのうち、既にあった（足さなかった）件数も返す。
    */
-  importCopy(copy: ProjectCopy): boolean {
-    if (this.view.phase !== 'ready' || !this.inSync()) return false;
+  async importCopy(copy: ProjectCopy): Promise<{ ok: true; existed: number } | { ok: false; message: string }> {
+    const notSynced = { ok: false as const, message: '共有データの最新の内容を確認できていないため、コピーしませんでした。接続を確認して、右上の表示が「保存済み」になってから、もう一度お試しください。' };
+    if (this.view.phase !== 'ready' || !this.inSync()) return notSynced;
+    // 先に、送信待ちが空になるのを待つ（下の書き込みは送信待ちの列を通らない。この端末が先に送った削除などが、
+    // あとから届いて、いま作るものと順番が入れ替わらないように）
+    const drained = await Promise.race([waitPending().then(() => true, () => false), sleep(8000).then(() => false)]);
+    if (!drained) return { ok: false, message: '送信中の変更が残っているため、コピーしませんでした。右上の表示が「保存済み」になってから、もう一度お試しください。' };
+    if (this.stopped || this.view.phase !== 'ready' || !this.inSync()) return notSynced;
+    const docs: PlannedDoc[] = [];
     for (const key of MASTER_KEYS) {
       const coll = MASTER_COLL[key];
       let order = nextOrder(composeDocs(this.server[coll] ?? new Map(), this.overlaysOf(coll)));
       for (const x of (copy.add[key] ?? []) as unknown as (Body & { id: string })[]) {
-        if (this.serverBody(coll, x.id) || this.docs.has(`${coll}/${x.id}`)) continue;
-        this.create(coll, x.id, { ...x, order: order++ }, labelOf(coll, x));
+        docs.push({ coll, id: x.id, body: { ...x, order: order++, rev: genId(), updatedBy: this.actor } });
       }
     }
-    this.addProject(copy.project);
-    return true;
+    // 案件は最後に作る（途中で失敗したとき、案件だけがあって、使っている会場やスタッフが無い、という状態にしない）
+    const p = copy.project;
+    docs.push({
+      coll: PROJECT_COLL, id: p.id,
+      body: { ...(p as unknown as Body), updatedAt: Date.now(), order: nextOrder(this.composed[PROJECT_COLL] ?? []), rev: genId(), updatedBy: this.actor },
+    });
+    try {
+      const existing = await createMissing(docs);
+      // 案件の ID は、コピーのたびに新しく振る。既にあるのは、同じコピーが二重に送られたときだけ
+      if (existing.includes(`${PROJECT_COLL}/${p.id}`)) return { ok: false, message: '同じコピーが、既に共有データにあります。案件一覧を確認してください。' };
+      return { ok: true, existed: existing.length };
+    } catch (e) {
+      if (errorCode(e) === 'permission-denied') this.scheduleRecheck();   // 名簿から外された・ルールが変わった、かもしれない
+      return {
+        ok: false,
+        message: `共有データへコピーできませんでした（${reason(errorCode(e))}）。接続を確認し、案件一覧にコピーが増えていないことを確かめてから、もう一度お試しください（一緒に追加する会場・スタッフなどは、一部が追加済みの場合があります）。`,
+      };
+    }
   }
 
   // ── 初期設定・移行 ──

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Project } from '../types';
 import { MASTER_COLL, MEMBER_COLL, META_COLL, META_DOC, PROJECT_COLL } from './paths';
 import {
-  browser, dispatch, fake, installBrowser, newWindow, outboxEntries, projectDoc, resetFake, serverDoc, setMeta, setOnline, setServer,
+  browser, dispatch, fake, installBrowser, newWindow, outboxEntries, projectDoc, resetFake, serverDoc, setMeta, setNetwork, setOnline, setServer,
 } from './sessionTestkit';
 import type { SessionUser, SharedSession } from './sharedSession';
 import type { ProjectCopy } from './sharedLogic';
@@ -478,6 +478,229 @@ describe('前回の残りを「誰も触っていない」と判定する根拠'
   });
 });
 
+// Codex のレビュー（PR #86 の 2 回目）P2: 「誰も触っていない」と確かめることと、書くことを、切り離さない。
+// 確かめたあと、書き込みが届くまでの間に、ほかの人が保存した・接続が切れた場合に、古い値で上書きしてはいけない。
+describe('前回の残りを「確かめてから送る」の、確かめたあと', () => {
+  const leftover = async () => {
+    const t = await openTab();
+    await ready(t);
+    t.session.updateProject('p1', memo('A の古いメモ'));
+    t.kill();
+  };
+  /** 引き取った残りについて、共有側を読んだ直後に 1 回だけ fn を起こす */
+  const justAfterCheck = (fn: () => void) => {
+    let done = false;
+    fake.afterRead = (path) => {
+      if (path !== `${P}/p1` || done) return;
+      done = true;
+      fn();
+    };
+  };
+
+  it('確かめたあと、書き込みが届く前に、ほかの人が同じ項目を保存したら、上書きしない', async () => {
+    await leftover();
+    justAfterCheck(() => setServer(P, 'p1', { ...serverDoc(P, 'p1'), memo: 'B の新しいメモ', rev: 'rB' }));
+    const t = await openTab();
+    await ready(t);
+    await tick(5000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'B の新しいメモ', rev: 'rB' });
+    expect(t.notices).toHaveLength(1);
+    expect(t.notices[0]).toContain('自動では反映していません');
+    expect(t.stashes.map((p) => p.memo)).toEqual(['A の古いメモ']);
+    expect(outboxEntries()).toHaveLength(0);
+  });
+
+  it('確かめたあと、書く前に接続が切れたら、端末内の送信待ちに残さない（つながったあとで、古い値が送られない）', async () => {
+    await leftover();
+    justAfterCheck(() => setNetwork(false));        // 読めた直後に切れた（アプリからは、まだつながっているように見える）
+    const t = await openTab();
+    await ready(t);
+    await tick(3000);
+    expect(fake.queue).toHaveLength(0);             // 引き取った変更は、送信待ちに入っていない
+    expect(serverDoc(P, 'p1')?.memo).toBe('');
+    setServer(P, 'p1', { ...serverDoc(P, 'p1'), memo: 'B の新しいメモ', rev: 'rB' });   // 切れている間に B が保存した
+    setNetwork(true);
+    await tick(40000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'B の新しいメモ', rev: 'rB' });
+    expect(t.notices).toHaveLength(1);
+    expect(t.stashes.map((p) => p.memo)).toEqual(['A の古いメモ']);
+    expect(outboxEntries()).toHaveLength(0);
+  });
+
+  it('確かめたあと、書く前に接続が切れても、誰も触っていなければ、つながったあとで送る', async () => {
+    await leftover();
+    justAfterCheck(() => setNetwork(false));
+    const t = await openTab();
+    await ready(t);
+    await tick(3000);
+    expect(view(t).unsent).toBe(1);                 // 未送信のまま残っている
+    expect(outboxEntries()).toHaveLength(1);
+    setNetwork(true);
+    await tick(40000);
+    expect(serverDoc(P, 'p1')?.memo).toBe('A の古いメモ');
+    expect(t.notices).toEqual([]);
+    expect(outboxEntries()).toHaveLength(0);
+    expect(view(t).unsent).toBe(0);
+  });
+
+  /** p1 のメモが、画面にどう出てきたか（変わるたびに 1 つ足す） */
+  const watchMemo = (t: Tab): string[] => {
+    const seen: string[] = [];
+    t.session.subscribe(() => { const m = project(t, 'p1')?.memo; if (m !== undefined && seen[seen.length - 1] !== m) seen.push(m); });
+    return seen;
+  };
+
+  // ここから下は、「確かめる」と「書く」を 1 つにまとめた（送信待ちの列を通さずに書く）ことで、新しく気をつける点。
+  // そうして書いた内容は、購読には少し遅れて届く。それまでの間に、画面や、続けて送る編集が、古い内容を基にしてはいけない
+  it('送った内容が購読に届くのが遅れても、画面は古い値に戻らない（その上に重ねた編集を送るときも）', async () => {
+    await leftover();
+    fake.watchDelay = 4000;                         // 書いた内容が、購読に届くまで 4 秒かかる
+    const t = await openTab();
+    await ready(t);
+    const seen = watchMemo(t);
+    t.session.updateProject('p1', rename('A が今回付けた名前'));
+    await tick(10000);
+    expect(seen).toEqual(['A の古いメモ']);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'A の古いメモ', name: 'A が今回付けた名前' });
+    expect(t.notices).toEqual([]);
+    expect(outboxEntries()).toHaveLength(0);
+    expect(view(t).unsent).toBe(0);
+  });
+
+  it('既に届いていた場合も、購読が追いつくまでは、画面は引き取った内容を出し続ける', async () => {
+    await leftover();
+    fake.watchDelay = 4000;
+    setServer(P, 'p1', { ...serverDoc(P, 'p1'), memo: 'A の古いメモ', rev: 'rX' });   // 同じ内容が、既に共有側にある（購読には、まだ届いていない）
+    const t = await openTab();
+    await ready(t);
+    const seen = watchMemo(t);
+    await tick(10000);
+    expect(seen.filter((m) => m !== 'A の古いメモ')).toEqual([]);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'A の古いメモ', rev: 'rX' });   // 何も書いていない
+    expect(t.notices).toEqual([]);
+    expect(outboxEntries()).toHaveLength(0);
+    expect(view(t).unsent).toBe(0);
+  });
+
+  it('書けた直後に接続が切れても、画面は古い値に戻らない。重ねた編集は、つながったあとで送る', async () => {
+    await leftover();
+    fake.afterCommit = () => { fake.afterCommit = null; setNetwork(false); };   // 書けた直後に切れた（アプリからは、まだつながっているように見える）
+    const t = await openTab();
+    await ready(t);
+    const seen = watchMemo(t);
+    t.session.updateProject('p1', rename('A が今回付けた名前'));
+    await tick(30000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'A の古いメモ', name: '案件' });   // 引き取った分は書けている。重ねた編集は、まだ
+    expect(fake.queue).toHaveLength(0);             // 古い内容を基にした書き込みを、送信待ちに入れていない
+    expect(seen).toEqual(['A の古いメモ']);
+    expect(view(t).unsent).toBe(1);
+    setNetwork(true);
+    await tick(40000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'A の古いメモ', name: 'A が今回付けた名前' });
+    expect(seen).toEqual(['A の古いメモ']);
+    expect(t.notices).toEqual([]);
+    expect(outboxEntries()).toHaveLength(0);
+    expect(view(t).unsent).toBe(0);
+  });
+
+  it('書けた直後に接続が切れ、そのまま画面が閉じられても、次に開いた画面は、重ねてあった編集を送る', async () => {
+    await leftover();
+    fake.afterCommit = () => { fake.afterCommit = null; setNetwork(false); };
+    const b = await openTab();
+    await ready(b);
+    b.session.updateProject('p1', rename('B の画面で付けた名前'));
+    await tick(15000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'A の古いメモ', name: '案件' });
+    b.kill();                                       // 片付く前に、画面が閉じられた
+    setNetwork(true);
+    const c = await openTab();
+    await ready(c);
+    await tick(40000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'A の古いメモ', name: 'B の画面で付けた名前' });
+    expect(c.notices).toEqual([]);
+    expect(c.stashes).toEqual([]);
+    expect(outboxEntries()).toHaveLength(0);
+  });
+
+  it('前回の画面が先に送った書き込みが、まだ送信待ちに残っている間は、待つ（その古い書き込みが、あとから届いて上書きしない）', async () => {
+    fake.writeDelay = 15000;                        // 送信待ちが、なかなかサーバーに届かない
+    const a = await openTab();
+    await ready(a);
+    a.session.updateProject('p1', memo('途中のメモ'));
+    await tick(1000);                               // 「途中のメモ」は、送信待ちに入った（まだ届いていない）
+    a.session.updateProject('p1', memo('最後のメモ'));
+    a.kill();                                       // 「最後のメモ」は、送る前に画面が閉じられた
+    const t = await openTab();
+    await ready(t);
+    await tick(10000);
+    expect(fake.log.filter((l) => l.includes('recover'))).toEqual([]);   // まだ書いていない（先に送った書き込みが、届いていない）
+    expect(project(t, 'p1')?.memo).toBe('最後のメモ');                    // 画面には出ている
+    await tick(40000);
+    expect(fake.log.filter((l) => l.startsWith('ACK'))).toEqual([`ACK update ${P}/p1`, `ACK recover ${P}/p1`]);
+    expect(serverDoc(P, 'p1')?.memo).toBe('最後のメモ');
+    expect(t.notices).toEqual([]);
+    expect(outboxEntries()).toHaveLength(0);
+  });
+
+  // トランザクションの失敗には、「あとでやり直せば通るもの（通信・競合）」と「やり直しても通らないもの（権限・内容）」がある。
+  // 後者を前者と同じに扱うと、黙って繰り返し続け、後ろに並んだほかの残りも片付かない
+  it('書き込みが受け付けられなかったら（権限が無い）、知らせて控えを残す。黙って繰り返さず、ほかの残りは続けて片付ける', async () => {
+    setServer(P, 'p2', projectDoc('p2', { name: '別の案件' }));
+    setServer(P, 'p3', projectDoc('p3', { name: 'もう 1 つの案件' }));
+    const a = await openTab();
+    await ready(a);
+    a.session.updateProject('p2', memo('p2 のメモ'));
+    a.session.updateProject('p1', memo('A の古いメモ'));
+    a.session.updateProject('p3', memo('p3 のメモ'));
+    a.kill();
+    fake.rejectWrite = (w) => (w.path === `${P}/p1` ? 'permission-denied' : null);
+    const t = await openTab();
+    await ready(t);
+    t.session.updateProject('p1', rename('A が今回付けた名前'));   // その上に重ねた編集も、同じ控えに入る
+    await tick(40000);
+    expect(fake.log.filter((l) => l.includes('REJECT'))).toEqual([`REJECT(permission-denied) recover ${P}/p1`]);   // 1 回だけ
+    expect([serverDoc(P, 'p2')?.memo, serverDoc(P, 'p3')?.memo]).toEqual(['p2 のメモ', 'p3 のメモ']);              // ほかの残りは届いている
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: '', name: '案件' });
+    expect(t.notices).toHaveLength(1);
+    expect(t.notices[0]).toContain('書き込む権限がない');
+    expect(t.notices[0]).toContain('今回この画面で行った変更も含みます');
+    expect(t.stashes.map((p) => [p.memo, p.name])).toEqual([['A の古いメモ', 'A が今回付けた名前']]);
+    expect(project(t, 'p1')).toMatchObject({ memo: '', name: '案件' });   // 画面は、共有の内容に戻る
+    expect(outboxEntries()).toHaveLength(0);
+    expect(view(t).unsent).toBe(0);
+  });
+
+  it('書き込みが受け付けられなかったら（内容が大きすぎる、など）、理由を知らせて控えを残す', async () => {
+    await leftover();
+    fake.rejectWrite = (w) => (w.path === `${P}/p1` ? 'invalid-argument' : null);
+    const t = await openTab();
+    await ready(t);
+    await tick(40000);
+    expect(fake.log.filter((l) => l.includes('REJECT'))).toHaveLength(1);
+    expect(t.notices).toHaveLength(1);
+    expect(t.notices[0]).toContain('保存できませんでした（理由: invalid-argument）');
+    expect(t.stashes.map((p) => p.memo)).toEqual(['A の古いメモ']);
+    expect(serverDoc(P, 'p1')?.memo).toBe('');
+    expect(outboxEntries()).toHaveLength(0);
+    expect(view(t).unsent).toBe(0);
+  });
+
+  it('送ったあと、画面の内容が一瞬古い値に戻らない。その上に重ねた編集は、続けて送られる', async () => {
+    await leftover();
+    const t = await openTab();
+    await ready(t);
+    t.session.updateProject('p1', rename('A が今回付けた名前'));
+    const seen: string[] = [];
+    t.session.subscribe(() => { const m = project(t, 'p1')?.memo; if (m !== undefined) seen.push(m); });
+    await tick(5000);
+    expect(serverDoc(P, 'p1')).toMatchObject({ memo: 'A の古いメモ', name: 'A が今回付けた名前' });
+    expect(seen.every((m) => m === 'A の古いメモ')).toBe(true);
+    expect(t.notices).toEqual([]);
+    expect(outboxEntries()).toHaveLength(0);
+    expect(view(t).unsent).toBe(0);
+  });
+});
+
 describe('同じブラウザの 2 つの画面', () => {
   it('片方が保存しても、もう片方の控えを消さない。閉じられた画面の変更は、黙って消えない', async () => {
     const t1 = await openTab();
@@ -695,22 +918,72 @@ describe('「使える状態」の印（形式の情報）', () => {
 });
 
 describe('置き場所をまたぐコピー', () => {
-  const copy = (): ProjectCopy => ({ project: projectDoc('p-copy', { name: 'コピー' }) as unknown as Project, add: {}, notes: [] });
+  const copy = (add: ProjectCopy['add'] = {}): ProjectCopy => ({ project: projectDoc('p-copy', { name: 'コピー' }) as unknown as Project, add, notes: [] });
+  /** importCopy の結果（空文字＝できた／文字列＝できなかった理由）。直す前の版（true／false を、待たずに返す）も同じ形にそろえる */
+  const run = async (t: Tab, c: ProjectCopy, ms = 3000): Promise<string> => {
+    const r = (t.session.importCopy as unknown as (c: ProjectCopy) => unknown).call(t.session, c);
+    await tick(ms);
+    const v = (await r) as boolean | { ok: boolean; message?: string };
+    return typeof v === 'boolean' ? (v ? '' : 'しませんでした') : v.ok ? '' : v.message ?? '';
+  };
+  const staffS1 = { id: 's1', name: '端末側の古いスタッフ', hourlyRate: 1000, transportPerDay: 0, memo: '' };
 
   it('共有側の最新の内容を受け取れていない間（圏外）は、共有へコピーしない', async () => {
     const t = await openTab();
     await ready(t);
     setOnline(false);
     await tick(100);
-    expect(t.session.importCopy(copy())).toBe(false);
-    await tick(1000);
+    expect(await run(t, copy())).toContain('しませんでした');
     expect(fake.queue).toHaveLength(0);
     expect(outboxEntries()).toHaveLength(0);
     setOnline(true);
     await tick(100);
-    expect(t.session.importCopy(copy())).toBe(true);
-    await tick(1000);
+    expect(await run(t, copy())).toBe('');
     expect(serverDoc(P, 'p-copy')?.name).toBe('コピー');
+  });
+
+  // Codex の 2 回目の指摘と同じ種類の抜け: 「共有側に無い」と確かめることと、作ることを、切り離さない
+  it('「無い」と確かめたあと、作る前に、ほかの人が同じ ID のものを作っていたら、上書きしない（案件はコピーされる）', async () => {
+    const t = await openTab();
+    await ready(t);
+    const c = copy({ staff: [staffS1] as never });
+    const r = (t.session.importCopy as unknown as (c: ProjectCopy) => unknown).call(t.session, c);
+    setServer(MASTER_COLL.staff, 's1', { ...staffS1, name: 'B が先に作ったスタッフ', order: 0, rev: 'rB' });   // 確かめた直後に、B が同じ ID で作った
+    await tick(3000);
+    const v = await r;
+    expect(serverDoc(MASTER_COLL.staff, 's1')).toMatchObject({ name: 'B が先に作ったスタッフ', rev: 'rB' });
+    expect(serverDoc(P, 'p-copy')?.name).toBe('コピー');
+    if (typeof v === 'object') expect(v).toEqual({ ok: true, existed: 1 });   // 足さなかった件数を、呼び出し側へ伝える（利用者への表示用）
+  });
+
+  // 「確かめてから作る」書き込みは、送信待ちの列を通らない。先に送った書き込みが残っている間に作ると、順番が入れ替わる
+  it('この端末が先に送った削除が、まだ送信待ちに残っている間は、コピーしない（削除があとから届いて、コピーした案件の参照先が消えない）', async () => {
+    setServer(MASTER_COLL.staff, 's1', { ...staffS1, name: '共有側のスタッフ', order: 0, rev: 'r0' });
+    const t = await openTab();
+    await ready(t);
+    fake.writeDelay = 15000;                        // 送信待ちが、なかなかサーバーに届かない
+    t.session.setMaster('staff', view(t).data.staff, []);   // 共有側の s1 を削除した（まだ届いていない。画面からは消えている）
+    expect(view(t).data.staff).toEqual([]);
+    expect(await run(t, copy({ staff: [staffS1] as never }), 9000)).toContain('送信中の変更が残っている');
+    expect(serverDoc(P, 'p-copy')).toBeUndefined();
+    await tick(10000);                              // 削除が届いた
+    expect(serverDoc(MASTER_COLL.staff, 's1')).toBeUndefined();
+    expect(await run(t, copy({ staff: [staffS1] as never }))).toBe('');
+    expect(serverDoc(MASTER_COLL.staff, 's1')?.name).toBe('端末側の古いスタッフ');
+    expect(serverDoc(P, 'p-copy')?.name).toBe('コピー');
+  });
+
+  it('押した直後に接続が切れたら、何も作らず、端末内の送信待ちにも残さない（あとから勝手に作られない）', async () => {
+    const t = await openTab();
+    await ready(t);
+    setNetwork(false);                              // 切れた直後（アプリからは、まだつながっているように見える）
+    expect(await run(t, copy({ staff: [staffS1] as never }))).not.toBe('');
+    expect(fake.queue).toHaveLength(0);
+    expect(outboxEntries()).toHaveLength(0);
+    setNetwork(true);
+    await tick(5000);
+    expect(serverDoc(P, 'p-copy')).toBeUndefined();
+    expect(serverDoc(MASTER_COLL.staff, 's1')).toBeUndefined();
   });
 });
 

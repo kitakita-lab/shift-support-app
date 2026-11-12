@@ -4,8 +4,8 @@ import { AppData } from '../types';
 import { BACKUP_COLL, MASTER_COLL, PROJECT_COLL } from './paths';
 import {
   Body, DOC_META_KEYS, LegacyData, Overlay, ServerDoc, applyOverlay, canon, changedFields, composeDocs, diffById, emptyOverlay,
-  isValidMemberEmail, legacyHasData, nextOrder, normalizeEmail, planMigration, planProjectCopy, sameContent, settleOverlay,
-  stripMeta, verifyMigration,
+  isValidMemberEmail, judgeRecovery, legacyHasData, nextOrder, normalizeEmail, planMigration, planProjectCopy, sameContent,
+  settleOverlay, stripMeta, verifyMigration,
 } from './sharedLogic';
 
 /** 入力を書き換えていないことを確かめるため、奥まで凍結する */
@@ -296,5 +296,36 @@ describe('置き場所をまたぐ案件のコピー', () => {
     const copy = planProjectCopy(src, pid, emptyData(), 'x')!;
     expect(copy.add.staff).toBeUndefined();
     expect(copy.project.assignments.length).toBe(source.projects[1].assignments.length);
+  });
+});
+
+describe('前回の残り（送る前に画面が閉じられた変更）を、共有側のいまの内容と突き合わせる', () => {
+  const server = { id: 'p1', name: '案件', memo: '共有側のメモ', contents: [{ contentId: 'c1', count: 2 }], order: 3, updatedAt: 100, rev: 'r5', updatedBy: { uid: 'u9' } };
+  it('共有側に無い（削除された・届いていなかった）→ 何も書かない', () => {
+    expect(judgeRecovery({ memo: '前回のメモ' }, ['r5'], null)).toBe('gone');
+  });
+  it('変えた項目が、共有側と同じ内容 → 何も書かない（共有側の印が何であっても）', () => {
+    expect(judgeRecovery({ memo: '共有側のメモ' }, [], freeze(clone(server)))).toBe('same');
+    expect(judgeRecovery({ contents: [{ count: 2, contentId: 'c1' }] }, ['r1'], freeze(clone(server)))).toBe('same');   // キーの順序の違いは、同じ内容
+  });
+  it('違うのが管理用の項目（並び順・更新時刻・印・最後に書いた人）だけなら、同じ内容として扱う', () => {
+    expect(judgeRecovery({ memo: '共有側のメモ', order: 9, updatedAt: 999, rev: 'x', updatedBy: { uid: 'u1' } }, ['r5'], freeze(clone(server)))).toBe('same');
+  });
+  it('内容が違い、共有側の印が「誰も触っていない」しるしのどれか → 書く', () => {
+    expect(judgeRecovery({ memo: '前回のメモ' }, ['r4', 'r5'], freeze(clone(server)))).toBe('send');
+  });
+  it('内容が違い、共有側の印が、しるしのどれでもない（＝その後に誰かが保存した）→ 書かない', () => {
+    expect(judgeRecovery({ memo: '前回のメモ' }, ['r3', 'r4'], freeze(clone(server)))).toBe('changed');
+    expect(judgeRecovery({ memo: '前回のメモ' }, [], freeze(clone(server)))).toBe('changed');
+  });
+  it('印の無いドキュメントは、しるしに空文字があるときだけ「誰も触っていない」とみなす', () => {
+    const noRev = { id: 'p1', memo: '共有側のメモ' };
+    expect(judgeRecovery({ memo: '前回のメモ' }, [''], noRev)).toBe('send');
+    expect(judgeRecovery({ memo: '前回のメモ' }, ['r5'], noRev)).toBe('changed');
+  });
+  it('共有側に無い項目を足す変更・項目を消す変更も、内容の違いとして扱う', () => {
+    expect(judgeRecovery({ caption: '新しい項目' }, ['r5'], freeze(clone(server)))).toBe('send');
+    expect(judgeRecovery({ memo: undefined }, ['r5'], freeze(clone(server)))).toBe('send');
+    expect(judgeRecovery({ caption: undefined }, ['r1'], freeze(clone(server)))).toBe('same');   // 無い項目を消す＝変わらない
   });
 });

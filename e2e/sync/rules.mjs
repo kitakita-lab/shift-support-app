@@ -9,7 +9,8 @@ import {
   signInWithEmailAndPassword, signOut,
 } from 'firebase/auth';
 import {
-  collection, connectFirestoreEmulator, deleteDoc, doc, getDocFromServer, getDocsFromServer, getFirestore, setDoc, updateDoc,
+  collection, connectFirestoreEmulator, deleteDoc, doc, getDocFromServer, getDocsFromServer, getFirestore, runTransaction, setDoc,
+  updateDoc,
 } from 'firebase/firestore';
 import { PROJECT, ROOT, TEAM, admin } from './lib.mjs';
 
@@ -255,6 +256,26 @@ await expect('メンバー: 読む', '拒否', read(member, probe));
 await expect('メンバー: 書く', '拒否', write(member, probe));
 await expect('管理者: 読む', '拒否', read(owner, probe));
 await expect('管理者: 書く', '拒否', write(owner, probe));
+
+// ── 9. 確かめてから書く書き込み（トランザクション） ─────────────────
+// 前回の残りを送るとき（recoverDoc）と「共有へコピー」（createMissing）は、メンバーの権限で、読んでから書く。
+// 書かずに終える場合（内容が同じ・ほかの人が変更していた・削除されていた）も、読んだものが変わっていないことの確認が送られる
+g('9. 確かめてから書く書き込み（トランザクション。前回の残りの送信・共有へのコピーが使う）');
+{
+  const at = (c, id) => doc(c.db, `${T}/wsProjects/${id}`);
+  const tx = (c, fn) => () => runTransaction(c.db, (t) => fn(t, c), { maxAttempts: 1 });
+  await admin.set(`${T}/wsProjects/tx-doc`, { name: '案件', memo: '', rev: 'r0' });
+  await expect('メンバー: ある案件を読んで、更新する', 'できる', tx(member, async (t, c) => { await t.get(at(c, 'tx-doc')); t.update(at(c, 'tx-doc'), { memo: '前回のメモ', rev: 'r1' }); }));
+  await expect('メンバー: ある案件を読むだけで終える（書かない）', 'できる', tx(member, async (t, c) => { await t.get(at(c, 'tx-doc')); }));
+  await expect('メンバー: 無い案件を読むだけで終える（書かない）', 'できる', tx(member, async (t, c) => { await t.get(at(c, 'tx-missing')); }));
+  await expect('メンバー: 無いことを確かめて、作る', 'できる', tx(member, async (t, c) => { if (!(await t.get(at(c, 'tx-new'))).exists()) t.set(at(c, 'tx-new'), { name: 'コピーした案件', rev: 'r0' }); }));
+  const got = [await admin.get(`${T}/wsProjects/tx-doc`), await admin.get(`${T}/wsProjects/tx-new`), await admin.get(`${T}/wsProjects/tx-missing`)];
+  const want = JSON.stringify(['前回のメモ', 'コピーした案件', null]);
+  const have = JSON.stringify([got[0]?.memo ?? null, got[1]?.name ?? null, got[2]]);
+  results.push({ group, label: 'メンバー: 上の書き込みの結果が、共有側に入っている（書かなかったものは、作られていない）', want: '一致', got: have === want ? '一致' : `不一致（${have}）`, ok: have === want });
+  await expect('名簿に無いアカウント: ある案件を読んで、更新する', '拒否', tx(stranger, async (t, c) => { await t.get(at(c, 'tx-doc')); t.update(at(c, 'tx-doc'), { memo: '部外者のメモ' }); }));
+  await expect('名簿に無いアカウント: 無いことを確かめて、作る', '拒否', tx(stranger, async (t, c) => { if (!(await t.get(at(c, 'tx-by-stranger'))).exists()) t.set(at(c, 'tx-by-stranger'), { name: '部外者の案件' }); }));
+}
 
 // ── 結果 ──────────────────────────────────────────────────────
 let last = '';

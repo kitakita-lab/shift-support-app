@@ -121,6 +121,29 @@ export function stripMeta(body: Body): Body {
   return out;
 }
 
+// ── 前回の残り（送る前に画面が閉じられた変更）を送ってよいか ──────────────
+/** 中身の比較から除く、付随的な項目（並び順・更新時刻・印・最後に書いた人） */
+export const BOOKKEEPING_KEYS = ['order', 'updatedAt', 'rev', 'updatedBy'];
+/**
+ * gone    … 共有側に無い（削除された・保存されていなかった）
+ * same    … 既に届いていた（内容が同じ）
+ * send    … 共有側の印が safe のどれか＝この残りを始めてから、誰も触っていない
+ * changed … それ以外（ほかの人が変更していた）
+ */
+export type RecoveryVerdict = 'gone' | 'same' | 'changed' | 'send';
+/**
+ * 前回の残り（patch＝変えた項目と値）を、共有側のいまの内容（server）に対して送ってよいかを決める。
+ * safe は、その残り自身の履歴（変更を始めたときの印・その残りが送った印）。
+ * 副作用は無い（トランザクションの中で、やり直しのたびに呼ばれる）。
+ */
+export function judgeRecovery(patch: Body, safe: string[], server: Body | null): RecoveryVerdict {
+  if (!server) return 'gone';
+  const differs = Object.keys(patch).some((f) => !BOOKKEEPING_KEYS.includes(f) && !sameContent(server[f], patch[f]));
+  if (!differs) return 'same';
+  const rev = typeof server.rev === 'string' ? server.rev : '';
+  return safe.includes(rev) ? 'send' : 'changed';
+}
+
 // ── メンバー名簿 ─────────────────────────────────────────────
 /** 名簿のキーにするメールアドレス（前後の空白を除き、小文字にそろえる） */
 export const normalizeEmail = (s: string): string => s.trim().toLowerCase();

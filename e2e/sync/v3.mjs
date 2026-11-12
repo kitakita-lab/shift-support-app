@@ -646,10 +646,12 @@ add('D18', '「共有へコピー」「端末へコピー」: 案件が使う会
   same(s.partTypes.map(strip), parts0.map(strip), '共有のパーツ（サンプルの仮の単価で上書きされていないこと）');
   const p = s.projects[0];
   ok(p.assignments.every((x) => s.staff.some((y) => y.id === x.staffId)) && s.venues[0].id === p.venueId, 'コピーした案件の参照先（スタッフ・会場）が共有側にあること');
-  ok((await notices(a)).some((t) => t.includes('コピーしました') && t.includes('上書きしていません')), `コピーの表示: ${JSON.stringify(await notices(a))}`);
+  // 共有へのコピーは、共有側に「まだ無い」ことを確かめながら作る。結果の表示は、作り終えたあとに出る
+  ok((await until(() => notices(a), (xs) => xs.some((t) => t.includes('コピーしました')), 8000)).some((t) => t.includes('コピーしました') && t.includes('上書きしていません')), `コピーの表示: ${JSON.stringify(await notices(a))}`);
   eq(await projectRows(a), localRows, 'コピー元（この端末だけのデータ）は変わらないこと');
   await copyProject(a, 'ikyu');               // もう一度コピーしても、マスタは増えない
   const s2 = await until(() => server('v3'), (x) => x.projects.length === 2, 8000);
+  await until(() => notices(a), (xs) => xs.filter((t) => t.includes('コピーしました')).length === 2, 8000);
   eq([s2.projects.length, s2.staff.length, s2.venues.length, s2.contents.length, s2.partTypes.length], [2, 4, 1, 1, parts0.length], '2 回目のコピー後の件数');
   // 共有 → この端末
   await space(a, 'shared');
@@ -1022,5 +1024,84 @@ add('D26', '同じ端末の 2 つの画面で同じ案件を編集し、片方�
   await until(() => outbox(t1), (n) => n === 0, 20000);
   eq(A.errors, [], 'ブラウザのエラーが無いこと');
 }, V3);
+
+// Codex のレビュー（PR #86 の 2 回目）P2: 前回の残りを「送ってよい」と確かめることと、書くことを、切り離さない
+add('D27', '前回の残りを送ってよいと確かめたあと、書き込みが届かないうちにほかの人が同じ案件を保存したら、つながったあとで、古い内容で上書きしない（表示して、控えに残す）', async ({ device: mk }) => {
+  await teamWithData(mk);                      // 管理者が使い始めていて、案件「共有の案件」がある
+  const A = await mk('A'), B = await mk('B');
+  let a = await A.open();
+  await signIn(a, 'member@example.com');
+  const b = await B.open();
+  await signIn(b, 'member2@example.com');
+  await openProject(a, '共有の案件');
+  await kv(a, 'メモ').fill('A が閉じる直前に書いた古いメモ');
+  await kill(a);                               // 送る前に、画面が消えた（変更は端末の控えに残る）
+  await sleep(1500);
+  eq((await server('v3')).projects[0].memo, '', 'サーバーのメモ（まだ届いていないこと）');
+  // A の端末で、書き込みだけが届かない状態にする（読み取りはできる＝「誰も触っていない」と確かめるところまでは進む）
+  const writes = (url) => url.pathname.includes('/Write/channel') || url.pathname.endsWith(':commit');
+  await A.ctx.route(writes, (r) => r.abort());
+  a = await reopen(A, 40000);
+  await openProject(a, '共有の案件');
+  eq(await kv(a, 'メモ').inputValue(), 'A が閉じる直前に書いた古いメモ', '開き直した画面のメモ（前回の変更が出ていること）');
+  await sleep(12000);                          // 「確かめる」が済むのに十分な時間
+  eq((await server('v3')).projects[0].memo, '', 'サーバーのメモ（書き込みは届いていないこと）');
+  await openProject(b, '共有の案件');           // その間に、B が同じ案件のメモを保存する
+  await kv(b, 'メモ').fill('B が後から書いた新しいメモ');
+  await until(async () => (await server('v3')).projects[0], (p) => p.memo === 'B が後から書いた新しいメモ');
+  await sleep(1000);
+  await A.ctx.unroute(writes);                 // A の書き込みが、届くようになる
+  // 直す前: 確かめた時点の判断のまま、端末内の送信待ちにあった古いメモが送られて、B のメモを上書きする
+  // 直した後: 書く直前に確かめ直すので、上書きしない（表示して、控えに残す）
+  const result = await until(async () => {
+    if ((await server('v3')).projects[0].memo !== 'B が後から書いた新しいメモ') return 'overwritten';
+    return (await notices(a)).some((t) => t.includes('上書きしない')) ? 'told' : '';
+  }, (r) => r !== '', 120000);
+  eq(result, 'told', '結果（古い内容で上書きせず、表示が出ること）');
+  await sleep(3000);
+  eq((await server('v3')).projects[0].memo, 'B が後から書いた新しいメモ', 'サーバーのメモ（B の新しい内容が残っていること）');
+  ok((await notices(a)).some((t) => t.includes('共有の案件') && t.includes('控え')), `表示: ${JSON.stringify(await notices(a))}`);
+  await until(() => outbox(a), (n) => n === 0, 20000);
+  await space(a, 'local');
+  await openProject(a, '共有の案件（控え）');
+  eq(await kv(a, 'メモ').inputValue(), 'A が閉じる直前に書いた古いメモ', '控えのメモ（A が書いた内容が残っていること）');
+  eq(A.errors, [], 'ブラウザのエラーが無いこと');
+}, MEMBER_RULES);
+
+add('D28', '前回の残りを送る書き込みが届く直前に、ほかの人が同じ案件を保存しても、古い内容で上書きしない（確かめ直して、表示して、控えに残す）', async ({ device: mk }) => {
+  await teamWithData(mk);
+  const A = await mk('A'), B = await mk('B');
+  let a = await A.open();
+  await signIn(a, 'member@example.com');
+  const b = await B.open();
+  await signIn(b, 'member2@example.com');
+  await openProject(b, '共有の案件');
+  await openProject(a, '共有の案件');
+  await kv(a, 'メモ').fill('A が閉じる直前に書いた古いメモ');
+  await kill(a);
+  await sleep(1500);
+  eq((await server('v3')).projects[0].memo, '', 'サーバーのメモ（まだ届いていないこと）');
+  // A が「誰も触っていない」と確かめて書き込みを送った、その書き込みがサーバーに届く直前に、B の保存を割り込ませる
+  let held = 0;
+  const commit = (url) => url.pathname.endsWith(':commit');
+  await A.ctx.route(commit, async (route) => {
+    if ((route.request().postData() ?? '').includes('wsProjects/') && held++ === 0) {
+      await kv(b, 'メモ').fill('B が直前に書いた新しいメモ');
+      await until(async () => (await server('v3')).projects[0], (p) => p.memo === 'B が直前に書いた新しいメモ', 10000);
+    }
+    await route.continue();
+  });
+  a = await reopen(A, 40000);
+  const ns = await until(() => notices(a), (xs) => xs.some((t) => t.includes('上書きしない')), 60000);
+  ok(held > 0, '前回の残りを送る書き込みに、B の保存を割り込ませたこと');
+  ok(ns.some((t) => t.includes('共有の案件') && t.includes('控え')), `表示: ${JSON.stringify(ns)}`);
+  await sleep(3000);
+  eq((await server('v3')).projects[0].memo, 'B が直前に書いた新しいメモ', 'サーバーのメモ（B の新しい内容が残っていること）');
+  await until(() => outbox(a), (n) => n === 0, 20000);
+  await space(a, 'local');
+  await openProject(a, '共有の案件（控え）');
+  eq(await kv(a, 'メモ').inputValue(), 'A が閉じる直前に書いた古いメモ', '控えのメモ（A が書いた内容が残っていること）');
+  eq(A.errors, [], 'ブラウザのエラーが無いこと');
+}, MEMBER_RULES);
 
 await runFile('Version 3 で追加した確認項目', stopLegacyApp);

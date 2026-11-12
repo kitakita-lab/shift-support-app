@@ -5,6 +5,7 @@
 //   - 端末内の送信待ち（圏外では溜まり、つながると順に送られる。同じブラウザの画面（タブ）で共有される）
 //   - 購読（サーバーの内容に、送信待ちを重ねたものが届く）
 //   - サーバーからの読み取り（圏外では返ってこない）、トランザクション（圏外ではその場で失敗する）
+//   - 購読の遅れ（送信待ちの列を通らない書き込み＝ほかの端末の保存・トランザクションは、購読には遅れて届く。圏外の間は届かない）
 // 画面（タブ）は「モジュールを読み込み直した別の実体」として模擬する。状態は globalThis に置き、実体の間で共有する。
 //
 // これは Firestore そのものではない。実物での確認は e2e/sync（エミュレータ）で行う。
@@ -31,6 +32,20 @@ export interface FakeState {
   metaCache: Body | null | undefined;
   /** 書き込みを拒否させる（拒否の理由を返す） */
   rejectWrite: ((w: { kind: string; path: string; data?: Body }) => string | null) | null;
+  /**
+   * サーバーからドキュメントを読んだ直後（トランザクションでは、読んでから書くまでの間）に呼ばれる。
+   * 「確かめたあと、書き込みが届く前に、ほかの人が保存した・接続が切れた」を作るために使う。
+   */
+  afterRead: ((path: string) => void) | null;
+  /** recoverDoc のトランザクションが書いた直後に呼ばれる（「書けた直後に接続が切れた」を作るために使う） */
+  afterCommit: ((path: string) => void) | null;
+  /**
+   * 送信待ちの列を通らない書き込み（ほかの端末の保存・トランザクション）が、購読に届くまでの時間。
+   * 0 なら、すぐ届く。圏外の間に起きたものは、この値に関係なく、つながるまで届かない。
+   */
+  watchDelay: number;
+  /** まだ購読に届いていないドキュメントの、端末内の控えにある古い内容（null＝控えには無い） */
+  stale: Map<string, Body | null>;
   legacy: LegacyData;
   /** 起きたことの記録 */
   log: string[];
@@ -46,7 +61,8 @@ function fresh(): FakeState {
   return {
     server: new Map([[META, { formatVersion: FORMAT_VERSION, status: 'done' }]]), queue: [], listeners: new Set(), metaListeners: new Set(),
     waiters: new Set(), online: true, writeDelay: 40, readDelay: 40, access: { role: 'open', enforced: false }, metaCache: undefined,
-    rejectWrite: null, legacy: emptyLegacy(), log: [], processing: false, emitScheduled: false, resetOk: true, resets: 0,
+    rejectWrite: null, afterRead: null, afterCommit: null, watchDelay: 0, stale: new Map(), legacy: emptyLegacy(), log: [],
+    processing: false, emitScheduled: false, resetOk: true, resets: 0,
   };
 }
 const G = globalThis as unknown as { __kklFake?: FakeState };
@@ -67,10 +83,14 @@ function applyWrite(body: Body | undefined, w: Write): Body | undefined {
   for (const [k, v] of Object.entries(w.data ?? {})) { if (v === undefined) delete out[k]; else out[k] = clone(v); }
   return out;
 }
-/** サーバーの内容に、送信待ちを重ねたもの（画面に届く内容） */
+/** 端末内の控え（購読に届いているところまでのサーバーの内容）に、送信待ちを重ねたもの（画面に届く内容） */
 function localView(coll: string): Map<string, { body: Body; pending: boolean }> {
   const out = new Map<string, { body: Body; pending: boolean }>();
-  for (const [path, body] of fake.server) if (path.startsWith(`${coll}/`)) out.set(path.slice(coll.length + 1), { body, pending: false });
+  for (const path of new Set([...fake.server.keys(), ...fake.stale.keys()])) {
+    if (!path.startsWith(`${coll}/`)) continue;
+    const body = fake.stale.has(path) ? fake.stale.get(path) : fake.server.get(path);
+    if (body) out.set(path.slice(coll.length + 1), { body, pending: false });
+  }
   for (const w of fake.queue) {
     if (!w.path.startsWith(`${coll}/`)) continue;
     const id = w.path.slice(coll.length + 1);
@@ -104,6 +124,21 @@ function scheduleEmit(): void {
   fake.emitScheduled = true;
   setTimeout(() => { fake.emitScheduled = false; emitNow(); }, 0);
 }
+/**
+ * 送信待ちの列を通らない書き込み（ほかの端末の保存・トランザクション）で、サーバーの内容を書き換える前に呼ぶ。
+ * その変更は、購読には遅れて届く（それまで、端末内の控えは古い内容のまま）。
+ */
+function behind(path: string): void {
+  if (fake.online && fake.watchDelay === 0) return;        // すぐ届く
+  if (!fake.stale.has(path)) fake.stale.set(path, clone(fake.server.get(path)) ?? null);
+  if (fake.online) setTimeout(catchUp, fake.watchDelay);   // 圏外なら、つながったときに届く
+}
+/** 購読が、サーバーのいまの内容に追いつく */
+function catchUp(): void {
+  if (!fake.online || fake.stale.size === 0) return;
+  fake.stale.clear();
+  scheduleEmit();
+}
 async function pump(): Promise<void> {
   if (fake.processing) return;
   fake.processing = true;
@@ -118,6 +153,7 @@ async function pump(): Promise<void> {
       if (!code) {
         const next = applyWrite(fake.server.get(w.path), w);
         if (next === undefined) fake.server.delete(w.path); else fake.server.set(w.path, next);
+        fake.stale.delete(w.path);                          // 自分の書き込みが届いたドキュメントは、端末内の控えも最新になる
       }
       fake.log.push(`${code ? `REJECT(${code})` : 'ACK'} ${w.kind} ${w.path}`);
       emitNow();                                            // 先に購読へ届き、そのあとで書き込みの結果が返る（SDK と同じ順）
@@ -172,6 +208,7 @@ const collDocs = (coll: string) => [...fake.server].filter(([p]) => p.startsWith
 // ── テストからの操作 ──
 /** サーバーの内容を、ほかの端末が書き換えたことにする */
 export function setServer(coll: string, id: string, body: Body | null): void {
+  behind(`${coll}/${id}`);
   if (body === null) fake.server.delete(`${coll}/${id}`); else fake.server.set(`${coll}/${id}`, body);
   scheduleEmit();
 }
@@ -181,7 +218,12 @@ export function setMeta(m: Body | null): void {
   scheduleEmit();
 }
 /** ネットワークをつなぐ・切る */
-export function setNetwork(v: boolean): void { fake.online = v; scheduleEmit(); void pump(); }
+export function setNetwork(v: boolean): void {
+  fake.online = v;
+  if (v) setTimeout(catchUp, fake.watchDelay);              // 切れている間に起きた変更が、購読に届く
+  scheduleEmit();
+  void pump();
+}
 
 // ── remote.ts の代わり ──
 export const remote = {
@@ -212,7 +254,61 @@ export const remote = {
     if (targets.length === 0) return Promise.resolve();
     return new Promise<void>((resolve) => { fake.waiters.add({ targets, resolve }); });
   },
-  readDocServer: (coll: string, id: string) => serverRead(() => fake.server.get(`${coll}/${id}`) ?? null),
+  /** サーバーから 1 件読む。読んだドキュメントは、端末内の控えも最新になる（購読にも、同じ内容が届く） */
+  async readDocServer(coll: string, id: string): Promise<Body | null> {
+    const path = `${coll}/${id}`;
+    await serverRead(() => null);
+    const v = clone(fake.server.get(path) ?? null);
+    if (fake.stale.delete(path)) scheduleEmit();
+    fake.afterRead?.(path);
+    return v;
+  },
+  /**
+   * 前回の残りを送る（実物と同じく、「確かめる」と「書く」を 1 つのトランザクションで行う）。
+   * 読んでから書くまでの間にドキュメントが変わったら、やり直す。つながっていなければ、何も書かずに失敗する。
+   */
+  async recoverDoc(coll: string, id: string, patch: Body, judge: (server: Body | null) => string): Promise<{ verdict: string; server: Body | null }> {
+    const path = `${coll}/${id}`;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (!fake.online) throw err('unavailable');
+      await sleep(fake.readDelay);
+      if (!fake.online) throw err('unavailable');
+      const before = JSON.stringify(fake.server.get(path) ?? null);
+      const server = clone(fake.server.get(path) ?? null);
+      const verdict = judge(server);
+      fake.afterRead?.(path);
+      if (!fake.online) throw err('unavailable');                              // 書く前に切れた: 何も書かれない
+      if (JSON.stringify(fake.server.get(path) ?? null) !== before) continue;   // 読んだあとに変わった: やり直し
+      if (verdict === 'send' && server) {
+        const code = fake.rejectWrite ? fake.rejectWrite({ kind: 'update', path, data: patch }) : null;
+        if (code) { fake.log.push(`REJECT(${code}) recover ${path}`); throw err(code); }   // 書き込みそのものが受け付けられない（権限が無い、など）
+        const next: Body = { ...server };
+        for (const [k, v] of Object.entries(patch)) { if (v === undefined) delete next[k]; else next[k] = clone(v); }
+        behind(path);                                       // トランザクションの結果は、購読には遅れて届く
+        fake.server.set(path, next);
+        fake.log.push(`ACK recover ${path}`);
+        scheduleEmit();
+        fake.afterCommit?.(path);
+      }
+      return { verdict, server };
+    }
+    throw err('aborted');
+  },
+  /** まだ無いものだけを作る（実物と同じく、「無いことを確かめる」と「作る」を 1 つのトランザクションで行う）。既にあったものの場所を返す */
+  async createMissing(docs: PlannedDoc[]): Promise<string[]> {
+    const found: string[] = [];
+    for (let i = 0; i < docs.length; i += 8) {
+      const chunk = docs.slice(i, i + 8);
+      await transaction(() => {
+        for (const d of chunk) {
+          const path = `${d.coll}/${d.id}`;
+          if (fake.server.has(path)) found.push(path);
+          else { behind(path); fake.server.set(path, clone(d.body)); fake.log.push(`ACK create ${path}`); }
+        }
+      });
+    }
+    return found;
+  },
   readDocCache: async () => undefined,
   readCollServer: (coll: string) => serverRead(() => collDocs(coll)),
   checkAccess: () => serverRead(() => fake.access),

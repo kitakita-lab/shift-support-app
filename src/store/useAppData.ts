@@ -86,7 +86,7 @@ export interface AppStore {
   /** 「この端末だけのデータ」を丸ごと置き換える（サンプル読込・バックアップ復元）。共有データには触れない */
   replaceLocal: (d: AppData) => void;
   /** 表示中の案件を、もう一方の置き場所へコピーする。コピー先に無い会場・コンテンツ・スタッフ・パーツも一緒に足す（上書きはしない） */
-  copyProject: (id: string, to: Space) => boolean;
+  copyProject: (id: string, to: Space) => Promise<boolean>;
   /** ログアウトの前に呼ぶ。送れるものを送り、残る未送信の件数を返す */
   beforeSignOut: () => Promise<number>;
   /** ログアウトで未送信の変更を破棄する */
@@ -212,26 +212,34 @@ export function useAppData(): AppStore {
     setSpace('local');
   }, [setSpace]);
 
-  const copyProject = useCallback((id: string, to: Space): boolean => {
+  const copying = useRef(false);
+  const copyProject = useCallback(async (id: string, to: Space): Promise<boolean> => {
     const from = to === 'shared' ? local : shared.data;
     const target = to === 'shared' ? shared.data : local;
     if (to === 'shared' && (!session || shared.phase !== 'ready')) return false;
     const copy = planProjectCopy(from, id, target, genId());
     if (!copy) return false;
+    let existed = 0;
     if (to === 'shared') {
-      // 共有側の最新の内容を受け取れていないときは、コピーしない（「共有側に無い」と判断したものを、上書きしてしまうため）
-      if (!session!.importCopy(copy)) {
-        notify('warn', '共有データの最新の内容を確認できていないため、コピーしませんでした。接続を確認して、右上の表示が「保存済み」になってから、もう一度お試しください。');
-        return false;
+      // 共有へのコピーは、共有側に「まだ無い」ことを確かめながら作るので、結果が分かるまで少し待つ
+      if (copying.current) { notify('warn', '前のコピーの処理が、まだ終わっていません。少し待ってから、もう一度お試しください。'); return false; }
+      copying.current = true;
+      try {
+        const r = await session!.importCopy(copy);
+        if (!r.ok) { notify('warn', r.message); return false; }
+        existed = r.existed;
+      } finally {
+        copying.current = false;
       }
     } else {
       setLocal((d) => applyCopy(d, copy));
     }
     const name = copy.project.name || '名称未設定';
-    const added = (Object.values(copy.add) as { id: string }[][]).reduce((n, xs) => n + xs.length, 0);
+    const added = (Object.values(copy.add) as { id: string }[][]).reduce((n, xs) => n + xs.length, 0) - existed;
     notify('info', [
       `案件「${name}」を、${to === 'shared' ? '共有データ' : 'この端末だけのデータ'}へコピーしました（元の案件はそのまま残っています）。`,
-      added ? `案件が使っている会場・コンテンツ・スタッフ・パーツのうち、コピー先に無かった ${added} 件も一緒に追加しました。` : '',
+      added > 0 ? `案件が使っている会場・コンテンツ・スタッフ・パーツのうち、コピー先に無かった ${added} 件も一緒に追加しました。` : '',
+      existed > 0 ? `一緒に追加しようとした ${existed} 件は、直前にコピー先へ追加されていたため、コピー先にある内容をそのまま使います（上書きしていません）。` : '',
       ...copy.notes,
     ].filter(Boolean).join(' '));
     return true;

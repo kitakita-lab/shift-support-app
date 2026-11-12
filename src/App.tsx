@@ -136,7 +136,7 @@ export default function App() {
     // 共有側の最新の内容を受け取れていない間は、コピーしない（「共有側に無い」と判断したものを、上書きしてしまうため）
     if (to === 'shared' && (!shared.online || shared.fromCache)) { alert('共有データの最新の内容を確認できていないため、いまはコピーできません。\n接続を確認して、少し待ってから、もう一度お試しください。'); return; }
     if (!window.confirm(`案件「${p.name || '名称未設定'}」を、${dest}へコピーします。\n案件が使っている会場・コンテンツ・スタッフ・パーツのうち、コピー先に無いものも一緒に追加します（既にあるものは上書きしません）。\n\nよろしいですか？`)) return;
-    store.copyProject(p.id, to);
+    void store.copyProject(p.id, to);   // 結果は、画面上部のお知らせに出る
   };
   const logout = async () => {
     const unsent = await store.beforeSignOut();
