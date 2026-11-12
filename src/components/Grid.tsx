@@ -1,6 +1,7 @@
 // 表計算風の編集グリッド。セルは常時編集可能で、Enter で下のセルへ移動する。
 // 入力チェックは「禁止せず警告」: warn が文字列を返したセルを黄色くし、理由をツールチップと ⚠ で示す。
 import { KeyboardEvent, ReactNode } from 'react';
+import NumInput from './NumInput';
 
 export interface Option { value: string; label: string }
 
@@ -39,6 +40,9 @@ interface Props<R> {
 }
 
 function onKey(e: KeyboardEvent<HTMLElement>) {
+  // 日本語入力の変換を確定する Enter ではセルを移動しない
+  // （ブラウザによっては確定の Enter も key === 'Enter' で届く。変換中は isComposing が true、または keyCode が 229）
+  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
   if (e.key !== 'Enter') return;
   const el = e.currentTarget;
   const r = Number(el.dataset.r), c = el.dataset.c;
@@ -95,10 +99,20 @@ export default function Grid<R>({
                           {val && !c.options?.some((o) => o.value === val) && <option value={val}>（削除済み）</option>}
                           {c.options?.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                         </select>
+                      ) : c.type === 'number' ? (
+                        <NumInput
+                          {...common}
+                          value={val}
+                          placeholder={c.placeholder?.(row)}
+                          // 空欄にすると 0 になる列（＝空欄と 0 が同じ意味）だけ、フォーカス中は 0 を空欄で見せる。
+                          // 空欄が「マスタの値を使う」を意味する上書き列（時給・交通費・参加費）は 0 をそのまま見せる
+                          blankIsZero={c.get(c.set!(row, '')) === 0}
+                          onValue={(v) => setCell(ri, c, v)}
+                        />
                       ) : (
                         <input
                           {...common}
-                          type={c.type === 'number' ? 'number' : c.type ?? 'text'}
+                          type={c.type ?? 'text'}
                           value={val}
                           placeholder={c.placeholder?.(row)}
                           onChange={(e) => setCell(ri, c, e.target.value)}

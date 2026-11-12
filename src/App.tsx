@@ -5,8 +5,8 @@ import { ContentMaster, PartMaster, StaffMaster, VenueMaster } from './component
 import ProjectView from './components/ProjectView';
 import { useAuth } from './contexts/AuthContext';
 import { estimate } from './domain/calc';
-import { newProject, sampleData } from './domain/seed';
-import { genId, listDates, shortDate, yen } from './domain/util';
+import { duplicateProject, newProject, sampleData } from './domain/seed';
+import { genId, listDates, localDate, shortDate, yen } from './domain/util';
 import { projectWarnings } from './domain/warnings';
 import { isFirebaseConfigured } from './firebase';
 import { hydrateData, useAppData } from './store/useAppData';
@@ -59,10 +59,8 @@ export default function App() {
     store.addProject(p);
     setOpenId(p.id);
   };
-  const duplicate = (p: Project) => {
-    // 複製は新しい案件として V1 から始める
-    store.addProject({ ...structuredClone(p), id: genId(), name: `${p.name}（コピー）`, status: '計画中', layout: { ...structuredClone(p.layout), version: 1, issued: [] } });
-  };
+  // 複製は新しい案件として V1 から始める
+  const duplicate = (p: Project) => store.addProject(duplicateProject(p));
   const remove = (p: Project) => {
     if (window.confirm(`案件「${p.name || '名称未設定'}」を削除します。元に戻せません。よろしいですか？`)) store.removeProject(p.id);
   };
@@ -71,21 +69,23 @@ export default function App() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `workshop-planner-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `workshop-planner-backup-${localDate()}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
+  // ログイン中の全置き換えは、この端末だけでなくチームで共有しているデータ（Firestore）にも及ぶ。必ず確認する
+  const sharedNote = user ? '\n\n⚠ ログイン中のため、この端末だけでなく、チームで共有しているデータも置き換わります。' : '';
   const importJson = async (file: File) => {
     try {
       const d = hydrateData(JSON.parse(await file.text()));
-      if (window.confirm(`バックアップ（案件 ${d.projects.length} 件）を読み込み、現在のデータをすべて置き換えます。よろしいですか？`)) store.replaceAll(d);
+      if (window.confirm(`バックアップ（案件 ${d.projects.length} 件）を読み込み、現在のデータをすべて置き換えます。${sharedNote}\n\nよろしいですか？`)) store.replaceAll(d);
     } catch {
       alert('ファイルを読み込めませんでした（JSON 形式ではありません）。');
     }
   };
   const loadSample = () => {
     const empty = data.projects.length === 0 && data.staff.length === 0 && data.venues.length === 0;
-    if (empty || window.confirm('現在のデータをすべてサンプルデータで置き換えます。よろしいですか？')) {
+    if ((empty && !user) || window.confirm(`現在のデータをすべてサンプルデータで置き換えます。${sharedNote}\n\nよろしいですか？`)) {
       store.replaceAll(sampleData());
       setTab('projects');
     }
@@ -144,7 +144,10 @@ export default function App() {
             <h2>データ</h2>
             <div className="panel panel--wide">
               <div className="panel__title">サンプルデータ</div>
-              <p className="hint">参考の配置図（ラソラ札幌）をなぞった会場雛形・レイアウト・試算のサンプルです。金額・人名・寸法はすべて仮の値です。</p>
+              <p className="hint">
+                参考の配置図（ラソラ札幌）をなぞった会場雛形・レイアウト・試算のサンプルです。案件は 2 件入ります：
+                デモ（12/5〜6）と、ラソラ札幌 11/13〜17・フラワーボトルの土台。<b>金額・個数・人員・時間・寸法はすべて仮置きの値</b>で、人名は架空です。
+              </p>
               <div className="panel__btns"><button onClick={loadSample}>サンプルデータを読み込む</button></div>
             </div>
             <div className="panel panel--wide">

@@ -1,12 +1,13 @@
 // 案件詳細。下部のシートタブ（基本情報／スタッフ配置／レイアウト／試算）で切り替える。
 import { ReactNode, useMemo, useState } from 'react';
 import { assignmentHours, estimate, laborLine, unitMaterialCost } from '../domain/calc';
-import { layoutFromTemplate } from '../domain/seed';
+import { applyTemplate } from '../domain/layout';
 import { genId, listDates, num, shortDate, toMinutes, yen } from '../domain/util';
 import { checkNewAssignment, projectWarnings } from '../domain/warnings';
 import { AppData, Assignment, OtherCost, Project, ProjectContent, ProjectStatus, Venue, Warning } from '../types';
 import Grid, { Col, n0, nNull } from './Grid';
 import LayoutEditor from './LayoutEditor';
+import NumInput from './NumInput';
 
 type Sheet = 'basic' | 'staff' | 'layout' | 'estimate';
 const SHEETS: { id: Sheet; label: string }[] = [
@@ -59,7 +60,8 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
       ? {
           ...x, venueId,
           venueFeeFixed: v.feeFixed, venueFeePerDay: v.feePerDay, venueFeeRatePct: v.feeRatePct,
-          layout: { ...x.layout, width: v.template.width, height: v.template.height, env: layoutFromTemplate(v.template).env },
+          // 図が変わるので、出力済みの版なら次の版になる（applyTemplate 内で繰り上げ）
+          layout: applyTemplate(x.layout, v.template),
         }
       : { ...x, venueId }));
   };
@@ -129,8 +131,8 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
     { key: 'amount', title: '金額', width: 110, type: 'number', get: (o) => o.amount, set: (o, v) => ({ ...o, amount: n0(v) }) },
   ];
 
-  const numInput = (key: keyof Project) => (
-    <input type="number" value={String(p[key] ?? '')} onChange={(e) => set({ [key]: n0(e.target.value) } as Partial<Project>)} style={{ textAlign: 'right' }} />
+  const numInput = (key: 'fixedRevenue' | 'venueFeeFixed' | 'venueFeePerDay' | 'venueFeeRatePct') => (
+    <NumInput value={String(p[key] ?? '')} blankIsZero onValue={(v) => set({ [key]: n0(v) })} style={{ textAlign: 'right' }} />
   );
 
   return (
@@ -259,7 +261,7 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
             onChange={(layout) => onChange((x) => ({ ...x, layout }))}
             onReloadTemplate={venue ? () => {
               if (!window.confirm(`周辺環境を会場「${venue.name}」の雛形で置き換えます（配置済みパーツは残ります）。よろしいですか？`)) return;
-              onChange((x) => ({ ...x, layout: { ...x.layout, width: venue.template.width, height: venue.template.height, env: layoutFromTemplate(venue.template).env } }));
+              onChange((x) => ({ ...x, layout: applyTemplate(x.layout, venue.template) }));
             } : undefined}
             onSaveAsTemplate={venue ? () => {
               if (window.confirm(`この周辺環境を会場「${venue.name}」の雛形として保存します。今後この会場で作る案件の初期状態になります。よろしいですか？`)) onSaveVenueTemplate(venue.id, p);

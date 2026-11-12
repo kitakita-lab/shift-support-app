@@ -285,20 +285,52 @@ function groupLabelPoint(members: PlacedItem[], obstacles: Rect[], partTypes: Pa
 }
 
 // ── 版管理 ──────────────────────────────────────────────────
+// 守ること：「同じ版番号の図は 1 種類だけ」。出力（発行）した版の内容を変えたら、必ず新しい版番号にする。
 
 export function isIssued(layout: Layout): boolean {
   return layout.issued.some((v) => v.version === layout.version);
 }
 
+/** これまでに使ったどの版（作業中の版・出力済みの版）よりも新しい版番号 */
+export function nextVersion(layout: Layout): number {
+  return Math.max(layout.version, ...layout.issued.map((v) => v.version)) + 1;
+}
+
 /** 発行済みの版に手を入れたら、次の版に自動で繰り上げる */
 export function bumpIfIssued(layout: Layout): Layout {
-  return isIssued(layout) ? { ...layout, version: layout.version + 1 } : layout;
+  return isIssued(layout) ? { ...layout, version: nextVersion(layout) } : layout;
 }
 
 /** PDF 出力時に現在の版を「発行済み」として記録する */
 export function markIssued(layout: Layout, issuedAt: string): Layout {
   if (isIssued(layout)) return layout;
   return { ...layout, issued: [...layout.issued, { version: layout.version, issuedAt }] };
+}
+
+/**
+ * 「元に戻す」。図面の内容は prev（履歴に積んであった状態）に戻すが、出力の記録は事実なので消さない。
+ * - prev が「出力した時点の状態そのもの」なら、その版に戻る（内容が出力済みの図と一致するので版番号も同じでよい）
+ * - それ以外で、いまの版が出力済みなら次の版にする（出力済みの版と違う内容を、同じ版番号で出さない）
+ * - それ以外は、いまの作業中の版番号のまま
+ */
+export function undoTo(current: Layout, prev: Layout): Layout {
+  const restored: Layout = { ...prev, issued: current.issued };
+  // 出力済みの版は編集した時点で次の版に上がるので、「出力記録つきで履歴に残っている状態」＝出力した内容そのもの
+  if (prev.issued.some((v) => v.version === prev.version)) return restored;
+  return { ...restored, version: isIssued(current) ? nextVersion(current) : current.version };
+}
+
+/**
+ * 周辺環境を会場雛形のもので置き換える（配置済みパーツ・注記・版の記録は残す）。
+ * 雛形はコピーして使う（id を振り直す）。出力済みの版なら、図が変わるので次の版にする。
+ */
+export function applyTemplate(layout: Layout, template: Layout): Layout {
+  return bumpIfIssued({
+    ...layout,
+    width: template.width,
+    height: template.height,
+    env: template.env.map((e) => ({ ...e, id: genId() })),
+  });
 }
 
 export function layoutTitle(projectName: string, venueName: string, version: number): string {
@@ -311,7 +343,7 @@ export function noteLines(notes: string): string[] {
   return notes.split('\n').map((s) => s.trim()).filter(Boolean);
 }
 
-/** 重なっているパーツの組（警告用）。同一グループ内と椅子同士以外を対象にする */
+/** 重なっているパーツの組（警告用）。同一グループ内（L字の継ぎ目など）は対象外。5cm 以下の重なりは許容 */
 export function findOverlaps(layout: Layout, partTypes: PartType[]): [PlacedItem, PlacedItem][] {
   const out: [PlacedItem, PlacedItem][] = [];
   const rs = layout.items.map((i) => ({ i, pt: partTypes.find((t) => t.id === i.partTypeId) }))

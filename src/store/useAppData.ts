@@ -162,11 +162,16 @@ export function useAppData(): AppStore {
     return () => unsubs.forEach((u) => u());
   }, [user]);
 
-  // ── 保存（localStorage は常に、Firestore はログイン時のみ・差分だけ） ──
+  // ── 保存（この端末）: 変更のたびにすぐ保存する ──
+  // まとめて遅らせると、入力の直後に再読み込み・タブを閉じた場合（スマホでの画面切り替えを含む）に最後の入力が消える
   useEffect(() => {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch { /* 容量超過などは無視 */ }
+  }, [data]);
+
+  // ── 保存（Firestore）: ログイン時のみ。0.7 秒まとめてから、変わったマスタ／案件だけを書く ──
+  useEffect(() => {
+    if (!user) return;
     const timer = setTimeout(() => {
-      try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch { /* 容量超過などは無視 */ }
-      if (!user) return;
       const actor: Actor = { uid: user.uid, displayName: user.displayName ?? user.email ?? '不明' };
       const jobs: Promise<void>[] = [];
 

@@ -1,6 +1,6 @@
 // 案件ごとの収支試算（純関数）。計算式は docs/02_新アプリ設計書.md「4. 試算の計算式」と一致させること。
 import { AppData, Assignment, Content, Layout, PartType, Project, Staff } from '../types';
-import { listDates, num, toMinutes } from './util';
+import { listDates, num, roundYen, toMinutes } from './util';
 
 export interface LaborLine {
   assignmentId: string;
@@ -63,19 +63,25 @@ export function unitMaterialCost(c: Content | undefined): number {
   return c.materials.reduce((s, m) => s + num(m.unitCost) * num(m.qtyPerUnit), 0);
 }
 
-export function assignmentHours(a: Assignment): number {
+/** 実働時間（分）= max(0, 終了 − 開始 − 休憩)。時刻が未入力なら 0 */
+export function assignmentMinutes(a: Assignment): number {
   const s = toMinutes(a.startTime);
   const e = toMinutes(a.endTime);
   if (s == null || e == null) return 0;
-  return Math.max(0, e - s - num(a.breakMinutes)) / 60;
+  return Math.max(0, e - s - num(a.breakMinutes));
+}
+
+export function assignmentHours(a: Assignment): number {
+  return assignmentMinutes(a) / 60;
 }
 
 export function laborLine(a: Assignment, staff: Staff | undefined): LaborLine {
-  const hours = assignmentHours(a);
+  const minutes = assignmentMinutes(a);
+  const hours = minutes / 60;
   const rate = a.rateOverride ?? num(staff?.hourlyRate);
   const transport = a.transportOverride ?? num(staff?.transportPerDay);
-  // 1配置ごとに円未満を四捨五入
-  const wage = Math.round(hours * num(rate));
+  // 1配置ごとに円未満を四捨五入。「分 × 時給」を先に掛けてから 60 で割る（先に時間へ直すと端数で 1 円ずれることがある）
+  const wage = roundYen((minutes * num(rate)) / 60);
   return {
     assignmentId: a.id,
     staffName: staff?.name ?? '(未選択)',
@@ -130,7 +136,8 @@ export function estimate(p: Project, data: Pick<AppData, 'staff' | 'contents' | 
       revenue: count * num(price),
       unitMaterialCost: unit,
       sparePct: num(pc.sparePct),
-      materialCost: Math.round(count * (1 + num(pc.sparePct) / 100) * unit),
+      // 個数 ×（100 ＋ 予備率）× 原価 を先に掛けてから 100 で割る（1.15 のような小数を経由すると端数で 1 円ずれることがある）
+      materialCost: roundYen((count * (100 + num(pc.sparePct)) * unit) / 100),
     };
   });
 
@@ -143,7 +150,7 @@ export function estimate(p: Project, data: Pick<AppData, 'staff' | 'contents' | 
 
   const laborCost = laborLines.reduce((s, l) => s + l.total, 0);
   const materialCost = contentLines.reduce((s, l) => s + l.materialCost, 0);
-  const venueFee = Math.round(
+  const venueFee = roundYen(
     num(p.venueFeeFixed) + num(p.venueFeePerDay) * days + (participationRevenue * num(p.venueFeeRatePct)) / 100,
   );
   const partsCost = pLines.reduce((s, l) => s + l.cost, 0);
