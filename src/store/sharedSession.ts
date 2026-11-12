@@ -647,7 +647,8 @@ export class SharedSession {
       for (const e of list) {
         if (this.stopped || this.view.phase !== 'ready') return;
         const cur = this.docs.get(`${e.coll}/${e.id}`);
-        if (cur && (cur.inflight.length || cur.overlay.pending)) continue;      // この画面で編集中（控えは、その編集が書き直す）
+        // この画面でいま編集・送信しているものは対象外（その編集が、控えを書き直し、届いたら消す）
+        if (cur && (cur.inflight.length || cur.overlay.pending || cur.timer)) continue;
         if (!COLLS.some((c) => c.coll === e.coll)) { removeOutbox(e.uid, e.coll, e.id); continue; }
         let server: Body | null;
         try { server = await withTimeout(readDocServer(e.coll, e.id), 10000); } catch { continue; }   // 確かめられない → 次の機会に

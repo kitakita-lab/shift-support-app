@@ -101,18 +101,21 @@ export function countOutbox(uid: string): number {
 }
 
 /**
- * 書いた画面がもう開いていない控え（＝前回、送る前に閉じられたもの）。呼び出した画面が引き取って送り直す。
- * ほかの画面がまだ開いていて、そこで送る途中のものは含めない（二重に送って順序が入れ替わるのを避ける）。
+ * 引き取りの候補になる控え。
+ *   - ほかの画面が書いたもの … その画面がもう開いていなければ対象（前回、送る前に閉じられたもの）。
+ *     まだ開いている画面が送る途中のものは含めない（二重に送って順序が入れ替わるのを避ける）
+ *   - この画面が書いたもの … すべて返す。いま編集・送信中のものかどうかは呼び出し側が見分ける
+ *     （この画面でログアウトして入り直した場合など、前のログイン中に残したものを拾うため）
  */
 export async function orphans(uid: string): Promise<OutboxEntry[]> {
-  const all = entriesOf(uid).filter((e) => e.sid !== SID);
+  const all = entriesOf(uid);
   if (all.length === 0) return [];
   let alive: Set<string> | null = null;
   try {
     if (navigator.locks?.query) alive = new Set(((await navigator.locks.query()).held ?? []).map((l) => l.name ?? ''));
   } catch { alive = null; }
   const now = Date.now();
-  return all.filter((e) => (alive ? !alive.has(lockName(e.sid)) : now - e.at > 15000));
+  return all.filter((e) => e.sid === SID || (alive ? !alive.has(lockName(e.sid)) : now - e.at > 15000));
 }
 
 /** この利用者の控えをすべて捨てる（ログアウトで未送信の変更を破棄するとき） */
