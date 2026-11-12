@@ -1,7 +1,7 @@
 // 日付・時刻・丸めなど、試算と警告の土台になる小さな関数の確認。
 // テストは日本時間で実行される（vitest.config.ts）。
 import { describe, expect, it } from 'vitest';
-import { MAX_DAYS, circled, daySpan, listDates, localDate, num, roundYen, shortDate, toMinutes, yen } from './util';
+import { MAX_DAYS, circled, compactDate, daySpan, listDates, localDate, num, periodText, roundYen, shortDate, toMinutes, yen } from './util';
 
 describe('日付', () => {
   it('テストは日本時間で動いている', () => {
@@ -72,6 +72,16 @@ describe('時刻・数値', () => {
     expect(yen(125340)).toBe('¥125,340');
     expect(yen(-38910)).toBe('¥-38,910');
     expect(yen(0)).toBe('¥0');
+  });
+  it('periodText：会期の表示（配置図用）。年をまたぐときだけ終了日にも年を付ける。未入力・不正・逆転は空', () => {
+    expect(periodText('2026-11-13', '2026-11-17')).toBe('2026/11/13(金)〜11/17(火)');
+    expect(periodText('2026-11-13', '2026-11-13')).toBe('2026/11/13(金)');
+    expect(periodText('2026-12-30', '2027-01-03')).toBe('2026/12/30(水)〜2027/1/3(日)');
+    expect(periodText('2026-02-28', '2026-03-01')).toBe('2026/2/28(土)〜3/1(日)');
+    expect([periodText('', ''), periodText('2026-11-13', ''), periodText('', '2026-11-17'), periodText('2026-11-18', '2026-11-17'), periodText('abc', '2026-11-17')]).toEqual(['', '', '', '', '']);
+  });
+  it('compactDate：ファイル名用の日付', () => {
+    expect([compactDate('2026-11-13'), compactDate('2026-01-05'), compactDate(''), compactDate('2026/11/13')]).toEqual(['20261113', '20260105', '', '']);
   });
   it('circled：丸数字は ⑳ まで、それ以降は (21)', () => {
     expect([circled(1), circled(2), circled(20), circled(21)]).toEqual(['①', '②', '⑳', '(21)']);

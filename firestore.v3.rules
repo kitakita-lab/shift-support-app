@@ -1,0 +1,77 @@
+rules_version = '2';
+
+// ============================================================
+// ワークショップ運営プランナー Version 3 のルール案（メンバー制）
+//
+// ★ これは「案」。firebase.json が指しているのは firestore.rules で、このファイルは
+//   自動ではデプロイされない。適用の手順と注意は docs/02_新アプリ設計書.md を参照。
+//
+// 考え方:
+//   - teams/{チーム}/members/{メールアドレス（小文字）} に登録された Google アカウントだけが、
+//     そのチームのデータを読み書きできる。メールが確認済みで、Google でログインしたアカウントに限る。
+//   - 名簿を変えられるのは管理者（role: 'owner'）だけ。
+//   - アプリが使う場所だけを名前で許可する。一覧は src/store/collections.json と一致させる
+//     （e2e/sync/rules.mjs が照合する）。それ以外の場所、2 階層より深い場所はすべて拒否。
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ログイン情報のメールアドレス（小文字にそろえて名簿と照合する）
+    function email() { return request.auth.token.email.lower(); }
+    function signedInWithVerifiedEmail() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email_verified == true
+        // このアプリのログイン方法は Google だけ。ほかの方法（メールとパスワードなど）で作られたアカウントは通さない
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+    function memberDoc(teamId) {
+      return /databases/$(database)/documents/teams/$(teamId)/members/$(email());
+    }
+    function isMember(teamId) { return signedInWithVerifiedEmail() && exists(memberDoc(teamId)); }
+    function isOwner(teamId) { return isMember(teamId) && get(memberDoc(teamId)).data.role == 'owner'; }
+
+    // 新アプリのデータ（1 件＝1 ドキュメント）
+    function isAppData(coll) {
+      return coll in ['wsStaff', 'wsVenues', 'wsContents', 'wsPartTypes', 'wsComposites', 'wsProjects'];
+    }
+    // V1・V2 の形式のデータ（移行元。読むだけ）
+    function isLegacyData(coll) { return coll in ['workshopData', 'workshopProjects']; }
+    // 旧アプリ（シフト作成サポート）のデータ
+    function isOldAppData(coll) { return coll in ['appData', 'presence', 'editingStates', 'activityLogs']; }
+    // 形式の情報・移行前バックアップ
+    function isAdminData(coll) { return coll in ['wsMeta', 'wsBackups']; }
+
+    // ── メンバー名簿 ──
+    match /teams/{teamId}/members/{memberEmail} {
+      // 自分の登録状況は、登録されていなくても確認できる（「無い」と分かるだけ）
+      allow get: if signedInWithVerifiedEmail() && email() == memberEmail;
+      // 名簿の閲覧と変更は管理者だけ。キーは小文字のメールアドレス、役割は決められた値だけ
+      allow get, list, delete: if isOwner(teamId);
+      allow create, update: if isOwner(teamId)
+        && memberEmail == memberEmail.lower()
+        && request.resource.data.keys().hasOnly(['role', 'addedAt', 'addedBy', 'note'])
+        && request.resource.data.role in ['owner', 'member'];
+    }
+
+    // ── チームのデータ ──
+    match /teams/{teamId}/{coll}/{docId} {
+      // 新アプリ・旧アプリのデータ: メンバーが読み書きできる
+      allow read, write: if isMember(teamId) && (isAppData(coll) || isOldAppData(coll));
+      // V1・V2 の形式のデータ: 読むだけ（古いアプリから書き換えさせない。移行元として残す）
+      allow read: if isMember(teamId) && isLegacyData(coll);
+      // 形式の情報・バックアップ: 読むのはメンバー、作成と更新は管理者。削除は誰にもできない
+      allow read: if isMember(teamId) && isAdminData(coll);
+      allow create: if isOwner(teamId) && isAdminData(coll);
+      // 形式の情報の「移行済み・使える状態」の印（status: 'done'）は、付いたあとは外せない
+      // （完了後に、未完了や失敗へ書き換えると、ほかの端末が「移行のやり直し」を案内してしまうため）
+      allow update: if isOwner(teamId) && isAdminData(coll)
+        && !(coll == 'wsMeta' && resource.data.get('status', '') == 'done' && request.resource.data.get('status', '') != 'done');
+    }
+
+    // 上記以外（別の場所、2 階層より深い場所）はすべて拒否
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

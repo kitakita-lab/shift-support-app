@@ -1,8 +1,8 @@
 // 入力チェック。原則：「禁止せず、警告して選ばせる」。
 // ここは警告を列挙するだけで、入力値の拒否・自動修正は一切しない。
 import { AppData, Assignment, PlacedItem, Project, Warning } from '../types';
-import { assignmentHours, countParts } from './calc';
-import { buildLabels, findOverlaps } from './layout';
+import { assignmentHours, countParts, countSeats, seatDemand } from './calc';
+import { buildLabels, findOverlaps, itemSize } from './layout';
 import { MAX_DAYS, daySpan, listDates, num, shortDate, toMinutes } from './util';
 
 function overlaps(a: Assignment, b: Assignment): boolean {
@@ -57,6 +57,11 @@ export function projectWarnings(p: Project, data: AppData): Warning[] {
     if (!c) add(`pc:${pc.id}:contentId`, 'コンテンツが未選択です。');
     if (num(pc.plannedCount) === 0) add(`pc:${pc.id}:plannedCount`, '予定個数が 0 です。材料費・売上が 0 で試算されます。');
     if (num(pc.plannedCount) < 0) add(`pc:${pc.id}:plannedCount`, '予定個数がマイナスです。');
+    if (pc.maxTurns != null && num(pc.maxTurns) < 0) add(`pc:${pc.id}:maxTurns`, '上限回転数がマイナスです（席数の確認には使われません）。');
+    // 一部のコンテンツにだけ上限回転数が入っている場合、未入力のものは席数の確認に入らない。見落としやすいので参考として知らせる
+    else if (num(pc.maxTurns) <= 0 && num(pc.plannedCount) > 0 && p.contents.some((x) => num(x.maxTurns) > 0)) {
+      add(`pc:${pc.id}:maxTurns`, `${c?.name ?? 'このコンテンツ'}: 上限回転数が未入力のため、制作席の過不足の確認には含めていません。`, 'info');
+    }
     if (c && c.materials.length === 0) add(`pc:${pc.id}:contentId`, `「${c.name}」に材料が登録されていません（材料費 0 円で試算）。`, 'info');
   }
 
@@ -119,7 +124,35 @@ export function projectWarnings(p: Project, data: AppData): Warning[] {
     const names = ov.slice(0, 3).map(([a, b]) => `${nameOf(a)}×${nameOf(b)}`).join('、');
     add('layout:overlap', `パーツが重なっています（${ov.length}組: ${names}${ov.length > 3 ? ' ほか' : ''}）。`);
   }
+  // 図面の外にあるパーツ（少しでもはみ出していれば対象。自動では動かさない。作業ログ D-20）
+  // 図面サイズを小さくした・パーツの寸法を大きくした・小さい雛形に置き換えた、などで起きる
+  // 端にぴったり寄せたパーツが、小数の計算誤差（1100.3 ＋ 29.7 ＝ 1130.0000000000002 など）で「外」と判定されないよう、ごくわずかな幅を許す
+  const EPS = 1e-6;
+  const outside = p.layout.items.filter((it) => {
+    const s = itemSize(it, data.partTypes.find((t) => t.id === it.partTypeId));
+    return it.x < -EPS || it.y < -EPS || it.x + s.w > p.layout.width + EPS || it.y + s.h > p.layout.height + EPS;
+  });
+  if (outside.length > 0) {
+    const names = outside.slice(0, 3).map(nameOf).join('、');
+    add('layout:outside', `図面の外にパーツがあります（${outside.length}個: ${names}${outside.length > 3 ? ' ほか' : ''}）。図面サイズを広げるか、パーツを図面の中に動かしてください。`);
+  }
   if (p.layout.env.length === 0) add('layout:env', '会場の雛形（周辺環境）が未設定です。', 'info');
+
+  // ── 制作席の過不足（上限回転数が入力されているときだけ。作業ログ D-16） ──
+  // 必要量（席・日）＝ Σ 予定個数 ÷ 上限回転数。制作席 × 日数 を超えたら警告（ちょうどなら警告しない）
+  const need = seatDemand(p);
+  if (need != null && need > 0 && dates.length > 0) {
+    const seats = countSeats(p.layout, data.partTypes).work;
+    const capacity = seats * dates.length;
+    const f = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+    // 表示する必要量は小数第 1 位に切り上げる（80.05 を「80.0」と出すと、足りているように読めるため）
+    const shown = Math.ceil(need * 10 - 1e-9) / 10;
+    if (seats === 0) {
+      add('layout:seats', 'レイアウトに制作席（椅子）がありません。上限回転数が入力されているコンテンツがあります。');
+    } else if (need > capacity + 1e-9) {
+      add('layout:seats', `制作席が足りない計算です：必要 ${f(shown)} 席・日（Σ 予定個数 ÷ 上限回転数）に対し、制作席 ${seats} 席 × ${dates.length} 日 ＝ ${capacity} 席・日。席を増やす・日数を延ばす・予定個数か上限回転数を見直す、のいずれかが必要です。`);
+    }
+  }
 
   return w;
 }

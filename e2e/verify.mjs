@@ -11,24 +11,9 @@
 //   見つからない場合は `npm i -D playwright && npx playwright install chromium`、
 //   または PLAYWRIGHT_PATH=<playwright の入った node_modules> を指定する。
 // 確認していないもの: Firebase へのログインと同期、Safari / iPhone / iPad、日本語入力（IME）の実キー操作。
-import { execSync, spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-function loadPlaywright() {
-  const bases = [path.join(ROOT, 'package.json')];
-  if (process.env.PLAYWRIGHT_PATH) bases.push(path.join(process.env.PLAYWRIGHT_PATH, 'x'));
-  for (const p of (process.env.NODE_PATH ?? '').split(path.delimiter).filter(Boolean)) bases.push(path.join(p, 'x'));
-  try { bases.push(path.join(execSync('npm root -g', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(), 'x')); } catch { /* npm が無い環境 */ }
-  bases.push('/opt/node-tools/node_modules/x');
-  for (const b of bases) {
-    try { return createRequire(b)('playwright'); } catch { /* 次の候補へ */ }
-  }
-  throw new Error('playwright が見つかりません。ファイル先頭の「必要なもの」を参照してください。');
-}
+import { ROOT, loadPlaywright } from './playwright.mjs';
 
 // ── 小道具 ──────────────────────────────────────────────────
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -108,7 +93,8 @@ add('A1', 'サンプルを読み込むと、ラソラ札幌 11/13〜17 の案件
   const e = await readEstimate(page);
   eq([e['売上 計'], e['人件費'], e['材料費'], e['会場費'], e['備品費'], e['その他費用'], e['費用 計'], e['利益'], e['利益率']],
     ['¥400,000', '¥84,800', '¥97,350', '¥100,000', '¥29,000', '¥22,000', '¥333,150', '¥66,850', '16.7%'], '試算');
-  ok(Object.values(e).some((v) => v === '70.0h／22席'), `総労働時間／席数: ${JSON.stringify(e)}`);
+  ok(Object.values(e).some((v) => v === '70.0h／制作席 16席／その他 6脚'), `総労働時間／制作席／その他の椅子: ${JSON.stringify(e)}`);
+  eq(e['参考: 必要な回転数'], '3.8回', '必要な回転数（300 個 ÷（16 席 × 5 日）＝ 3.75）');
 });
 add('A2', '再読み込み（F5）してもデータが残る', async ({ page }) => {
   await loadSample(page);
@@ -126,6 +112,32 @@ add('A3', '入力した直後に再読み込みしても、最後の入力が消
   await page.reload();                     // 待たずに再読み込み
   await openTarget(page);
   eq(await memo().inputValue(), '直前の入力', 'メモ');
+});
+
+add('A4', 'ブラウザの保存領域がいっぱいで「この端末だけのデータ」を保存できないときは、その旨を 1 回だけ知らせる', async ({ page }) => {
+  await setup(page);
+  const notices = () => page.locator('[data-testid="notices"] li').allInnerTexts();
+  const memo = () => page.locator('table.kv tr', { hasText: 'メモ' }).locator('input');
+  eq(await notices(), [], '保存できている間は、何も表示されないこと');
+  // 保存を失敗させる（容量超過の模擬）
+  await page.evaluate(() => {
+    const orig = Storage.prototype.setItem;
+    window.__restore = () => { Storage.prototype.setItem = orig; };
+    Storage.prototype.setItem = function (k, v) { if (k === 'kkl_workshop_v1') throw new DOMException('quota', 'QuotaExceededError'); return orig.call(this, k, v); };
+  });
+  await memo().fill('保存できない入力 1');
+  const shown = await until(notices, (n) => n.length > 0);
+  ok(shown.length === 1 && shown[0].includes('保存できませんでした') && shown[0].includes('バックアップ'), `表示: ${JSON.stringify(shown)}`);
+  await memo().fill('保存できない入力 2');
+  await sleep(300);
+  eq((await notices()).length, 1, '続けて失敗しても、表示は 1 件のまま');
+  // 保存できるようになれば、次の変更は保存される
+  await page.evaluate(() => window.__restore());
+  await memo().fill('保存できた入力');
+  await sleep(300);
+  await page.reload();
+  await openTarget(page);
+  eq(await memo().inputValue(), '保存できた入力', '再読み込み後のメモ');
 });
 
 // B. 数値入力
@@ -282,14 +294,11 @@ add('C1', '配置表のクリックで配置／解除でき、人件費が連動
 add('C2', '掛け持ちになる配置は確認ダイアログで選べる（キャンセルなら配置されず、OK なら配置される＝禁止しない）', async ({ page, dialogs, setAnswer }) => {
   await loadSample(page);
   const row = page.locator('.grid tbody tr').last();
-  await row.getByRole('button', { name: '複製' }).click();          // 同じ日・同じ人の配置を持つ案件ができる
+  await row.getByRole('button', { name: '複製' }).click();          // 同じ期間の案件ができる（スタッフ配置は引き継がない）
   await page.locator('.grid tbody tr').last().getByRole('button', { name: '開く' }).click();
   await sheet(page, 'スタッフ配置');
-  const on = page.locator('.matrix__cell.is-on button').first();
-  const label = await on.getAttribute('aria-label');
-  const cell = page.getByRole('button', { name: label, exact: true });
-  await cell.click();                                               // いったん外す
-  eq((await cell.innerText()).trim(), '', '解除後');
+  eq(await page.locator('.matrix__cell.is-on').count(), 0, '複製した直後は、誰も配置されていない');
+  const cell = page.locator('.matrix__cell button').first();        // スタッフA × 11/13（元の案件で配置済みの枠）
   setAnswer(false);
   await cell.click();                                               // 元の案件と掛け持ちになる → 確認 → キャンセル
   ok(dialogs.some((m) => m.includes('別案件') && m.includes('このまま配置しますか')), `確認ダイアログが出ていません: ${JSON.stringify(dialogs)}`);
@@ -361,24 +370,24 @@ add('C6', '会場の雛形エディタの「元に戻す」は、別の会場の
 });
 
 // D. レイアウトと試算の連動
-add('D1', '椅子を ＋1 すると席数と備品費が増え、−1 で元に戻る', async ({ page }) => {
+add('D1', '椅子（制作席）を ＋1 すると制作席の数と備品費が増え、−1 で元に戻る', async ({ page }) => {
   await setup(page);
   const e0 = await readEstimate(page);
   const days = Number(/× (\d+)日/.exec(await page.locator('.est__summary').innerText())[1]);
-  const chairRow = await page.locator('.est .grid tbody tr', { hasText: '椅子' }).last().locator('td').allInnerTexts();
+  const chairRow = await page.locator('.est .grid tbody tr', { hasText: '椅子（制作席）' }).last().locator('td').allInnerTexts();
   const unit = yenNum(chairRow[3]) * (chairRow[3].includes('/日') ? days : 1);
-  const seats0 = Number(/／(\d+)席/.exec(JSON.stringify(e0))[1]);
+  const seats0 = Number(/制作席 (\d+)席/.exec(JSON.stringify(e0))[1]);
   await sheet(page, 'レイアウト');
   const n0 = await partCount(page, 'pt-chair');
-  eq(n0, seats0, '椅子の個数と席数');
-  await page.getByRole('button', { name: '椅子を増やす' }).click();
+  eq(n0, seats0, '椅子（制作席）の個数と制作席の数');
+  await page.getByRole('button', { name: '椅子（制作席）を増やす' }).click();
   eq(await partCount(page, 'pt-chair'), n0 + 1, '＋1 後の椅子の個数');
   const e1 = await readEstimate(page);
-  eq(Number(/／(\d+)席/.exec(JSON.stringify(e1))[1]), seats0 + 1, '＋1 後の席数');
+  eq(Number(/制作席 (\d+)席/.exec(JSON.stringify(e1))[1]), seats0 + 1, '＋1 後の制作席の数');
   eq(yenNum(e1['備品費']), yenNum(e0['備品費']) + unit, '＋1 後の備品費');
   eq(yenNum(e1['利益']), yenNum(e0['利益']) - unit, '＋1 後の利益');
   await sheet(page, 'レイアウト');
-  await page.getByRole('button', { name: '椅子を減らす' }).click();
+  await page.getByRole('button', { name: '椅子（制作席）を減らす' }).click();
   const e2 = await readEstimate(page);
   eq([e2['備品費'], e2['利益']], [e0['備品費'], e0['利益']], '−1 後（元に戻る）');
 });
@@ -425,7 +434,7 @@ add('D3', 'L字のテーブルを 1 台ドラッグすると 3 台とも同じ�
   await page.keyboard.press('Control+z');
   eq(await until(pos, (p) => JSON.stringify(p) === JSON.stringify(p0)), p0, 'Ctrl+Z の後の位置');
 });
-add('D4', 'テーブル番号を手動で上書きでき、空に戻すと自動の番号に戻る', async ({ page }) => {
+add('D4', 'テーブル番号を手動で上書きできる。上書きした台は連番を使わず（①-1・受付・①-2）、空に戻すと自動の番号に戻る', async ({ page }) => {
   await setup(page);
   await sheet(page, 'レイアウト');
   const b = await page.locator('svg.layout-svg tspan', { hasText: /^①-2$/ }).boundingBox();
@@ -434,7 +443,7 @@ add('D4', 'テーブル番号を手動で上書きでき、空に戻すと自動
   await input.click();
   await page.keyboard.type('受付');
   const group1 = async () => (await labelsOnFigure(page)).filter((t) => /^①-|受付/.test(t));
-  eq(await until(group1, (v) => v.includes('受付')), ['①-1', '受付', '①-3'], '上書き後');
+  eq(await until(group1, (v) => v.includes('受付')), ['①-1', '受付', '①-2'], '上書き後（上書きした台は連番を使わない）');
   await input.fill('');
   eq(await until(group1, (v) => !v.includes('受付')), ['①-1', '①-2', '①-3'], '空に戻した後');
 });
@@ -479,8 +488,84 @@ add('D6', 'ドラッグの途中でページをスクロールしても、パー
   ok(Math.abs(off[0]) <= 4 && Math.abs(off[1]) <= 4, `カーソルとパーツのずれ (${off})px`);
 }, { viewport: { width: 1440, height: 600 } });
 
+add('D7', 'グループ（L字）を選んで Delete を押すと、選択枠のとおりグループごと消える（Ctrl+Z で戻る）。「この 1 台を削除」は 1 台だけ消す', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  const n0 = await partCount(page, 'pt-table');
+  const pick = async () => {
+    const b = await page.locator('svg.layout-svg tspan', { hasText: /^①-1$/ }).boundingBox();
+    await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+    eq(await page.locator('svg.layout-svg rect[data-noexport]').count(), 3, '選択枠の数（グループ全体）');
+  };
+  await pick();
+  await page.locator('.editor').focus();
+  await page.keyboard.press('Delete');
+  eq(await until(() => partCount(page, 'pt-table'), (n) => n === n0 - 3), n0 - 3, 'Delete 後のテーブルの個数（3 台とも消える）');
+  eq(await page.locator('svg.layout-svg text', { hasText: /^L字②$/ }).count(), 0, 'グループは 1 つに減る');
+  await page.keyboard.press('Control+z');
+  eq(await until(() => partCount(page, 'pt-table'), (n) => n === n0), n0, 'Ctrl+Z の後のテーブルの個数');
+  await pick();
+  await page.getByRole('button', { name: 'この 1 台を削除' }).click();
+  eq(await until(() => partCount(page, 'pt-table'), (n) => n === n0 - 1), n0 - 1, '「この 1 台を削除」の後のテーブルの個数');
+  const labels = await labelsOnFigure(page);
+  ok(labels.includes('①-1') && labels.includes('①-2') && !labels.includes('①-3'), `残った 2 台は ①-1・①-2 に詰まる: ${labels.filter((l) => /^①/.test(l))}`);
+});
+add('D8', '図面サイズを小さくしてパーツが図面の外に出ると、警告が出る（パーツは自動では動かさない）。元に戻すと消える', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  const total = async () => (await page.locator('.editor__side .stepper span').allInnerTexts()).reduce((a, b) => a + Number(b), 0);
+  const n0 = await total();
+  await page.getByRole('button', { name: '周辺環境（雛形）' }).click();
+  const width = page.locator('label', { hasText: '図面サイズ(cm) 幅' }).locator('input');
+  await width.click();
+  await type(page, '700');
+  await page.keyboard.press('Enter');
+  const warn = await until(() => page.locator('.editor__canvas .warnlist').innerText().catch(() => ''), (t) => t.includes('図面の外'));
+  ok(/図面の外にパーツがあります（\d+個: /.test(warn), `図面外の警告: ${warn}`);
+  await page.getByRole('button', { name: 'パーツ配置' }).click();
+  eq(await total(), n0, 'パーツの個数（自動では消えない・動かさない）');
+  await page.getByRole('button', { name: /元に戻す/ }).click();
+  eq(await until(() => page.locator('.editor__canvas .warnlist').count(), (n) => n === 0), 0, '元に戻した後は警告が消える');
+});
+add('D9', '制作席とその他の椅子を分けて数える。上限回転数を入力すると、席が足りない計算のときだけ警告が出る', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  await page.getByRole('button', { name: '椅子（その他）を増やす' }).click();
+  let e = await readEstimate(page);
+  ok(Object.values(e).some((v) => v === '70.0h／制作席 16席／その他 7脚'), `その他の椅子を増やしても制作席は変わらない: ${JSON.stringify(e)}`);
+  eq(e['参考: 必要な回転数'], '3.8回', '必要な回転数（その他の椅子では変わらない）');
+  eq(await warnCount(page), 0, '上限回転数 4（サンプルの仮の値）では警告なし');
+  await sheet(page, '基本情報');
+  const turns = page.locator('[data-c="maxTurns"]').first();
+  eq(await turns.inputValue(), '4', 'サンプルの上限回転数');
+  await turns.click();
+  await type(page, '3');                      // 300 個 ÷ 3 回 ＝ 100 席・日 ＞ 16 席 × 5 日 ＝ 80 席・日
+  eq(await until(() => warnCount(page), (n) => n === 1), 1, '上限回転数 3 では警告 1 件');
+  await page.locator('.warnbtn').click();
+  ok((await page.locator('.pv .warnlist').first().innerText()).includes('制作席が足りない計算です：必要 100 席・日'), '警告文');
+  ok(await turns.evaluate((el) => el.closest('td').classList.contains('is-warn')), '上限回転数の欄が黄色になる');
+  eq(await turns.inputValue(), '3', '入力した値はそのまま残る（拒否しない）');
+  await turns.fill('');
+  eq(await until(() => warnCount(page), (n) => n === 0), 0, '空欄に戻すと警告しない');
+});
+add('D10', '案件を複製すると、コンテンツ・費用・レイアウトは引き継ぎ、スタッフ配置は引き継がない', async ({ page }) => {
+  await loadSample(page);
+  await page.locator('.grid tbody tr', { hasText: '11/13' }).first().getByRole('button', { name: '複製' }).click();
+  const copy = page.locator('.grid tbody tr', { hasText: 'ikyu（コピー）' });
+  await copy.waitFor();
+  ok((await page.locator('[data-testid="notices"]').innerText()).includes('スタッフ配置 10 件は引き継いでいません'), '複製時の表示');
+  await copy.getByRole('button', { name: '開く' }).click();
+  await page.waitForSelector('.sheettabs');
+  const e = await readEstimate(page);
+  eq([e['人件費'], e['材料費'], e['会場費'], e['備品費'], e['その他費用']], ['¥0', '¥97,350', '¥100,000', '¥29,000', '¥22,000'], '複製した案件の試算（人件費だけ 0）');
+  await sheet(page, 'スタッフ配置');
+  eq(await page.locator('.matrix__cell.is-on').count(), 0, '配置表は空');
+  await sheet(page, 'レイアウト');
+  eq([await partCount(page, 'pt-table'), await partCount(page, 'pt-chair'), await versionText(page)], [6, 16, '現在の版 V1（未出力）'], 'レイアウトは複製され、版は V1 から');
+});
+
 // E. PDF と版数
-add('E1', 'PDF をダウンロードできる（A4 横・1 ページ・画像 1 枚）。保存名に案件名・会場名・版数が入る', async ({ page }) => {
+add('E1', 'PDF をダウンロードできる（A4 横・1 ページ・画像 1 枚）。保存名に案件名・会場名・会期の開始日・版数が入る', async ({ page }) => {
   await setup(page);
   await sheet(page, 'レイアウト');
   const { name, bytes } = await exportPdf(page);
@@ -491,7 +576,7 @@ add('E1', 'PDF をダウンロードできる（A4 横・1 ページ・画像 1 
   ok(text.includes('/MediaBox [0 0 841.89 595.28]'), 'A4 横ではありません');
   eq((text.match(/\/Subtype \/Image/g) ?? []).length, 1, '画像の数');
   ok(bytes.length > 100000, `サイズが小さすぎます（${bytes.length} バイト）`);
-  eq(name, 'ikyu_ラソラ札幌_イベント配置図_V1.pdf', '保存名');
+  eq(name, 'ikyu_ラソラ札幌_20261113_イベント配置図_V1.pdf', '保存名');
 });
 add('E2', 'PDF の画像に、未確認事項欄（黄色い枠と文字）が入っている', async ({ page }) => {
   await setup(page);
@@ -538,14 +623,14 @@ add('E3', '出力すると V1 が「出力済み」になる。再出力では�
   await setup(page);
   await sheet(page, 'レイアウト');
   eq(await versionText(page), '現在の版 V1（未出力）', '最初');
-  await page.getByRole('button', { name: '椅子を増やす' }).click();
-  await page.getByRole('button', { name: '椅子を減らす' }).click();
+  await page.getByRole('button', { name: '椅子（制作席）を増やす' }).click();
+  await page.getByRole('button', { name: '椅子（制作席）を減らす' }).click();
   eq(await versionText(page), '現在の版 V1（未出力）', '出力前の編集');
   await exportPdf(page);
   eq(await versionText(page), '現在の版 V1（出力済み・編集すると V2 になります）', '出力後');
   const again = await exportPdf(page);
   eq([await versionText(page), again.name.endsWith('_V1.pdf')], ['現在の版 V1（出力済み・編集すると V2 になります）', true], '再出力後');
-  await page.getByRole('button', { name: '椅子を増やす' }).click();
+  await page.getByRole('button', { name: '椅子（制作席）を増やす' }).click();
   eq(await versionText(page), '現在の版 V2（未出力）', '出力後に編集');
   eq(await page.locator('svg.layout-svg > text').first().textContent(), 'ikyu｜ラソラ札幌 イベント配置図 V2', '図のタイトル');
   ok((await issuedText(page)).includes('V1（'), '出力履歴に V1 がありません');
@@ -557,7 +642,7 @@ add('E4', '出力後に「元に戻す」で出力前の状態まで戻しても
   await setup(page);
   await sheet(page, 'レイアウト');
   const n0 = await partCount(page, 'pt-chair');
-  await page.getByRole('button', { name: '椅子を増やす' }).click();
+  await page.getByRole('button', { name: '椅子（制作席）を増やす' }).click();
   await exportPdf(page);                                            // 椅子 +1 の状態を V1 として出力
   await page.getByRole('button', { name: /元に戻す/ }).click();     // 椅子を増やす前へ
   eq(await partCount(page, 'pt-chair'), n0, '椅子の個数');
@@ -586,13 +671,106 @@ add('E7', '「編集すると V? になります」の表示と、実際に編�
   await setup(page);
   await sheet(page, 'レイアウト');
   await exportPdf(page);                                            // V1
-  await page.getByRole('button', { name: '椅子を増やす' }).click();
+  await page.getByRole('button', { name: '椅子（制作席）を増やす' }).click();
   await exportPdf(page);                                            // V2
   await page.getByRole('button', { name: /元に戻す/ }).click();     // V1 を出力した時点の状態へ
   const said = /編集すると (V\d+) になります/.exec(await versionText(page))?.[1];
-  await page.getByRole('button', { name: '椅子を増やす' }).click();
+  await page.getByRole('button', { name: '椅子（制作席）を増やす' }).click();
   const got = /現在の版 (V\d+)/.exec(await versionText(page))?.[1];
   ok(said && said === got, `表示は ${said}、実際は ${got}`);
+});
+
+const nameInput = (page) => page.locator('table.kv tr', { hasText: '案件名' }).locator('input');
+const figureTitleText = (page) => page.locator('svg.layout-svg > text').first().textContent();
+
+add('E8', '出力後に案件名を変えると、次の版（未出力）と表示され、何が変わったかが分かる。次に出力した時点で、その版として記録される', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  await exportPdf(page);                                            // V1
+  await sheet(page, '基本情報');
+  await nameInput(page).fill('ikyu 秋');
+  await sheet(page, 'レイアウト');
+  eq(await versionText(page), '現在の版 V2（未出力：V1 の出力後に「案件名・会場名」が変わりました）', '案件名を変えた後');
+  eq(await figureTitleText(page), 'ikyu 秋｜ラソラ札幌 イベント配置図 V2', '図のタイトル');
+  ok(/^出力履歴: V1（[\d-]+）$/.test(await issuedText(page)), `出力するまで、出力履歴は増えない: ${await issuedText(page)}`);
+  const v2 = await exportPdf(page);
+  eq(v2.name, 'ikyu_秋_ラソラ札幌_20261113_イベント配置図_V2.pdf', 'V2 の保存名');
+  eq(await versionText(page), '現在の版 V2（出力済み・編集すると V3 になります）', 'V2 を出力した後');
+  ok(/V1（[\d-]+）、V2（[\d-]+）/.test(await issuedText(page)), `出力履歴: ${await issuedText(page)}`);
+  // 名前を元に戻すと、V2 として出力した図とは違うので V3（V1 と同じ図でも、V1 には戻さない＝番号は進むだけ）
+  await sheet(page, '基本情報');
+  await nameInput(page).fill('ikyu');
+  await sheet(page, 'レイアウト');
+  eq(await versionText(page), '現在の版 V3（未出力：V2 の出力後に「案件名・会場名」が変わりました）', '名前を戻した後');
+});
+add('E9', '出力後にパーツマスタの寸法を変えると次の版（未出力）になる。単価・保有数だけの変更では、出力済みのまま', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  await exportPdf(page);
+  const reopen = async () => { await tab(page, '案件'); await openTarget(page); await sheet(page, 'レイアウト'); };
+  await tab(page, 'パーツ');
+  await page.locator('[data-c="unitCost"]').first().fill('777');    // テーブルの単価（図には出ない）
+  await page.locator('[data-c="stockQty"]').first().fill('50');
+  await reopen();
+  eq(await versionText(page), '現在の版 V1（出力済み・編集すると V2 になります）', '単価・保有数を変えた後');
+  await tab(page, 'パーツ');
+  await page.locator('[data-c="widthCm"]').first().fill('160');     // テーブルの幅（図が変わる）
+  await reopen();
+  eq(await versionText(page), '現在の版 V2（未出力：V1 の出力後に「パーツ（位置・寸法・種類・表示名）」が変わりました）', '寸法を変えた後');
+  ok((await exportPdf(page)).name.endsWith('_V2.pdf'), '次の出力は V2');
+});
+add('E10', '会期が図のタイトルの下に入る。会期を変えると図が変わるので、出力済みの版は次の版になる。会期を消すと、図にもファイル名にも入らない', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  const period = () => page.locator('[data-testid="figure-period"]');
+  eq(await period().textContent(), '会期 2026/11/13(金)〜11/17(火)', '図の会期');
+  const box = async (loc) => loc.boundingBox();
+  const [t, p] = [await box(page.locator('svg.layout-svg > text').first()), await box(period())];
+  ok(p.y > t.y + t.height * 0.5, '会期はタイトルの下にある');
+  await exportPdf(page);
+  await sheet(page, '基本情報');
+  await page.locator('table.kv tr', { hasText: '終了日' }).locator('input').fill('2026-11-18');
+  await sheet(page, 'レイアウト');
+  eq(await period().textContent(), '会期 2026/11/13(金)〜11/18(水)', '終了日を変えた後の会期');
+  eq(await versionText(page), '現在の版 V2（未出力：V1 の出力後に「会期」が変わりました）', '会期を変えた後の版');
+  await sheet(page, '基本情報');
+  await page.locator('table.kv tr', { hasText: '終了日' }).locator('input').fill('');
+  await sheet(page, 'レイアウト');
+  eq(await period().count(), 0, '会期が未入力なら、図に出さない');
+  eq((await exportPdf(page)).name, 'ikyu_ラソラ札幌_イベント配置図_V2.pdf', '会期が無いときの保存名（日付なし）');
+});
+add('E11', '出力済みで図が変わっていない版を、別の日に出力し直しても、作成日は最初に出力した日のまま。編集して次の版になると、その日の日付になる', async ({ page }) => {
+  await setup(page);
+  await sheet(page, 'レイアウト');
+  const stamp = () => page.locator('svg.layout-svg > text').last().textContent();
+  eq(await stamp(), '作成日 2026-11-13', '出力前（今日の日付）');
+  await exportPdf(page);
+  await page.clock.setFixedTime(new Date('2026-11-20T03:00:00Z'));  // 1 週間後
+  await sheet(page, '試算');
+  await sheet(page, 'レイアウト');
+  eq(await stamp(), '作成日 2026-11-13', '1 週間後に開いても、V1 の作成日は出力した日');
+  await exportPdf(page);
+  eq(await issuedText(page), '出力履歴: V1（2026-11-13）', '出し直しても記録は増えない');
+  await page.getByRole('button', { name: '椅子（制作席）を増やす' }).click();
+  eq([await versionText(page), await stamp()], ['現在の版 V2（未出力）', '作成日 2026-11-20'], '編集して V2 になると、その日の日付');
+}, { fixedTime: '2026-11-13T03:00:00Z' });
+add('E12', '以前の版のアプリ（Version 2 まで）で出力済みだった図は、次の版（未出力）として表示され、次の出力で版が上がる', async ({ page }) => {
+  await loadSample(page);
+  await sleep(300);
+  // Version 2 までの出力の記録（図の内容の指紋が無い）を持つデータにして、開き直す
+  await page.evaluate(() => {
+    const d = JSON.parse(localStorage.getItem('kkl_workshop_v1'));
+    for (const p of d.projects) p.layout.issued = [{ version: 1, issuedAt: '2026-11-01' }];
+    localStorage.setItem('kkl_workshop_v1', JSON.stringify(d));
+  });
+  await page.reload();
+  await openTarget(page);
+  await sheet(page, 'レイアウト');
+  eq(await versionText(page), '現在の版 V2（未出力：V1 は以前の版のアプリで出力したため、次は V2 として出力します）', '以前の版で出力済みの図');
+  eq(await figureTitleText(page), 'ikyu｜ラソラ札幌 イベント配置図 V2', '図のタイトル');
+  ok((await exportPdf(page)).name.endsWith('_V2.pdf'), '次の出力は V2');
+  eq(await versionText(page), '現在の版 V2（出力済み・編集すると V3 になります）', '出力後');
+  ok(/V1（2026-11-01）、V2（[\d-]+）/.test(await issuedText(page)), `出力履歴: ${await issuedText(page)}`);
 });
 
 // ── 実行 ────────────────────────────────────────────────────

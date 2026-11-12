@@ -6,7 +6,7 @@ import {
 import { DEFAULT_CAPTION, emptyLayout } from './layout';
 import { genId } from './util';
 
-const T = 'pt-table', CH = 'pt-chair', NEG = 'pt-nego', REG = 'pt-reg', WORK = 'pt-work',
+const T = 'pt-table', CH = 'pt-chair', CHO = 'pt-chair-other', NEG = 'pt-nego', REG = 'pt-reg', WORK = 'pt-work',
   BAN = 'pt-banner', POPL = 'pt-pop-l', POPS = 'pt-pop-s', DISP = 'pt-display', EYE = 'pt-eye';
 
 export function defaultPartTypes(): PartType[] {
@@ -16,7 +16,9 @@ export function defaultPartTypes(): PartType[] {
   ): PartType => ({ id, name, shortName, category, widthCm, depthCm, numbered, unitCost: 0, costUnit: 'event', stockQty: 0 });
   return [
     p(T, 'テーブル 150×60', 'T', 'table', 150, 60, true),
-    p(CH, '椅子', '', 'chair', 40, 40),
+    // 椅子は 2 種類。制作席＝参加者が座って作る席（席数に数える）／その他＝商談席・待合など（席数に数えない）。図では色を変える
+    { ...p(CH, '椅子（制作席）', '', 'chair', 40, 40), seatRole: 'work' },
+    { ...p(CHO, '椅子（その他）', '', 'chair', 40, 40), seatRole: 'other' },
     p(NEG, '商談席テーブル', '商談席', 'table', 90, 130, true),
     p(WORK, '中央作業台', '中央作業台', 'table', 190, 55),
     p(REG, '登録スペース（パーテーション区画）', '登録スペース', 'partition', 310, 130),
@@ -99,9 +101,9 @@ function sampleItems(): Pick<Layout, 'items' | 'groups'> {
   const items: PlacedItem[] = [];
   const at = (partTypeId: string, x: number, y: number, extra: Partial<PlacedItem> = {}) =>
     items.push({ id: genId(), partTypeId, x: cx(x), y: cy(y), rot: 0, ...extra });
-  // 椅子は中心座標(px)で指定
+  // 椅子は中心座標(px)で指定。商談席テーブルの横（x=323）の 6 脚は「その他」、残りは「制作席」
   const chair = (px: number, py: number) =>
-    items.push({ id: genId(), partTypeId: CH, x: cx(px) - 20, y: cy(py) - 20, rot: 0 });
+    items.push({ id: genId(), partTypeId: px === 323 ? CHO : CH, x: cx(px) - 20, y: cy(py) - 20, rot: 0 });
 
   const g1 = genId(), g2 = genId();
   const comps = defaultComposites();
@@ -169,7 +171,11 @@ export function newProject(venue?: Venue): Project {
   };
 }
 
-/** 案件の複製。新しい案件として扱い、配置図は V1・未出力から始める */
+/**
+ * 案件の複製。新しい案件として扱い、配置図は V1・未出力から始める。
+ * コンテンツ・費用・レイアウトを複製し、スタッフ配置は引き継がない（別の日程の案件として使うことが多く、
+ * 同じ日のまま複製すると双方に掛け持ちの警告が出るため。作業ログ D-19）。
+ */
 export function duplicateProject(p: Project): Project {
   const copy = structuredClone(p);
   return {
@@ -177,6 +183,7 @@ export function duplicateProject(p: Project): Project {
     id: genId(),
     name: `${p.name}（コピー）`,
     status: '計画中',
+    assignments: [],
     layout: { ...copy.layout, version: 1, issued: [] },
   };
 }
@@ -231,6 +238,7 @@ export function sampleData(): AppData {
   const sampleCost: Record<string, Pick<PartType, 'unitCost' | 'costUnit'>> = {
     [T]: { unitCost: 500, costUnit: 'day' },      // テーブル: 500 円/日（仮）
     [CH]: { unitCost: 100, costUnit: 'day' },     // 椅子: 100 円/日（仮）
+    [CHO]: { unitCost: 100, costUnit: 'day' },    // 椅子（その他）も同じ単価（仮）
     [REG]: { unitCost: 3000, costUnit: 'event' }, // 登録スペース: 3,000 円/案件（仮）
   };
   const partTypes = defaultPartTypes().map((t) => ({ ...t, ...sampleCost[t.id] }));
@@ -242,7 +250,7 @@ export function sampleData(): AppData {
     startDate: '2026-12-05',
     endDate: '2026-12-06',
     fixedRevenue: 150000,
-    contents: [{ id: genId(), contentId: content.id, plannedCount: 120, priceOverride: null, sparePct: 10 }],
+    contents: [{ id: genId(), contentId: content.id, plannedCount: 120, priceOverride: null, sparePct: 10, maxTurns: 4 }],   // 上限回転数 4 回/席・日（仮）
     assignments: [sampleAssignment(a, '2026-12-05'), sampleAssignment(b, '2026-12-05'), sampleAssignment(a, '2026-12-06'), sampleAssignment(c, '2026-12-06')],
     otherCosts: [{ id: genId(), name: '印刷費（POP・バナー）', amount: 12000 }],
     layout: { ...demoBase.layout, ...sampleItems(), notes: '実寸（ブース・通路幅）\n防災条件（避難経路・消火設備）\n電源の位置' },
@@ -257,7 +265,8 @@ export function sampleData(): AppData {
     endDate: '2026-11-17',
     memo: '【仮置き】ラソラ札幌 11/13〜17 の土台。金額・個数・人員・時間・寸法はすべて仮の値。確定値に置き換えて使う',
     fixedRevenue: 400000,                                    // 受託料（仮）
-    contents: [{ id: genId(), contentId: content.id, plannedCount: 300, priceOverride: null, sparePct: 10 }],   // 60 個/日 × 5 日（仮）
+    // 60 個/日 × 5 日（仮）。上限回転数 4 回/席・日（仮）→ 必要 75 席・日 ≦ 制作席 16 × 5 日 ＝ 80 席・日
+    contents: [{ id: genId(), contentId: content.id, plannedCount: 300, priceOverride: null, sparePct: 10, maxTurns: 4 }],
     // 1 日 2 人（仮）。A: 4 日、B: 3 日、C: 3 日
     assignments: [
       sampleAssignment(a, '2026-11-13'), sampleAssignment(b, '2026-11-13'),

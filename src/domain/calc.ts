@@ -54,8 +54,42 @@ export interface Estimate {
   /** 利益率（%）。売上 0 のときは null */
   marginPct: number | null;
   totalHours: number;
-  /** 椅子カテゴリのパーツ数（席数の目安） */
+  /** 制作席の数（区分が「椅子」で、役割が制作席のパーツの個数。参加者が座って作る席） */
   seats: number;
+  /** その他の椅子の数（商談席・待合など。席数には数えない） */
+  otherSeats: number;
+  /**
+   * 必要な回転数（参考）＝ 予定個数の合計 ÷（制作席 × 日数）。制作席 1 席が 1 日に何回使われる計算になるか。
+   * 制作席か日数が 0 のときは null
+   */
+  requiredTurns: number | null;
+}
+
+/** レイアウト上の椅子を、役割ごとに数える（役割が未設定の椅子は制作席。削除済みの種別は数えない） */
+export function countSeats(layout: Layout, partTypes: PartType[]): { work: number; other: number } {
+  const role = new Map(partTypes.filter((t) => t.category === 'chair').map((t) => [t.id, t.seatRole ?? 'work']));
+  let work = 0, other = 0;
+  for (const it of layout.items) {
+    const r = role.get(it.partTypeId);
+    if (r === 'work') work += 1;
+    else if (r === 'other') other += 1;
+  }
+  return { work, other };
+}
+
+/**
+ * 席の必要量（席・日）＝ Σ（予定個数 ÷ 上限回転数）。上限回転数が入力されているコンテンツだけを足す。
+ * 複数のコンテンツが同じ制作席を使う前提。1 つも入力されていなければ null（＝判定しない）。
+ */
+export function seatDemand(p: Project): number | null {
+  let need = 0, any = false;
+  for (const pc of p.contents) {
+    const turns = num(pc.maxTurns);
+    if (turns <= 0) continue;
+    any = true;
+    need += Math.max(0, num(pc.plannedCount)) / turns;
+  }
+  return any ? need : null;
 }
 
 export function unitMaterialCost(c: Content | undefined): number {
@@ -158,8 +192,9 @@ export function estimate(p: Project, data: Pick<AppData, 'staff' | 'contents' | 
   const totalCost = laborCost + materialCost + venueFee + partsCost + otherCost;
   const profit = revenue - totalCost;
 
-  const chairIds = new Set(data.partTypes.filter((t) => t.category === 'chair').map((t) => t.id));
-  const seats = p.layout.items.filter((i) => chairIds.has(i.partTypeId)).length;
+  const chairs = countSeats(p.layout, data.partTypes);
+  const seats = chairs.work;
+  const totalCount = contentLines.reduce((s, l) => s + Math.max(0, l.count), 0);
 
   return {
     days,
@@ -179,5 +214,7 @@ export function estimate(p: Project, data: Pick<AppData, 'staff' | 'contents' | 
     marginPct: revenue > 0 ? (profit / revenue) * 100 : null,
     totalHours: laborLines.reduce((s, l) => s + l.hours, 0),
     seats,
+    otherSeats: chairs.other,
+    requiredTurns: seats > 0 && days > 0 ? totalCount / (seats * days) : null,
   };
 }

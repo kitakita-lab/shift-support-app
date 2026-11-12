@@ -183,7 +183,7 @@ describe('テーブル番号の手動上書き', () => {
     l = addPart(l, pt('pt-nego'));
     l = updateItem(l, l.items[0].id, { label: 'A-1' });
     l = updateItem(l, l.items[3].id, { label: 'VIP席' });
-    expect(labelsOf(l)).toEqual(['A-1', '①-2', '①-3', 'VIP席']);
+    expect(labelsOf(l)).toEqual(['A-1', '①-1', '①-2', 'VIP席']);          // 手入力したものは連番を使わない（D-18）
   });
   it('表示名を空に戻すと自動の番号に戻る', () => {
     let l = addComposite(emptyLayout(), L, parts);
@@ -210,14 +210,37 @@ describe('テーブル番号の手動上書き', () => {
     l = removeItems(l, [l.items[0].id]);
     expect(buildLabels(l, parts).items.get(id)).toBe('作業台');
   });
-  it('現状の仕様：上書きしたテーブルも連番を 1 つ使う（①-1・受付・①-3）。作業ログ D-18 の判断待ち', () => {
+  it('表示名を上書きしたテーブルは連番を使わない（①-1・受付・①-2）。グループ外も同じ。作業ログ D-18', () => {
     let l = addComposite(emptyLayout(), L, parts);
     l = updateItem(l, l.items[1].id, { label: '受付' });
-    expect(labelsOf(l)).toEqual(['①-1', '受付', '①-3']);
+    expect(labelsOf(l)).toEqual(['①-1', '受付', '①-2']);
     let m = emptyLayout();
     for (let i = 0; i < 3; i++) m = addPart(m, pt('pt-nego'));
     m = updateItem(m, m.items[0].id, { label: '相談窓口' });
-    expect(labelsOf(m)).toEqual(['相談窓口', '商談席2', '商談席3']);
+    expect(labelsOf(m)).toEqual(['相談窓口', '商談席1', '商談席2']);
+    m = updateItem(m, m.items[2].id, { label: '予備' });
+    expect(labelsOf(m)).toEqual(['相談窓口', '商談席1', '予備']);
+  });
+  it('上書きしても、グループ名の副題（横◯台＋縦◯台）は実際の台数のまま', () => {
+    let l = addComposite(emptyLayout(), L, parts);
+    const before = buildLabels(l, parts).groups[0].subtitle;
+    l = updateItem(l, l.items[0].id, { label: '受付' });
+    l = updateItem(l, l.items[2].id, { label: '講師' });
+    expect(buildLabels(l, parts).groups[0].subtitle).toBe(before);
+    expect(before).toBe('横2台＋縦1台');
+  });
+  it('全部を上書きしたグループは、番号が 1 つも出ない（グループ名の番号 ① は残る）', () => {
+    let l = addComposite(emptyLayout(), L, parts);
+    for (const [i, name] of ['A', 'B', 'C'].entries()) l = updateItem(l, l.items[i].id, { label: name });
+    expect(labelsOf(l)).toEqual(['A', 'B', 'C']);
+    expect(buildLabels(l, parts).groups[0].title).toBe('L字①');
+  });
+  it('上書きを空に戻すと、その台も連番に戻り、後ろの番号が 1 つずつ下がる', () => {
+    let l = addComposite(emptyLayout(), L, parts);
+    l = updateItem(l, l.items[0].id, { label: '受付' });
+    expect(labelsOf(l)).toEqual(['受付', '①-1', '①-2']);
+    l = updateItem(l, l.items[0].id, { label: undefined });
+    expect(labelsOf(l)).toEqual(['①-1', '①-2', '①-3']);
   });
 });
 

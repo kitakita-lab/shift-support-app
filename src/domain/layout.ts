@@ -211,7 +211,7 @@ export interface Labels {
  * - グループ: 作成順に ①②… を振り、番号つきパーツは「①-1」形式
  * - グループ外の番号つきパーツ: 種別ごとに「表示名＋連番」（例: 商談席1）
  * - 番号なしパーツ: 表示名のみ（表示名が空なら非表示。椅子など）
- * - item.label が入力されていればそれを優先
+ * - item.label が入力されていればそれを優先。その分の連番は使わず、残りを詰めて振る（①-1・受付・①-2）
  */
 export function buildLabels(layout: Layout, partTypes: PartType[]): Labels {
   const ptOf = (id: string) => partTypes.find((t) => t.id === id);
@@ -228,8 +228,11 @@ export function buildLabels(layout: Layout, partTypes: PartType[]): Labels {
     for (const m of members) {
       const pt = ptOf(m.partTypeId);
       if (pt?.numbered) {
-        k += 1;
-        items.set(m.id, `${mark}-${k}`);
+        // 表示名を手入力したものは連番を使わない（①-1・受付・①-2。作業ログ D-18）。台数（横◯台＋縦◯台）には数える
+        if (!m.label) {
+          k += 1;
+          items.set(m.id, `${mark}-${k}`);
+        }
         const key = m.rot === 90 ? '縦' : '横';
         tally.set(key, (tally.get(key) ?? 0) + 1);
       }
@@ -244,16 +247,15 @@ export function buildLabels(layout: Layout, partTypes: PartType[]): Labels {
 
   for (const it of layout.items) {
     const pt = ptOf(it.partTypeId);
-    if (!items.has(it.id)) {
-      if (pt?.numbered && !it.groupId) {
-        const n = (perType.get(it.partTypeId) ?? 0) + 1;
-        perType.set(it.partTypeId, n);
-        items.set(it.id, `${pt.shortName}${n}`);
-      } else {
-        items.set(it.id, pt?.shortName ?? '');
-      }
+    if (it.label) { items.set(it.id, it.label); continue; }                   // 手入力が優先。連番は使わない
+    if (items.has(it.id)) continue;
+    if (pt?.numbered && !it.groupId) {
+      const n = (perType.get(it.partTypeId) ?? 0) + 1;
+      perType.set(it.partTypeId, n);
+      items.set(it.id, `${pt.shortName}${n}`);
+    } else {
+      items.set(it.id, pt?.shortName ?? '');
     }
-    if (it.label) items.set(it.id, it.label);
   }
   return { items, groups };
 }
@@ -275,8 +277,11 @@ function groupLabelPoint(members: PlacedItem[], obstacles: Rect[], partTypes: Pa
       const d = Math.min(Infinity, ...obstacles.map((r) => {
         const dx = Math.max(r.x - c.x, 0, c.x - (r.x + r.w));
         const dy = Math.max(r.y - c.y, 0, c.y - (r.y + r.h));
-        // 名前は横長なので、横方向の空きを厳しめ（1/2.2）に評価する
-        return Math.hypot(dx / 2.2, dy);
+        // 名前は横長なので、横方向の空きを厳しめ（1/2.2）に評価する。
+        // 距離の 2 乗どうしで比べる（大小関係は同じ）。Math.hypot は丸め方がブラウザ任せで、僅差のときに選ぶ位置が
+        // 端末によって変わると、図の指紋（版の判定）が端末ごとに食い違うため、四則演算だけで計算する
+        const sx = dx / 2.2;
+        return sx * sx + dy * dy;
       }));
       if (d > bestD) { bestD = d; best = c; }
     }
@@ -301,7 +306,11 @@ export function bumpIfIssued(layout: Layout): Layout {
   return isIssued(layout) ? { ...layout, version: nextVersion(layout) } : layout;
 }
 
-/** PDF 出力時に現在の版を「発行済み」として記録する */
+/**
+ * 現在の版を「発行済み」として記録する（版番号だけで見た、いちばん単純な形）。
+ * 画面からの PDF 出力は、図の内容の指紋も一緒に記録する figure.ts の issue を使う
+ * （エディタの外で図が変わった場合に、版を繰り上げるため）。
+ */
 export function markIssued(layout: Layout, issuedAt: string): Layout {
   if (isIssued(layout)) return layout;
   return { ...layout, issued: [...layout.issued, { version: layout.version, issuedAt }] };

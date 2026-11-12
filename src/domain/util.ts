@@ -71,6 +71,25 @@ export function shortDate(s: string): string {
   return d ? `${d.getMonth() + 1}/${d.getDate()}(${DOW[d.getDay()]})` : s;
 }
 
+/**
+ * 会期の表示（配置図用）。例: "2026/11/13(金)〜11/17(火)"。1 日だけなら "2026/11/13(金)"。
+ * 年をまたぐ場合は終了日にも年を付ける。未入力・不正・終了日が開始日より前のときは ''（＝図に出さない）。
+ */
+export function periodText(start: string, end: string): string {
+  const s = parseDate(start);
+  const e = parseDate(end);
+  if (!s || !e || e < s) return '';
+  const f = (d: Date, withYear: boolean) => `${withYear ? `${d.getFullYear()}/` : ''}${d.getMonth() + 1}/${d.getDate()}(${DOW[d.getDay()]})`;
+  if (s.getTime() === e.getTime()) return f(s, true);
+  return `${f(s, true)}〜${f(e, e.getFullYear() !== s.getFullYear())}`;
+}
+
+/** "2026-11-13" → "20261113"（ファイル名用）。不正は '' */
+export function compactDate(s: string): string {
+  const d = parseDate(s);
+  return d ? `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` : '';
+}
+
 /** "HH:MM" → 分。不正は null */
 export function toMinutes(t: string): number | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(t ?? '');
