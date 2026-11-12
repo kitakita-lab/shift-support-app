@@ -1,0 +1,8 @@
+{
+  "app": ["wsStaff", "wsVenues", "wsContents", "wsPartTypes", "wsComposites", "wsProjects"],
+  "meta": "wsMeta",
+  "backups": "wsBackups",
+  "members": "members",
+  "legacy": ["workshopData", "workshopProjects"],
+  "oldApp": ["appData", "presence", "editingStates", "activityLogs"]
+}
