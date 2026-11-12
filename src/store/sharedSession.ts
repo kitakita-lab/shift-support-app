@@ -13,11 +13,11 @@ import { genId } from '../domain/util';
 import { resetDb } from '../firebase';
 import { AppData, Project } from '../types';
 import { hydrateItem, hydrateProject } from './localData';
-import { clearOutbox, countOutbox, orphans, putOutbox, removeOutbox } from './outbox';
+import { OutboxEntry, clearOutbox, countOutbox, orphans, putOutbox, removeOutbox } from './outbox';
 import { BACKUP_COLL, FORMAT_VERSION, MASTER_COLL, MASTER_KEYS, MasterKey, PROJECT_COLL, TEAM_ID } from './paths';
 import {
   Access, Actor, DocChange, Member, Role, SnapInfo, beginMigration, checkAccess, createDoc, deleteMember, endMigration,
-  errorCode, initFresh, listMembers, patchDoc, putMember, readCollServer, readLegacy, readMetaCache, readMetaServer,
+  errorCode, initFresh, listMembers, patchDoc, putMember, readCollServer, readDocServer, readLegacy, readMetaCache, readMetaServer,
   removeDoc, waitPending, watchCollection, watchMeta, withTimeout, writeAllServer,
 } from './remote';
 import {
@@ -147,8 +147,17 @@ interface DocState {
   label: string;
   /** 拒否された書き込みのうち、まだ利用者に知らせていないもの */
   lost: (Inflight & { code: string }) | null;
+  /**
+   * 届いたと確認できていない一連の変更を始めたときの、共有側の印（rev）。
+   * undefined＝一連の変更は無い／null＝共有側に無かった（この画面で作った）／''＝印の無いドキュメント
+   */
+  baseRev: string | null | undefined;
+  /** この一連の変更で送信した書き込みの印（送った順） */
+  revs: string[];
 }
 
+/** 中身の比較から除く、付随的な項目（並び順・更新時刻・印・最後に書いた人） */
+const BOOKKEEPING = ['order', 'updatedAt', 'rev', 'updatedBy'];
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const isOnline = () => (typeof navigator === 'undefined' ? true : navigator.onLine !== false);
 const stamp = (d = new Date()) => {
@@ -182,6 +191,7 @@ export class SharedSession {
   private lastMeta: Body | null = null;
   private lastCheck = 0;
   private recheckTimer: ReturnType<typeof setTimeout> | null = null;
+  private adopting = false;
   /** 購読の失敗が続いた回数（使える状態になったら 0 に戻す。繰り返すようなら止める） */
   private listenFailures = 0;
   private ticker: ReturnType<typeof setInterval> | null = null;
@@ -479,7 +489,7 @@ export class SharedSession {
     const key = `${coll}/${id}`;
     let ds = this.docs.get(key);
     if (!ds) {
-      ds = { overlay: emptyOverlay(), timer: null, inflight: [], fields: new Set(), fresh: false, label: '', lost: null };
+      ds = { overlay: emptyOverlay(), timer: null, inflight: [], fields: new Set(), fresh: false, label: '', lost: null, baseRev: undefined, revs: [] };
       this.docs.set(key, ds);
     }
     return ds;
@@ -498,7 +508,10 @@ export class SharedSession {
     const body = kind === 'delete' ? null : applyOverlay(this.serverBody(coll, id), ds.overlay);
     const content = body ? { ...body } : null;
     if (content) { delete content.rev; delete content.updatedBy; }
-    putOutbox({ uid: this.user.uid, coll, id, kind, fields: [...ds.fields], body: content, label: ds.label });
+    putOutbox({
+      uid: this.user.uid, coll, id, kind, fields: [...ds.fields], body: content, label: ds.label,
+      baseRev: ds.baseRev ?? null, revs: [...ds.revs], dirty: !!ds.overlay.pending,
+    });
   }
 
   private create(coll: string, id: string, body: Body, label: string): void {
@@ -507,6 +520,8 @@ export class SharedSession {
     const rev = genId();
     ds.overlay = { ...emptyOverlay(), created: { ...body, rev } };
     ds.fresh = true;
+    ds.baseRev = null;
+    ds.revs = [rev];
     ds.label = label;
     for (const k of Object.keys(body)) ds.fields.add(k);
     this.persist(coll, id, ds, 'create');
@@ -518,7 +533,9 @@ export class SharedSession {
     const ds = this.ds(coll, id);
     const o = ds.overlay;
     if (o.deleted) return;
-    ds.overlay = { ...o, base: o.base ?? o.created ?? this.serverBody(coll, id), pending: { ...(o.pending ?? {}), ...patch } };
+    const server = this.serverBody(coll, id);
+    if (ds.baseRev === undefined) ds.baseRev = server ? (typeof server.rev === 'string' ? server.rev : '') : null;
+    ds.overlay = { ...o, base: o.base ?? o.created ?? server, pending: { ...(o.pending ?? {}), ...patch } };
     for (const k of Object.keys(patch)) ds.fields.add(k);
     ds.label = label;
     this.persist(coll, id, ds, ds.fresh ? 'create' : 'update');
@@ -546,6 +563,8 @@ export class SharedSession {
     const rev = genId();
     const body = applyOverlay(this.serverBody(coll, id), ds.overlay);          // 送ったあとの中身の全体（拒否されたときの控え用）
     ds.overlay = { ...ds.overlay, pending: null, issued: [...ds.overlay.issued, { rev, patch }] };
+    ds.revs.push(rev);
+    this.persist(coll, id, ds, ds.fresh ? 'create' : 'update');
     this.dirty.add(coll);
     this.send(coll, id, 'update', rev, body, () => patchDoc(coll, id, { ...patch, rev, updatedBy: this.actor }));
   }
@@ -583,6 +602,8 @@ export class SharedSession {
       if (ds.lost) this.report(coll, ds.lost, code === null);
       ds.lost = null;
       ds.fields.clear();
+      ds.baseRev = undefined;
+      ds.revs = [];
       removeOutbox(this.user.uid, coll, id);
     }
     this.gc(key);
@@ -608,30 +629,76 @@ export class SharedSession {
     this.hooks.notify('warn', `${why}${kept}`);
   }
 
-  /** 前回、送る前に閉じられた変更（控え）を引き取って送り直す。必ず「更新」として送る（削除済みなら拒否される） */
+  /**
+   * 前回、届いたと確認できる前に閉じられた変更（控え）を引き取る。
+   * 送り直す前に、共有側のいまの状態を確かめる（古い内容で、ほかの人の新しい変更を巻き戻さないため）:
+   *   - 既に届いていた・内容が同じ → 何もしない
+   *   - 誰も触っていない           → 送り直す（必ず「更新」として。削除されたものは復活しない）
+   *   - ほかの人が変更していた・削除されていた → 上書きしない。表示し、案件は控えを残す
+   */
   private async adopt(): Promise<void> {
-    if (this.stopped || this.view.phase !== 'ready') return;
-    const list = await orphans(this.user.uid);
-    if (this.stopped || this.view.phase !== 'ready') return;
-    for (const e of list) {
-      const key = `${e.coll}/${e.id}`;
-      const cur = this.docs.get(key);
-      if (cur && (cur.inflight.length || cur.overlay.pending)) continue;        // この画面で編集中のものを優先
-      if (!COLLS.some((c) => c.coll === e.coll)) { removeOutbox(this.user.uid, e.coll, e.id); continue; }
-      const ds = this.ds(e.coll, e.id);
-      ds.label = e.label;
-      for (const f of e.fields) ds.fields.add(f);
-      putOutbox({ uid: e.uid, coll: e.coll, id: e.id, kind: e.kind, fields: e.fields, body: e.body, partial: e.partial, label: e.label });
-      const rev = genId();
-      if (e.kind === 'delete') {
-        this.send(e.coll, e.id, 'delete', rev, null, () => removeDoc(e.coll, e.id));
-      } else {
-        const patch: Body = {};
-        for (const f of e.fields) if (f !== 'rev' && f !== 'updatedBy') patch[f] = e.body ? e.body[f] : undefined;
-        this.send(e.coll, e.id, 'update', rev, e.partial ? null : e.body, () => patchDoc(e.coll, e.id, { ...patch, rev, updatedBy: this.actor }));
+    if (this.stopped || this.adopting || this.view.phase !== 'ready' || !isOnline()) return;
+    this.adopting = true;
+    try {
+      const list = await orphans(this.user.uid);
+      if (list.length === 0) return;
+      // 端末内に送信待ちで残っている前回の書き込みが、先にサーバーへ届く（または拒否される）のを待つ
+      await Promise.race([waitPending().catch(() => { /* 待てなくても、下で 1 件ずつ確かめる */ }), sleep(8000)]);
+      for (const e of list) {
+        if (this.stopped || this.view.phase !== 'ready') return;
+        const cur = this.docs.get(`${e.coll}/${e.id}`);
+        if (cur && (cur.inflight.length || cur.overlay.pending)) continue;      // この画面で編集中（控えは、その編集が書き直す）
+        if (!COLLS.some((c) => c.coll === e.coll)) { removeOutbox(e.uid, e.coll, e.id); continue; }
+        let server: Body | null;
+        try { server = await withTimeout(readDocServer(e.coll, e.id), 10000); } catch { continue; }   // 確かめられない → 次の機会に
+        if (this.stopped || this.view.phase !== 'ready') return;
+        this.resolveOrphan(e, server);
       }
+      this.rebuild();
+    } finally {
+      this.adopting = false;
     }
-    if (list.length) this.rebuild();
+  }
+  private resolveOrphan(e: OutboxEntry, server: Body | null): void {
+    const drop = () => removeOutbox(e.uid, e.coll, e.id);
+    if (e.kind === 'delete') {
+      if (server) this.hooks.notify('warn', `${e.label}の削除が、共有データに反映されていませんでした。必要な場合は、もう一度削除してください。`);
+      drop();
+      return;
+    }
+    if (!server) { this.leftBehind(e, e.kind === 'create' ? 'missing' : 'deleted'); drop(); return; }
+    const rev = typeof server.rev === 'string' ? server.rev : '';
+    const revs = e.revs ?? [];
+    if (!e.dirty && revs.length > 0 && rev === revs[revs.length - 1]) { drop(); return; }             // 最後の書き込みまで届いていた
+    const differing = e.fields.filter((f) => !BOOKKEEPING.includes(f) && !sameContent(server[f], e.body?.[f]));
+    if (differing.length === 0 || !e.body) { drop(); return; }                                         // 内容は同じ（届いていた）
+    // 共有側の印が「変更を始めたときのもの」か「自分が送ったもの」なら、その後だれも触っていない
+    const untouched = (e.baseRev !== undefined && e.baseRev !== null && rev === e.baseRev) || revs.includes(rev);
+    if (!untouched) { this.leftBehind(e, 'changed'); drop(); return; }
+    const ds = this.ds(e.coll, e.id);
+    const next = genId();
+    ds.label = e.label;
+    ds.fields = new Set(e.fields);
+    ds.baseRev = e.baseRev ?? null;
+    ds.revs = [...revs, next];
+    putOutbox({ uid: e.uid, coll: e.coll, id: e.id, kind: e.kind, fields: e.fields, body: e.body, partial: e.partial, label: e.label, baseRev: ds.baseRev, revs: ds.revs, dirty: false });
+    const patch: Body = {};
+    for (const f of e.fields) if (f !== 'rev' && f !== 'updatedBy') patch[f] = e.body[f];
+    this.send(e.coll, e.id, 'update', next, e.partial ? null : e.body, () => patchDoc(e.coll, e.id, { ...patch, rev: next, updatedBy: this.actor }));
+  }
+  /** 引き取った変更を、共有に反映しなかった場合の表示（案件は「この端末だけのデータ」に控えを残す） */
+  private leftBehind(e: OutboxEntry, why: 'deleted' | 'missing' | 'changed'): void {
+    let kept = '';
+    if (e.coll === PROJECT_COLL && e.body && !e.partial) {
+      const name = this.hooks.stash(hydrateProject(stripMeta(e.body) as unknown as Project), this.view.data);
+      kept = `その内容は、「この端末だけのデータ」に「${name}」として残しました。`;
+    } else if (why !== 'deleted') {
+      kept = '必要な場合は、もう一度入力してください。';
+    }
+    const text = why === 'deleted' ? `${e.label}は、ほかの端末で削除されていたため、前回送信前だった変更を共有データに反映できませんでした。`
+      : why === 'missing' ? `前回作成した${e.label}は、共有データに保存されていませんでした（保存の前に画面が閉じられたか、その後に削除されています）。`
+      : `${e.label}には、前回送信前だった変更が残っていましたが、その後に共有側で内容が変更されていたため、自動では反映していません（新しい内容を、古い内容で上書きしないため）。`;
+    this.hooks.notify('warn', `${text}${kept}`);
   }
   /** 共有を使えなくなったとき、送れずに残っている案件の変更を「この端末だけのデータ」に控えとして残す */
   private salvage(why: string): void {

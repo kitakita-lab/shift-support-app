@@ -698,4 +698,78 @@ add('D20', '同じ端末で 2 つの画面（タブ）を開いていても同�
   eq(A.errors, [], 'ブラウザのエラーが無いこと');
 }, V3);
 
+add('D21', '送る前に閉じられた変更が端末に残っていても、その間にほかの人が同じ案件を変更していたら、古い内容で上書きしない（表示して、控えに残す）', async ({ device: mk }) => {
+  const A = await mk('A'), B = await mk('B');
+  let a = await A.open();
+  await signIn(a, 'a@example.com');
+  await createProject(a, '後から開く案件');
+  await until(() => server('v3'), (s) => s.projects[0]?.name === '後から開く案件');
+  await until(() => syncLabel(a), (t) => t.includes('保存済み'));
+  const b = await B.open();
+  await signIn(b, 'b@example.com');
+  await openProject(a, '後から開く案件');
+  await kv(a, 'メモ').fill('A が閉じる直前に書いた古いメモ');
+  await a.close();                            // 送る前に閉じる（変更は端末の控えに残る）
+  await openProject(b, '後から開く案件');
+  await kv(b, 'メモ').fill('B が後から書いた新しいメモ');
+  await until(async () => (await server('v3')).projects[0], (p) => p.memo === 'B が後から書いた新しいメモ');
+  await sleep(1000);
+  a = await reopen(A);                        // A が、後になって開き直す
+  const ns = await until(() => notices(a), (xs) => xs.some((t) => t.includes('上書きしない')), 25000);
+  ok(ns.some((t) => t.includes('後から開く案件') && t.includes('控え')), `表示: ${JSON.stringify(ns)}`);
+  await sleep(1500);
+  eq((await server('v3')).projects[0].memo, 'B が後から書いた新しいメモ', 'サーバーのメモ（新しい内容が残っていること）');
+  eq(await a.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kkl_outbox')).length), 0, '控えが片付いていること');
+  await space(a, 'local');
+  await openProject(a, '後から開く案件（控え）');
+  eq(await kv(a, 'メモ').inputValue(), 'A が閉じる直前に書いた古いメモ', '控えのメモ（A が書いた内容が残っていること）');
+}, V3);
+
+add('D22', '閉じる前に送信待ちになっていた変更は、開き直したときに 1 回だけ届く（届いたものを、もう一度送り直さない）', async ({ device: mk }) => {
+  const A = await mk('A');
+  let a = await A.open();
+  await signIn(a, 'a@example.com');
+  await addStaff(a, '山田', 1200);
+  await until(() => server('v3'), (s) => s.staff[0]?.hourlyRate === 1200);
+  await until(() => syncLabel(a), (t) => t.includes('保存済み'));
+  await A.offline(true);
+  await setStaffRate(a, '山田', 1400);
+  await until(() => syncLabel(a), (t) => t.includes('未送信'));
+  await sleep(1200);                          // 送信待ちになる（端末内に残る）
+  await a.close();
+  await A.offline(false);
+  a = await reopen(A);
+  const s1 = (await until(() => server('v3'), (s) => s.staff[0]?.hourlyRate === 1400, 12000)).staff[0];
+  eq(s1.hourlyRate, 1400, 'サーバーの時給');
+  await sleep(16000);                         // 控えの引き取り（定期的に行う）を 1 回以上はさむ
+  eq((await server('v3')).staff[0].rev, s1.rev, '届いたあと、同じ変更がもう一度書き込まれていないこと');
+  eq(await a.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kkl_outbox')).length), 0, '控えが片付いていること');
+  eq(await notices(a), [], '余計な表示が出ていないこと');
+}, V3);
+
+add('D23', '圏外で編集したまま閉じた案件が、その間にほかの端末で削除されていたら、開き直しても復活せず、表示が出て、控えが残る', async ({ device: mk }) => {
+  const A = await mk('A'), B = await mk('B');
+  const a = await A.open();
+  await signIn(a, 'a@example.com');
+  await createProject(a, '閉じている間に消される案件');
+  await until(() => server('v3'), (s) => s.projects[0]?.name === '閉じている間に消される案件');
+  let b = await B.open();
+  await signIn(b, 'b@example.com');
+  await openProject(b, '閉じている間に消される案件');
+  await B.offline(true);
+  await kv(b, 'メモ').fill('B が圏外で書いたメモ');
+  await sleep(1500);                          // 送信待ちになる
+  await b.close();
+  await deleteProject(a, '閉じている間に消される案件');
+  await until(() => server('v3'), (s) => s.projects.length === 0);
+  await B.offline(false);
+  b = await reopen(B);
+  const ns = await until(() => notices(b), (xs) => xs.some((t) => t.includes('削除')), 25000);
+  ok(ns.some((t) => t.includes('削除') && t.includes('控え')), `表示: ${JSON.stringify(ns)}`);
+  eq(names((await server('v3')).projects), [], 'サーバーの案件（復活していないこと）');
+  await space(b, 'local');
+  await openProject(b, '閉じている間に消される案件（控え）');
+  eq(await kv(b, 'メモ').inputValue(), 'B が圏外で書いたメモ', '控えのメモ');
+}, V3);
+
 await runFile('Version 3 で追加した確認項目', stopLegacyApp);
