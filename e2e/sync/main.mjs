@@ -1,8 +1,8 @@
 // 共有（ログイン）での同期を、複数の端末に見立てたブラウザで確かめる。
 // 起動は run.mjs から（エミュレータを立ち上げたうえで、このファイルを実行する）。
 import {
-  add, addStaff, admin, appFormat, closeBrowser, createProject, deleteProject, device, eq, kv, loadSample, names, notices, ok,
-  openProject, projectRows, runAll, server, setStaffRate, signIn, sleep, space, staffNames, startApp, syncLabel, tab, until,
+  add, addStaff, appFormat, createProject, deleteProject, eq, kv, loadSample, names, notices, ok,
+  openProject, projectRows, runFile, server, setStaffRate, signIn, sleep, space, staffNames, stopLegacyApp, syncLabel, until,
 } from './lib.mjs';
 
 /** 端末を開き直したあと、ログイン状態が戻って共有データが使えるようになるまで待つ */
@@ -67,7 +67,8 @@ add('S21', '削除した案件は、そのとき閉じていた別の端末を�
   await until(async () => (await server(format)).projects.length === 2);
   let b = await B.open();
   await signIn(b, 'b@example.com');
-  eq((await until(() => projectRows(b), (r) => r.length === 2)).sort(), ['残す案件', '消す案件'], 'B の一覧');
+  // 件数ではなく、案件名まで届くのを待つ（新しい案件は、まず名前が空の状態で届き、名前は入力が止まってから届く）
+  eq((await until(() => projectRows(b), (r) => r.length === 2 && r.includes('消す案件') && r.includes('残す案件'))).sort(), ['残す案件', '消す案件'], 'B の一覧');
   await b.close();                            // B の端末を閉じる
   await deleteProject(a, '消す案件');
   eq(names((await until(() => server(format), (s) => s.projects.length === 1)).projects), ['残す案件'], '削除直後のサーバー');
@@ -213,19 +214,5 @@ add('S37', '圏外になると「オフライン（未送信あり）」と表�
 }, { needs: 'v3' });
 
 // ── 実行 ────────────────────────────────────────────────────────
-const app = process.env.APP_URL ? { url: process.env.APP_URL, stop: () => {} } : await startApp();
-let results = [];
-try {
-  const probe = await device(app.url, 'probe');
-  const format = await appFormat(await probe.open());
-  await probe.close();
-  console.log(`対象: ${app.url}（共有データの形式: ${format === 'v3' ? 'Version 3' : 'V1・V2'}）\n`);
-  results = await runAll({ url: app.url, format });
-} finally {
-  await closeBrowser();
-  app.stop();
-}
-const failed = results.filter((r) => !r.ok && !r.skipped);
-const skipped = results.filter((r) => r.skipped);
-console.log(`\n${results.length} 項目中 ${results.length - failed.length - skipped.length} 合格／${failed.length} 不合格${skipped.length ? `／${skipped.length} 対象外` : ''}${failed.length ? `（${failed.map((r) => r.id).join(', ')}）` : ''}`);
-process.exit(failed.length ? 1 : 0);
+// 対象は、既定ではいまのコード。KKL_TARGET=v2 のときは Version 2 のコード（修正前の挙動の再現。run.mjs before）
+await runFile('同期の確認（修正の前後を比べる 10 項目）', stopLegacyApp);

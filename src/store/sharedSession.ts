@@ -331,18 +331,8 @@ export class SharedSession {
       return;
     }
     if (this.dead(gen)) return;
-    if (!meta && !legacyHasData(legacy)) {
-      if (!this.canAdmin()) { this.emit({ phase: 'needs-init' }); return; }
-      try {
-        await initFresh(defaultDocs(), 'fresh', this.actor);
-      } catch (e) {
-        if (!this.dead(gen)) this.emit({ phase: 'error', error: `共有データの初期設定ができませんでした（${reason(errorCode(e))}）。` });
-        return;
-      }
-      if (this.dead(gen)) return;
-      this.attach();
-      return;
-    }
+    // ログインしただけでは、共有側に何も書き込まない。初期設定も移行も、画面のボタンを押したときだけ行う
+    if (!meta && !legacyHasData(legacy)) { this.emit({ phase: 'needs-init', legacyCounts: null }); return; }
     this.emit({ phase: 'needs-migration', legacyCounts: countLegacy(legacy) });
   }
 
@@ -754,13 +744,16 @@ export class SharedSession {
   }
 
   // ── 初期設定・移行 ──
-  /** 旧形式のデータを移さずに、空の状態から使い始める（旧形式のデータはそのまま残る） */
+  /**
+   * 共有データを、空の状態から使い始める（形式の印と、パーツ・組み合わせ配置の初期値を作る）。
+   * 以前の形式のデータがある場合も、それには触れない（移さずに始める。以前のデータはそのまま残る）。
+   */
   async startFresh(): Promise<void> {
     if (this.busy || !this.canAdmin()) return;
     this.busy = true;
     this.emit({ job: '共有データを用意しています…', error: '' });
     try {
-      await initFresh(defaultDocs(), 'fresh-skip-legacy', this.actor);
+      await initFresh(defaultDocs(), this.view.phase === 'needs-migration' ? 'fresh-skip-legacy' : 'fresh', this.actor);
       this.busy = false;
       this.emit({ job: '' });
       this.attach();

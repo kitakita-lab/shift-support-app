@@ -182,15 +182,19 @@ add('M14', '「移行せず、空の状態から始める」を選ぶと、以�
   eq((await admin.docs(`${T}/wsBackups`)).length, 0, 'バックアップは作られない（移行していないため）');
 }, V3);
 
-add('M15', '新しいチーム（データなし）: メンバーは管理者の初期設定を待ち、管理者がログインすると用意される', async ({ device: mk }) => {
+add('M15', '新しいチーム（データなし）: ログインしただけでは共有側に何も書き込まれない。管理者が「使い始める」を押すと用意され、待っていたメンバーの画面も切り替わる', async ({ device: mk }) => {
   await roster({ 'owner@example.com': 'owner', 'member@example.com': 'member' });
   const M = await mk('M');
   const m = await M.open();
   await signIn(m, 'member@example.com', { expectPhase: 'needs-init' });
-  eq((await server('v3')).partTypes.length, 0, 'メンバーのログインでは、共有データが作られないこと');
+  eq(await m.locator('[data-testid="init-shared"]').count(), 0, 'メンバーには「使い始める」のボタンが出ないこと');
   const O = await mk('O');
   const o = await O.open();
-  await signIn(o, 'owner@example.com');
+  await signIn(o, 'owner@example.com', { expectPhase: 'needs-init' });
+  await sleep(1500);
+  eq(Object.values(await rawAll(V3_COLLS)).flat().length, 0, '管理者がログインしただけでは、共有側に 1 件も書き込まれていないこと');
+  await o.locator('[data-testid="init-shared"]').click();
+  await waitShared(o);
   await waitShared(m, 20000);
   const meta = await admin.get(`${T}/wsMeta/state`);
   eq([meta.status, meta.source, meta.formatVersion], ['done', 'fresh', 1], '形式の情報');
@@ -198,6 +202,19 @@ add('M15', '新しいチーム（データなし）: メンバーは管理者の
   await createProject(o, '管理者が作った案件');
   eq(await until(() => projectRows(m), (r) => r[0] === '管理者が作った案件'), ['管理者が作った案件'], 'メンバーの案件一覧');
 }, MEMBER_RULES);
+
+add('M16', '以前の形式のデータがあるチーム: ログインしただけでは、以前の形式にも新しい形式にも 1 件も書き込まれない（現在のルール）', async ({ device: mk }) => {
+  await seedLegacy(mk);
+  const before = await rawAll([...LEGACY_COLLS, ...V3_COLLS]);
+  const A = await mk('A');
+  const a = await A.open();
+  await signIn(a, 'someone@example.com', { expectPhase: 'needs-migration' });
+  await tab(a, 'データ');
+  await tab(a, '案件');
+  await sleep(2500);
+  same(await rawAll([...LEGACY_COLLS, ...V3_COLLS]), before, '共有側のデータ（変わっていないこと）');
+  eq((await admin.docs(`${T}/members`)).length, 0, '名簿にも何も書かれていないこと');
+}, V3);
 
 // ══ C. 古いアプリとの互換性（条件 C） ═══════════════════════════════════
 /**
@@ -619,7 +636,8 @@ add('D18', '「共有へコピー」「この端末にコピー」: 案件が使
   eq(await shownSpace(a), 'local', 'サンプル読込後は「この端末だけのデータ」を表示');
   const localRows = await projectRows(a);
   await copyProject(a, 'ikyu');
-  const s = await until(() => server('v3'), (x) => x.projects.length === 1 && x.staff.length === 4, 8000);
+  // 直前に入力した「既存スタッフ」の名前・時給は、入力が止まってから届く。コピーした分と合わせて、そろうまで待つ
+  const s = await until(() => server('v3'), (x) => x.projects.length === 1 && x.staff.length === 4 && x.staff.some((y) => y.name === '既存スタッフ' && y.hourlyRate === 1111), 8000);
   eq(names(s.projects), ['ikyu'], '共有の案件');
   eq(names(s.staff), ['スタッフA（サンプル）', 'スタッフB（サンプル）', 'スタッフC（サンプル）', '既存スタッフ'].sort(), '共有のスタッフ（案件が使う 3 人が追加され、既存の 1 人はそのまま）');
   eq(s.staff.find((x) => x.name === '既存スタッフ').hourlyRate, 1111, '既存スタッフの時給');

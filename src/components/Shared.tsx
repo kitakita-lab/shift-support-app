@@ -97,10 +97,21 @@ export function SharedPhasePanel({ shared, session, onUseLocal }: { shared: Shar
       );
       break;
     case 'needs-init':
-      body = (
+      body = admin ? (
         <>
           <div className="panel__title">共有データは、まだ用意されていません</div>
-          <p>管理者がこのアプリにログインすると、共有データが用意されます。用意ができると、この画面は自動で切り替わります。</p>
+          <p>このチームの共有データを使い始めますか？ 始めると、共有側にパーツと組み合わせ配置の初期値が作られ、メンバーが案件やマスタを登録できるようになります。</p>
+          <p className="hint">ボタンを押すまで、共有側には何も書き込みません。「この端末だけのデータ」は、これまでどおり使えます。</p>
+          {shared.error && <p className="neg" data-testid="shared-error">{shared.error}</p>}
+          <div className="panel__btns">
+            <button className="primary" data-testid="init-shared" disabled={!!shared.job} onClick={() => void session?.startFresh()}>{shared.job || '共有データを使い始める'}</button>
+            {useLocal}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="panel__title">共有データは、まだ用意されていません</div>
+          <p>管理者がこのアプリで共有データを使い始めると、この画面は自動で切り替わります。</p>
           <div className="panel__btns">{useLocal}</div>
         </>
       );

@@ -255,8 +255,11 @@ export async function signIn(page, email, opts = {}) {
   await page.evaluate(([e, o]) => window.__kkl.signInAs(e, o), [email, opts]);
   await page.waitForSelector('.auth-user');
   if ((await appFormat(page)) === 'v3') {
-    if (opts.expectPhase) await page.waitForSelector(`[data-testid="shared-phase"][data-phase="${opts.expectPhase}"]`);
-    else await page.waitForSelector('[data-testid="space"][data-space="shared"]');
+    if (opts.expectPhase) { await page.waitForSelector(`[data-testid="shared-phase"][data-phase="${opts.expectPhase}"]`); return; }
+    // まだ誰も使い始めていないチームでは「共有データを使い始める」が出る（押すまで、共有側には何も書き込まれない）
+    const first = await page.waitForSelector('[data-testid="space"][data-space="shared"], [data-testid="init-shared"]');
+    if ((await first.getAttribute('data-testid')) === 'init-shared') await first.click();
+    await page.waitForSelector('[data-testid="space"][data-space="shared"]');
   } else {
     await sleep(1500);
   }
@@ -373,7 +376,9 @@ export async function runAll(ctx) {
 
 /** 登録した確認項目を実行して、結果のまとめを出す（各ファイルの最後で呼ぶ） */
 export async function runFile(title, cleanup = () => {}) {
-  const app = process.env.APP_URL ? { url: process.env.APP_URL, stop: () => {} } : await startApp();
+  const app = process.env.APP_URL ? { url: process.env.APP_URL, stop: () => {} }
+    : process.env.KKL_TARGET === 'v2' ? await legacyApp()
+    : await startApp();
   let results = [];
   try {
     const probe = await device(app.url, 'probe');

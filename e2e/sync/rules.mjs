@@ -78,6 +78,8 @@ g('0. 実際のデータパスとルールの一致');
         .filter((f) => /['"]teams['"]/.test(fs.readFileSync(path.join(storeDir, f), 'utf8')))
     : ['paths.ts がありません'];
   results.push({ group, label: 'アプリのコードが置き場所を直接組み立てていない（paths.ts 経由のみ）', want: '一致', got: offenders.length ? `不一致（${offenders.join(', ')}）` : '一致', ok: offenders.length === 0 });
+  // アプリが「ルールが名簿で制限しているか」を確かめるために読んでみる場所は、どの一覧にも入れない（＝誰にも許可しない）
+  results.push({ group, label: `確認用の場所（${COLLS.probe}）は、ルールのどの一覧にも入っていない`, want: '一致', got: src.includes(COLLS.probe) ? '不一致（ルールに名前があります）' : '一致', ok: !src.includes(COLLS.probe) });
 }
 
 // ── 1. 未登録のアカウント ───────────────────────────────────────
@@ -199,6 +201,16 @@ await write(owner, `${T}/members/member@example.com`, { role: 'owner' })();     
 await expect('昇格した直後: 名簿を読める', 'できる', list(member, `${T}/members`));
 await write(owner, `${T}/members/member@example.com`, { role: 'member' })();         // 管理者からメンバーに戻す
 await expect('降格した直後: 名簿を読めない', '拒否', list(member, `${T}/members`));
+
+// ── 8. ルールが名簿で制限しているかを確かめる場所 ─────────────────
+// アプリは、ここを読めるかどうかで「メンバー制が適用されているか」を見分ける（読めたら未適用）。メンバー制では誰にも許可しない
+g('8. 「メンバー制が適用されているか」をアプリが確かめる場所（何も置かない・誰にも許可しない）');
+const probe = `${T}/${COLLS.probe}/probe`;
+await expect('未登録: 読む', '拒否', read(stranger, probe));
+await expect('メンバー: 読む', '拒否', read(member, probe));
+await expect('メンバー: 書く', '拒否', write(member, probe));
+await expect('管理者: 読む', '拒否', read(owner, probe));
+await expect('管理者: 書く', '拒否', write(owner, probe));
 
 // ── 結果 ──────────────────────────────────────────────────────
 let last = '';

@@ -9,6 +9,8 @@
 //   node e2e/sync/run.mjs                 … すべて
 //   node e2e/sync/run.mjs sync            … main.mjs と v3.mjs
 //   node e2e/sync/run.mjs main|v3|rules   … どれか 1 つ
+//   node e2e/sync/run.mjs before          … main.mjs を、Version 2 のコード（修正前）に対して実行する（前後比較用）
+//   RULES=firestore.rules node e2e/sync/run.mjs rules … 現在のルールに対して実行する（既定はルール案）
 //   ONLY=S2,M1 node e2e/sync/run.mjs sync … 記号が S2・M1 で始まる項目だけ
 //
 // 必要なもの: Java（エミュレータ本体）、firebase-tools、playwright と Chromium。いずれもリポジトリの依存には入れていない。
@@ -23,7 +25,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
 const what = process.argv[2] ?? 'all';
 const scripts = [];
-if (['all', 'sync', 'main'].includes(what)) scripts.push('e2e/sync/main.mjs');
+if (['all', 'sync', 'main', 'before'].includes(what)) scripts.push('e2e/sync/main.mjs');
+if (what === 'before') process.env.KKL_TARGET = 'v2';
 if (['all', 'sync', 'v3'].includes(what) && fs.existsSync(path.join(here, 'v3.mjs'))) scripts.push('e2e/sync/v3.mjs');
 if (['all', 'rules'].includes(what) && fs.existsSync(path.join(here, 'rules.mjs'))) scripts.push('e2e/sync/rules.mjs');
 if (scripts.length === 0) { console.error(`実行するものがありません: ${what}`); process.exit(2); }
