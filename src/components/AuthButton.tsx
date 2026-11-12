@@ -1,7 +1,8 @@
 import { useAuth } from '../contexts/AuthContext';
 import { isFirebaseConfigured } from '../firebase';
 
-export default function AuthButton() {
+/** onSignOut: ログアウトの前に確認が必要な場合（未送信の変更があるなど）に、呼び出し側でログアウトまで行う */
+export default function AuthButton({ onSignOut }: { onSignOut?: () => void }) {
   const { user, loading, signInError, signIn, signOut } = useAuth();
 
   // Firebase が未設定（Vercel env 未定義等）の場合は何も表示しない
@@ -18,7 +19,7 @@ export default function AuthButton() {
           <img src={user.photoURL} alt="" className="auth-user__avatar" referrerPolicy="no-referrer" />
         )}
         <span className="auth-user__name">{user.displayName ?? user.email}</span>
-        <button className="auth-signout-btn" onClick={signOut}>
+        <button className="auth-signout-btn" onClick={onSignOut ?? signOut}>
           ログアウト
         </button>
       </div>

@@ -3,6 +3,7 @@
   "meta": "wsMeta",
   "backups": "wsBackups",
   "members": "members",
+  "probe": "wsRulesProbe",
   "legacy": ["workshopData", "workshopProjects"],
   "oldApp": ["appData", "presence", "editingStates", "activityLogs"]
 }

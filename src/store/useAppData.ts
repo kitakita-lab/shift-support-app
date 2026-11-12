@@ -1,207 +1,228 @@
-// アプリ全データの保持・localStorage 保存・Firestore 同期。
-// 旧アプリ useFirestoreSync から引き継いだ原則:
-//   1. localStorage と Firestore の二重書き（未ログイン・Firebase 未設定でも単体で動く）
-//   2. 初回 snapshot が届くまで Firestore へ書かない（ログイン直後の上書き事故を防ぐ）
-//   3. 自分の書き込みのエコーで手元の編集を巻き戻さない
-// 3 は旧アプリのフラグ方式ではなく updatedAt の新旧比較で行う（ドラッグ中の連続編集に耐えるため）。
-import { useCallback, useEffect, useRef, useState } from 'react';
+// アプリのデータの入口。データの置き場所は 2 つあり、自動では混ざらない。
+//
+//   「この端末だけのデータ」… ブラウザ内（localStorage）に保存。同期しない。未ログインでも使える。
+//                              サンプルの読み込み・バックアップからの復元は、必ずこちらに入る。
+//   「共有データ」          … ログイン中に使える。Firestore が正（sharedSession.ts）。
+//
+// 画面は、いま選んでいる置き場所のデータ（data）だけを見る。置き場所をまたぐのは、明示的な「コピー」だけ。
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { hydrateLayout } from '../domain/layout';
 import { emptyData } from '../domain/seed';
-import { AppData, Project, Venue } from '../types';
-import {
-  Actor, MASTER_KEYS, MasterKey, deleteProject, saveMaster, saveProject, subscribeMaster, subscribeProjects,
-} from './remote';
+import { genId } from '../domain/util';
+import { isFirebaseConfigured } from '../firebase';
+import { AppData, Project } from '../types';
+import { loadLocal, saveLocal } from './localData';
+import { MasterKey } from './paths';
+import { OFF_VIEW, SessionHooks, SharedSession, SharedView, claimCache, discardUnsent } from './sharedSession';
+import { ProjectCopy, planProjectCopy } from './sharedLogic';
 
-const LS_KEY = 'kkl_workshop_v1';
-const SAVE_DELAY_MS = 700;
+export { hydrateData } from './localData';
+export type { MasterKey } from './paths';
 
-export type SyncState = 'local' | 'saving' | 'saved' | 'error';
+export type Space = 'local' | 'shared';
+export interface Notice { id: string; kind: 'warn' | 'info'; text: string; at: number }
 
-function hydrateProject(p: Project): Project {
-  return {
-    ...p,
-    contents: p.contents ?? [],
-    assignments: p.assignments ?? [],
-    otherCosts: p.otherCosts ?? [],
-    layout: hydrateLayout(p.layout),
-    updatedAt: p.updatedAt ?? 0,
-  };
-}
+const SPACE_KEY = 'kkl_space_v1';
+const NOTICE_KEY = 'kkl_notices_v1';
+const SEEN_KEY = 'kkl_v3_seen';
+const EMPTY = emptyData();
+const noSubscribe = () => () => {};
+const offView = () => OFF_VIEW;
 
-export function hydrateData(raw: Partial<AppData> | null): AppData {
-  const base = emptyData();
-  if (!raw) return base;
-  return {
-    staff: raw.staff ?? [],
-    venues: (raw.venues ?? []).map((v: Venue) => ({ ...v, template: hydrateLayout(v.template) })),
-    contents: (raw.contents ?? []).map((c) => ({ ...c, materials: c.materials ?? [] })),
-    partTypes: raw.partTypes ?? base.partTypes,
-    composites: raw.composites ?? base.composites,
-    projects: (raw.projects ?? []).map(hydrateProject),
-  };
-}
-
-function loadLocal(): AppData {
+function loadJson<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(LS_KEY);
-    return hydrateData(raw ? (JSON.parse(raw) as Partial<AppData>) : null);
-  } catch {
-    return emptyData();
-  }
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch { return fallback; }
+}
+function saveJson(key: string, value: unknown): void {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 容量超過などは無視 */ }
+}
+
+/** コピーの結果を、コピー先（この端末だけのデータ）に足す */
+function applyCopy(d: AppData, copy: ProjectCopy): AppData {
+  return {
+    staff: [...d.staff, ...(copy.add.staff ?? [])],
+    venues: [...d.venues, ...(copy.add.venues ?? [])],
+    contents: [...d.contents, ...(copy.add.contents ?? [])],
+    partTypes: [...d.partTypes, ...(copy.add.partTypes ?? [])],
+    composites: [...d.composites, ...(copy.add.composites ?? [])],
+    projects: [...d.projects, { ...copy.project, updatedAt: Date.now() }],
+  };
+}
+
+export function downloadJson(filename: string, json: unknown): void {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export interface AppStore {
+  /** いま表示している置き場所 */
+  space: Space;
+  setSpace: (s: Space) => void;
+  /** 共有データを選べる状態か（ログイン中） */
+  canShare: boolean;
+  /** 表示している置き場所のデータ。共有を選んでいて、まだ使えない間は空 */
   data: AppData;
-  syncState: SyncState;
+  /** 表示している置き場所のデータを編集できる状態か */
+  usable: boolean;
+  /** 「この端末だけのデータ」（どちらを表示していても参照できる） */
+  local: AppData;
+  shared: SharedView;
+  session: SharedSession | null;
+  notices: Notice[];
+  notify: (kind: Notice['kind'], text: string) => void;
+  dismissNotice: (id: string) => void;
   /** マスタの置き換え */
   setMaster: <K extends MasterKey>(key: K, items: AppData[K]) => void;
   addProject: (p: Project) => void;
   updateProject: (id: string, fn: (p: Project) => Project) => void;
   removeProject: (id: string) => void;
-  /** 全データを置き換える（サンプル読込・バックアップ復元） */
-  replaceAll: (d: AppData) => void;
+  /** 「この端末だけのデータ」を丸ごと置き換える（サンプル読込・バックアップ復元）。共有データには触れない */
+  replaceLocal: (d: AppData) => void;
+  /** 表示中の案件を、もう一方の置き場所へコピーする。コピー先に無い会場・コンテンツ・スタッフ・パーツも一緒に足す（上書きはしない） */
+  copyProject: (id: string, to: Space) => boolean;
+  /** ログアウトの前に呼ぶ。送れるものを送り、残る未送信の件数を返す */
+  beforeSignOut: () => Promise<number>;
+  /** ログアウトで未送信の変更を破棄する */
+  discardUnsent: () => void;
 }
 
 export function useAppData(): AppStore {
-  const { user } = useAuth();
-  const [data, setData] = useState<AppData>(loadLocal);
-  const [syncState, setSyncState] = useState<SyncState>('local');
-  const [ready, setReady] = useState<Record<string, boolean>>({});
+  const { user, loading } = useAuth();
+  const canShare = isFirebaseConfigured && !!user;
+  const [local, setLocal] = useState<AppData>(loadLocal);
+  const [notices, setNotices] = useState<Notice[]>(() => loadJson<Notice[]>(NOTICE_KEY, []));
+  const [pref, setPref] = useState<Space>(() => (loadJson<string>(SPACE_KEY, 'shared') === 'local' ? 'local' : 'shared'));
+  const [session, setSession] = useState<SharedSession | null>(null);
+  const shared = useSyncExternalStore(session ? session.subscribe : noSubscribe, session ? session.getView : offView);
 
-  // 「サーバーと一致している」と分かっている参照。これと違うものだけを書き込む。
-  const syncedMaster = useRef<Partial<Record<MasterKey, unknown>>>({});
-  const syncedProjects = useRef(new Map<string, Project>());
-  // マスタごとの最終ローカル編集時刻（エコー・古い snapshot の判定用）
-  const masterAt = useRef<Record<string, number>>({});
-  // 削除したがまだサーバーへ反映していない案件（snapshot で復活させないため）
-  const pendingDeletes = useRef(new Set<string>());
-  const dataRef = useRef(data);
-  dataRef.current = data;
+  // ── この端末だけのデータ: 変更のたびにすぐ保存する ──
+  // まとめて遅らせると、入力の直後に再読み込み・タブを閉じた場合（スマホでの画面切り替えを含む）に最後の入力が消える
+  useEffect(() => { saveLocal(local); }, [local]);
+  useEffect(() => { saveJson(NOTICE_KEY, notices); }, [notices]);
+
+  const notify = useCallback((kind: Notice['kind'], text: string) => {
+    setNotices((n) => [...n, { id: genId(), kind, text, at: Date.now() }].slice(-12));
+  }, []);
+  const dismissNotice = useCallback((id: string) => setNotices((n) => n.filter((x) => x.id !== id)), []);
+  const setSpace = useCallback((s: Space) => { setPref(s); saveJson(SPACE_KEY, s); }, []);
+
+  // ── 共有データのセッション（ログインしているアカウントごと） ──
+  const hooks = useRef<SessionHooks>(null as unknown as SessionHooks);
+  hooks.current = {
+    // 共有に反映できなかった案件を、参照している会場・コンテンツ・スタッフ・パーツごと、この端末に控えとして残す
+    stash: (p, sharedData) => {
+      const newId = genId();
+      setLocal((d) => {
+        const copy = planProjectCopy({ ...sharedData, projects: [p] }, p.id, d, newId, '（控え）');
+        return copy ? applyCopy(d, copy) : d;
+      });
+      return `${p.name}（控え）`;
+    },
+    notify,
+    download: downloadJson,
+  };
+  const uid = canShare ? user!.uid : null;
+  const email = user?.email ?? '';
+  const displayName = user?.displayName ?? '';
+  useEffect(() => {
+    if (loading) return;
+    if (!uid) {
+      setSession(null);
+      void claimCache(null);                       // ログアウト: 端末内の共有データの控えを消す
+      return;
+    }
+    const s = new SharedSession({ uid, email, displayName }, {
+      stash: (p, d) => hooks.current.stash(p, d),
+      notify: (k, t) => hooks.current.notify(k, t),
+      download: (f, j) => hooks.current.download(f, j),
+    });
+    setSession(s);
+    s.start();
+    return () => s.stop();
+  }, [uid, email, displayName, loading]);
+
+  // ログインした瞬間は、共有データを表示する（再読み込みでログイン状態が戻っただけのときは、前回の選択のまま）
+  const wasSignedIn = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    if (wasSignedIn.current === false && canShare) setSpace('shared');
+    wasSignedIn.current = canShare;
+  }, [canShare, loading, setSpace]);
+
+  const space: Space = canShare && pref === 'shared' ? 'shared' : 'local';
+  const ready = shared.phase === 'ready';
+  const usable = space === 'local' || ready;
+  const data = space === 'local' ? local : ready ? shared.data : EMPTY;
+
+  // 以前の版（共有のたびに端末にも保存していた）から使っている端末への案内。初めて共有データを開いたときに 1 回だけ
+  useEffect(() => {
+    if (!ready || loadJson<boolean>(SEEN_KEY, false)) return;
+    saveJson(SEEN_KEY, true);
+    if (local.projects.length > 0 || local.staff.length > 0 || local.venues.length > 0) {
+      notify('info', 'この端末には、「この端末だけのデータ」が残っています（以前の版で保存したもの・試しに入れたサンプルなど）。共有データとは別の入れ物で、自動では混ざりません。画面上部の帯で切り替えて確認できます。');
+    }
+  }, [ready, local, notify]);
+
+  // 画面が表示している内容（操作は「表示していた内容からの差分」として扱う）
+  const shown = useRef(data);
+  useLayoutEffect(() => { shown.current = data; });
 
   const setMaster = useCallback(<K extends MasterKey>(key: K, items: AppData[K]) => {
-    masterAt.current[key] = Date.now();
-    setData((d) => ({ ...d, [key]: items }));
-  }, []);
+    if (space === 'shared') session?.setMaster(key, shown.current[key], items);
+    else setLocal((d) => ({ ...d, [key]: items }));
+  }, [space, session]);
 
   const addProject = useCallback((p: Project) => {
-    setData((d) => ({ ...d, projects: [...d.projects, { ...p, updatedAt: Date.now() }] }));
-  }, []);
+    if (space === 'shared') session?.addProject(p);
+    else setLocal((d) => ({ ...d, projects: [...d.projects, { ...p, updatedAt: Date.now() }] }));
+  }, [space, session]);
 
   const updateProject = useCallback((id: string, fn: (p: Project) => Project) => {
-    setData((d) => ({
-      ...d,
-      projects: d.projects.map((p) => (p.id === id ? { ...fn(p), updatedAt: Date.now() } : p)),
-    }));
-  }, []);
+    if (space === 'shared') session?.updateProject(id, fn);
+    else setLocal((d) => ({ ...d, projects: d.projects.map((p) => (p.id === id ? { ...fn(p), updatedAt: Date.now() } : p)) }));
+  }, [space, session]);
 
   const removeProject = useCallback((id: string) => {
-    pendingDeletes.current.add(id);
-    setData((d) => ({ ...d, projects: d.projects.filter((p) => p.id !== id) }));
-  }, []);
+    if (space === 'shared') session?.removeProject(id);
+    else setLocal((d) => ({ ...d, projects: d.projects.filter((p) => p.id !== id) }));
+  }, [space, session]);
 
-  const replaceAll = useCallback((d: AppData) => {
+  const replaceLocal = useCallback((d: AppData) => {
     const now = Date.now();
-    for (const k of MASTER_KEYS) masterAt.current[k] = now;
-    setData({ ...d, projects: d.projects.map((p) => ({ ...p, updatedAt: now })) });
-  }, []);
+    setLocal({ ...d, projects: d.projects.map((p) => ({ ...p, updatedAt: now })) });
+    setSpace('local');
+  }, [setSpace]);
 
-  // ── Firestore 購読 ──
-  useEffect(() => {
-    setReady({});
-    syncedMaster.current = {};
-    syncedProjects.current = new Map();
-    if (!user) { setSyncState('local'); return; }
+  const copyProject = useCallback((id: string, to: Space): boolean => {
+    const from = to === 'shared' ? local : shared.data;
+    const target = to === 'shared' ? shared.data : local;
+    if (to === 'shared' && (!session || shared.phase !== 'ready')) return false;
+    const copy = planProjectCopy(from, id, target, genId());
+    if (!copy) return false;
+    if (to === 'shared') session!.importCopy(copy);
+    else setLocal((d) => applyCopy(d, copy));
+    const name = copy.project.name || '名称未設定';
+    const added = (Object.values(copy.add) as { id: string }[][]).reduce((n, xs) => n + xs.length, 0);
+    notify('info', [
+      `案件「${name}」を、${to === 'shared' ? '共有データ' : 'この端末だけのデータ'}へコピーしました（元の案件はそのまま残っています）。`,
+      added ? `案件が使っている会場・コンテンツ・スタッフ・パーツのうち、コピー先に無かった ${added} 件も一緒に追加しました。` : '',
+      ...copy.notes,
+    ].filter(Boolean).join(' '));
+    return true;
+  }, [local, shared, session, notify]);
 
-    const unsubs = MASTER_KEYS.map((key) =>
-      subscribeMaster(
-        key,
-        (items, updatedAt) => {
-          // 手元の編集のほうが新しければ採用しない（次の保存でサーバーを更新する）
-          if (updatedAt < (masterAt.current[key] ?? 0)) return;
-          const hydrated = hydrateData({ [key]: items })[key];
-          masterAt.current[key] = updatedAt;
-          syncedMaster.current[key] = hydrated;
-          setData((d) => ({ ...d, [key]: hydrated }));
-        },
-        () => setReady((r) => ({ ...r, [key]: true })),
-      ),
-    );
+  const beforeSignOut = useCallback(async () => (session ? session.settle() : 0), [session]);
+  const discard = useCallback(() => { if (uid) discardUnsent(uid); }, [uid]);
 
-    unsubs.push(
-      subscribeProjects(
-        (remote) => {
-          const local = dataRef.current.projects;
-          const localById = new Map(local.map((p) => [p.id, p]));
-          const remoteIds = new Set(remote.map((p) => p.id));
-          const next: Project[] = [];
-          for (const raw of remote) {
-            if (pendingDeletes.current.has(raw.id)) continue;
-            const r = hydrateProject(raw);
-            const l = localById.get(r.id);
-            if (l && l.updatedAt >= r.updatedAt) {
-              // 手元が同じか新しい → 手元を維持。同時刻なら「同期済み」として記録
-              if (l.updatedAt === r.updatedAt) syncedProjects.current.set(l.id, l);
-              next.push(l);
-            } else {
-              syncedProjects.current.set(r.id, r);
-              next.push(r);
-            }
-          }
-          for (const l of local) {
-            if (remoteIds.has(l.id)) continue;
-            // サーバーに存在していたものが消えた → 他の人が削除した。未保存の新規は残す
-            if (syncedProjects.current.has(l.id)) syncedProjects.current.delete(l.id);
-            else next.push(l);
-          }
-          setData((d) => ({ ...d, projects: next }));
-        },
-        () => setReady((r) => ({ ...r, projects: true })),
-      ),
-    );
-    return () => unsubs.forEach((u) => u());
-  }, [user]);
-
-  // ── 保存（この端末）: 変更のたびにすぐ保存する ──
-  // まとめて遅らせると、入力の直後に再読み込み・タブを閉じた場合（スマホでの画面切り替えを含む）に最後の入力が消える
-  useEffect(() => {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch { /* 容量超過などは無視 */ }
-  }, [data]);
-
-  // ── 保存（Firestore）: ログイン時のみ。0.7 秒まとめてから、変わったマスタ／案件だけを書く ──
-  useEffect(() => {
-    if (!user) return;
-    const timer = setTimeout(() => {
-      const actor: Actor = { uid: user.uid, displayName: user.displayName ?? user.email ?? '不明' };
-      const jobs: Promise<void>[] = [];
-
-      for (const key of MASTER_KEYS) {
-        if (!ready[key] || syncedMaster.current[key] === data[key]) continue;
-        syncedMaster.current[key] = data[key];
-        if (!masterAt.current[key]) masterAt.current[key] = Date.now();
-        jobs.push(saveMaster(key, data[key], masterAt.current[key], actor));
-      }
-      if (ready.projects) {
-        const ids = new Set(data.projects.map((p) => p.id));
-        for (const p of data.projects) {
-          if (syncedProjects.current.get(p.id) === p) continue;
-          syncedProjects.current.set(p.id, p);
-          jobs.push(saveProject(p, actor));
-        }
-        const gone = new Set([...syncedProjects.current.keys()].filter((id) => !ids.has(id)));
-        for (const id of pendingDeletes.current) if (!ids.has(id)) gone.add(id);
-        pendingDeletes.current.clear();
-        for (const id of gone) {
-          syncedProjects.current.delete(id);
-          jobs.push(deleteProject(id));
-        }
-      }
-      if (jobs.length === 0) return;
-      setSyncState('saving');
-      Promise.all(jobs).then(() => setSyncState('saved')).catch(() => setSyncState('error'));
-    }, SAVE_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [data, user, ready]);
-
-  return { data, syncState, setMaster, addProject, updateProject, removeProject, replaceAll };
+  return useMemo(() => ({
+    space, setSpace, canShare, data, usable, local, shared, session, notices, notify, dismissNotice,
+    setMaster, addProject, updateProject, removeProject, replaceLocal, copyProject, beforeSignOut, discardUnsent: discard,
+  }), [space, setSpace, canShare, data, usable, local, shared, session, notices, notify, dismissNotice,
+    setMaster, addProject, updateProject, removeProject, replaceLocal, copyProject, beforeSignOut, discard]);
 }

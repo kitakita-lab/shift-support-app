@@ -94,7 +94,7 @@ const T = `teams/${TEAM}`;
 export async function server(format) {
   if (format === 'v3') {
     const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.id).localeCompare(String(b.id));
-    const masters = async (coll) => (await admin.list(`${T}/${coll}`)).sort(byOrder).map((d) => ({ id: d.id, ...d.data }));
+    const masters = async (coll) => (await admin.list(`${T}/${coll}`)).sort(byOrder);
     return {
       projects: (await admin.list(`${T}/wsProjects`)).sort(byOrder),
       staff: await masters('wsStaff'), venues: await masters('wsVenues'), contents: await masters('wsContents'),

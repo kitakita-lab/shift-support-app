@@ -151,3 +151,29 @@ h2 small, h3 small { font-weight: 400; color: var(--sub); margin-left: 10px; fon
   .editor__body { flex-direction: column; align-items: stretch; }
   .editor__side { width: 100%; }
 }
+
+/* ── 置き場所の帯（共有データ／この端末だけのデータ）・お知らせ・共有データの案内 ── */
+.sync--shared { background: rgba(255,255,255,.18); }
+.spacebar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 5px 14px; font-size: 12px;
+  position: sticky; top: 44px; z-index: 19; border-bottom: 2px solid;
+}
+.spacebar--shared { background: #e8f0fe; border-color: var(--accent); }
+.spacebar--local { background: #fff4c2; border-color: var(--warn-line); }
+.spacebar__label { color: var(--sub); }
+.spacebar__note { color: var(--sub); flex: 1; min-width: 200px; }
+.spacebar__warn { background: #fde2e1; color: #a50e0e; border-radius: 10px; padding: 0 8px; font-weight: 700; white-space: nowrap; }
+.spacebar .seg button { padding: 2px 12px; }
+.spacebar--local .seg button.is-on { background: #fff; border-color: var(--warn-line); color: #7a5200; }
+.notices { list-style: none; margin: 0 0 10px; padding: 0; }
+.notices__item {
+  display: flex; align-items: flex-start; gap: 10px; padding: 6px 10px; margin-bottom: 4px;
+  border: 1px solid var(--line); border-radius: 4px; background: #f1f6ff;
+}
+.notices__item span { flex: 1; }
+.notices__item--warn { background: #fffbe6; border-color: var(--warn-line); }
+.sharedphase p { margin: 6px 0; }
+.sharedphase ul { margin: 6px 0; padding-left: 18px; }
+.report { margin: 6px 0; }
+.report td, .report th { min-width: 110px; }
+.members td select { width: 100%; }
