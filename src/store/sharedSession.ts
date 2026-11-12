@@ -262,6 +262,8 @@ export class SharedSession {
     try {
       await claimCache(this.user.uid);
       if (this.dead(gen)) return;
+      // メールアドレスの無いアカウントは、名簿と照合できない（メンバー制では通さない）
+      if (!this.email) { this.emit({ phase: 'unregistered', role: 'none' }); return; }
       let access: Access | null = null;
       if (isOnline()) {
         try {
