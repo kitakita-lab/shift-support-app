@@ -114,6 +114,32 @@ add('A3', '入力した直後に再読み込みしても、最後の入力が消
   eq(await memo().inputValue(), '直前の入力', 'メモ');
 });
 
+add('A4', 'ブラウザの保存領域がいっぱいで「この端末だけのデータ」を保存できないときは、その旨を 1 回だけ知らせる', async ({ page }) => {
+  await setup(page);
+  const notices = () => page.locator('[data-testid="notices"] li').allInnerTexts();
+  const memo = () => page.locator('table.kv tr', { hasText: 'メモ' }).locator('input');
+  eq(await notices(), [], '保存できている間は、何も表示されないこと');
+  // 保存を失敗させる（容量超過の模擬）
+  await page.evaluate(() => {
+    const orig = Storage.prototype.setItem;
+    window.__restore = () => { Storage.prototype.setItem = orig; };
+    Storage.prototype.setItem = function (k, v) { if (k === 'kkl_workshop_v1') throw new DOMException('quota', 'QuotaExceededError'); return orig.call(this, k, v); };
+  });
+  await memo().fill('保存できない入力 1');
+  const shown = await until(notices, (n) => n.length > 0);
+  ok(shown.length === 1 && shown[0].includes('保存できませんでした') && shown[0].includes('バックアップ'), `表示: ${JSON.stringify(shown)}`);
+  await memo().fill('保存できない入力 2');
+  await sleep(300);
+  eq((await notices()).length, 1, '続けて失敗しても、表示は 1 件のまま');
+  // 保存できるようになれば、次の変更は保存される
+  await page.evaluate(() => window.__restore());
+  await memo().fill('保存できた入力');
+  await sleep(300);
+  await page.reload();
+  await openTarget(page);
+  eq(await memo().inputValue(), '保存できた入力', '再読み込み後のメモ');
+});
+
 // B. 数値入力
 add('B1', '0 が入っている欄をクリックして 120 と打つと 120 になる（クリック位置によらない）', async ({ page }) => {
   await setup(page);

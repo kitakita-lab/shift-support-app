@@ -809,6 +809,23 @@ add('A17', '名簿を変更できなかった理由は、表示されたまま�
   eq((await until(() => admin.get(`${T}/members/late@example.com`), (m) => !!m, 30000))?.role, 'member', 'つながっていれば追加できること');
 }, MEMBER_RULES);
 
+add('A18', '「この端末だけのデータ」の案件を開いたままログインすると、案件は閉じて一覧に戻り、「共有データから無くなりました」という誤った表示は出ない', async ({ device: mk }) => {
+  const C = await mk('C');
+  const c = await C.open();
+  await loadSample(c);                         // 未ログイン: 「この端末だけのデータ」にサンプルを入れる
+  const localRows = await projectRows(c);
+  await openProject(c, 'ikyu');
+  eq(await c.locator('.sheettabs').count(), 1, '案件を開いていること');
+  await signIn(c, 'a@example.com');            // ログインすると、表示が共有データに切り替わる
+  eq(await shownSpace(c), 'shared', '共有データを表示');
+  await sleep(1500);
+  eq(await c.locator('.sheettabs').count(), 0, '開いていた案件が閉じていること');
+  eq((await notices(c)).filter((t) => t.includes('無くなりました')), [], '誤った表示が出ていないこと');
+  eq(await projectRows(c), [], '共有データの一覧（空）が出ていること');
+  await space(c, 'local');
+  eq(await projectRows(c), localRows, '「この端末だけのデータ」は、そのまま残っていること');
+}, V3);
+
 add('M17', '移行をやり直した・完了させたあとは、古い試行からは 1 件も書けない（完了後のデータを移行前の内容で上書きしない。完了の印も外せない）', async ({ device: mk }) => {
   const A = await mk('A');
   const a = await A.open();

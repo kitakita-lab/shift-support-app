@@ -44,19 +44,26 @@ export default function App() {
   // 置き場所を切り替えたら、開いている案件を閉じる（別の入れ物の案件なので）
   const changeSpace = (s: typeof space) => { setOpenId(null); store.setSpace(s); };
   // 開いていた案件が無くなった（ほかの端末で削除された）ときは、一覧に戻して知らせる
-  const lastOpen = useRef<{ id: string; name: string; space: typeof space } | null>(null);
+  const lastOpen = useRef<{ id: string; name: string } | null>(null);
+  // 置き場所が変わった（ログイン・ログアウトによる自動の切り替えを含む）ら、開いていた案件を黙って閉じる
+  // （別の入れ物の案件なので。同じ ID の案件がもう一方にあっても、気付かないまま別の入れ物を編集しないようにする）
+  const shownSpace = useRef(space);
   useEffect(() => {
-    if (open) { lastOpen.current = { id: open.id, name: open.name, space }; return; }
+    if (shownSpace.current === space) return;
+    shownSpace.current = space;
+    lastOpen.current = null;
+    setOpenId(null);
+  }, [space]);
+  useEffect(() => {
+    if (open) { lastOpen.current = { id: open.id, name: open.name }; return; }
     if (!openId) { lastOpen.current = null; return; }
-    // 置き場所が変わった（ログイン・ログアウトによる自動の切り替えを含む）: 別の入れ物の案件なので、黙って閉じる
-    if (lastOpen.current && lastOpen.current.space !== space) { lastOpen.current = null; setOpenId(null); return; }
     if (!usable) return;                          // 共有データの確認中。戻ったときにまだあれば、そのまま開く
     if (lastOpen.current?.id === openId && onShared) {
       store.notify('info', `開いていた案件「${lastOpen.current.name || '名称未設定'}」は、共有データから無くなりました（ほかの端末で削除された可能性があります）。`);
     }
     lastOpen.current = null;
     setOpenId(null);
-  }, [open, openId, usable, onShared, space, store]);
+  }, [open, openId, usable, onShared, store]);
   useEffect(() => { if (tab === 'members' && !canManageMembers) setTab('projects'); }, [tab, canManageMembers]);
 
   const rows = useMemo(

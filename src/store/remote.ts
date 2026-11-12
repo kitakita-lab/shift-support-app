@@ -158,6 +158,7 @@ export const watchMeta = (onNext: (body: Body | null) => void, onError: (code: s
  * 共有データを新しく使い始める（旧形式から移さない場合）。初期値のパーツなどを入れ、「使える状態」の印を付ける。
  * 2 台が同時に始めても 1 回だけ行われる。既にあるものは上書きしない。
  */
+// （初期値は 14 件。上の「見てよい回数」の上限に対して、これ以上大きく増やす場合は、分けて書くこと）
 export async function initFresh(defaults: PlannedDoc[], source: string, actor: Actor): Promise<'created' | 'exists'> {
   return withTimeout(runTransaction(db(), async (tx) => {
     const meta = dref(META_COLL, META_DOC);
@@ -235,7 +236,10 @@ export function endMigration(attempt: number, fields: Body): Promise<void> {
  * やり直せば同じ場所に上書きされるだけなので、重複しない）。
  */
 export async function writeAllGuarded(attempt: number, docs: PlannedDoc[], onProgress?: (done: number, total: number) => void): Promise<void> {
-  const MAX_DOCS = 100, MAX_BYTES = 1_500_000;
+  // 1 回に書く件数は少なくする。メンバー制のルールは、書き込み 1 件ごとに名簿を見る（最大 2 回）。
+  // ルールが 1 回のまとめ書きで「ほかのドキュメントを見てよい回数」には上限（20 回）があり、
+  // 同じ名簿を何度見ても 1 回と数えられるかどうかは保証されていないので、最悪の場合でも収まる件数にしておく
+  const MAX_DOCS = 8, MAX_BYTES = 1_500_000;
   let i = 0;
   while (i < docs.length) {
     const chunk: PlannedDoc[] = [];
