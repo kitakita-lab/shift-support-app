@@ -177,3 +177,7 @@ h2 small, h3 small { font-weight: 400; color: var(--sub); margin-left: 10px; fon
 .report { margin: 6px 0; }
 .report td, .report th { min-width: 110px; }
 .members td select { width: 100%; }
+@media (max-width: 900px) {
+  /* 狭い画面では、帯を 1 行に収める（説明は省く。どちらを見ているかは、色と選択中のボタンで分かる） */
+  .spacebar__note, .spacebar__label { display: none; }
+}

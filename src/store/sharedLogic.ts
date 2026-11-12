@@ -166,7 +166,7 @@ export function planMigration(
     if (raw === null && (key === 'partTypes' || key === 'composites')) {
       // 旧形式に保存されていなかった場合は、アプリの初期値を入れる（V1・V2 も、無ければ初期値で動いていた）
       items = defaults[key] as unknown as Body[];
-      notes.push(`${MASTER_LABEL[key]}: 旧形式のデータが無かったため、初期値を入れました。`);
+      notes.push(`${MASTER_LABEL[key]}: 以前の形式には保存されていなかったため、初期値を入れました。`);
     }
     if (raw !== null) backups.push({ coll: BACKUP_COLL, id: `${backupId}__data__${key}`, body: { kind: 'data', key, doc: raw } });
     const seen = new Set<string>();

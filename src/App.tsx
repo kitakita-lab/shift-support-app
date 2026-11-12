@@ -69,9 +69,9 @@ export default function App() {
   };
   const cols: Col<Row>[] = [
     { key: 'name', title: '案件名', width: 200, get: (r) => r.p.name || '（名称未設定）' },
-    { key: 'venue', title: '会場', width: 160, get: (r) => venueName(r.p.venueId) },
-    { key: 'period', title: '期間', width: 210, get: (r) => period(r.p) },
-    { key: 'contents', title: 'コンテンツ', width: 180, get: (r) => r.est.contentLines.map((l) => l.name).join('、') },
+    { key: 'venue', title: '会場', width: 140, get: (r) => venueName(r.p.venueId) },
+    { key: 'period', title: '期間', width: 200, get: (r) => period(r.p) },
+    { key: 'contents', title: 'コンテンツ', width: 150, get: (r) => r.est.contentLines.map((l) => l.name).join('、') },
     { key: 'status', title: '状態', width: 70, get: (r) => r.p.status },
     { key: 'rev', title: '売上', width: 100, align: 'right', get: (r) => yen(r.est.revenue) },
     { key: 'cost', title: '費用', width: 100, align: 'right', get: (r) => yen(r.est.totalCost) },
@@ -194,7 +194,7 @@ export default function App() {
                   <button className="cellbtn cellbtn--wide" onClick={() => duplicate(r.p)}>複製</button>
                   {signedIn && (
                     <button className="cellbtn cellbtn--wide" data-testid="copy-project" title={onShared ? 'この案件の写しを「この端末だけのデータ」に作ります' : 'この案件の写しを共有データに作ります'} onClick={() => copyTo(r.p)}>
-                      {onShared ? 'この端末にコピー' : '共有へコピー'}
+                      {onShared ? '端末へコピー' : '共有へコピー'}
                     </button>
                   )}
                   <button className="cellbtn" title="削除" onClick={() => remove(r.p)}>×</button>

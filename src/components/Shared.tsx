@@ -23,7 +23,7 @@ export function SpaceBar({ store, signedIn, configured }: { store: AppStore; sig
       )}
       <span className="spacebar__note">
         {space === 'shared'
-          ? 'チームで共有しているデータです。変更はメンバー全員に反映されます。'
+          ? shared.phase === 'ready' ? 'チームで共有しているデータです。変更はメンバー全員に反映されます。' : '共有データは、まだ表示できません（下の案内をご覧ください）。'
           : signedIn
             ? 'このブラウザの中だけに保存されます。共有データには反映されません（サンプルや下書きはこちら）。'
             : configured
@@ -57,7 +57,7 @@ export function ReportTable({ report }: { report: Pick<MigrationReport, 'rows' |
   return (
     <>
       <table className="grid report" data-testid="migration-report" data-ok={report.ok ? '1' : '0'}>
-        <thead><tr><th>種類</th><th>移行元</th><th>移行先（一致した件数）</th><th>照合</th></tr></thead>
+        <thead><tr><th>種類</th><th>移した件数</th><th>移行先で内容が一致した件数</th><th>照合</th></tr></thead>
         <tbody>
           {report.rows.map((r) => (
             <tr key={r.label}>

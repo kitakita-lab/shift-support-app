@@ -625,7 +625,7 @@ add('D17', '開いているだけ（編集していない）の案件が、ほ�
   eq(names((await server('v3')).projects), [], 'サーバーの案件');
 }, V3);
 
-add('D18', '「共有へコピー」「この端末にコピー」: 案件が使う会場・スタッフなども一緒に入り、既にあるものは上書きしない。コピー元は変わらない', async ({ device: mk }) => {
+add('D18', '「共有へコピー」「端末へコピー」: 案件が使う会場・スタッフなども一緒に入り、既にあるものは上書きしない。コピー元は変わらない', async ({ device: mk }) => {
   const A = await mk('A');
   const a = await A.open();
   await signIn(a, 'a@example.com');
