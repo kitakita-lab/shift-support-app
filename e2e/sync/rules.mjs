@@ -4,7 +4,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { deleteApp, initializeApp } from 'firebase/app';
-import { GoogleAuthProvider, connectAuthEmulator, getAuth, signInAnonymously, signInWithCredential, signOut } from 'firebase/auth';
+import {
+  GoogleAuthProvider, connectAuthEmulator, createUserWithEmailAndPassword, getAuth, signInAnonymously, signInWithCredential,
+  signInWithEmailAndPassword, signOut,
+} from 'firebase/auth';
 import {
   collection, connectFirestoreEmulator, deleteDoc, doc, getDocFromServer, getDocsFromServer, getFirestore, setDoc, updateDoc,
 } from 'firebase/firestore';
@@ -30,6 +33,26 @@ async function client(email, { verified = true } = {}) {
   return c;
 }
 
+/**
+ * Google 以外の方法（メールアドレスとパスワード）で作ったアカウントでログインした接続。メールは確認済みにする。
+ * 戻り値の claims は、ログイン情報に入っている内容（テストの前提の確認用）。
+ */
+async function passwordClient(email) {
+  const c = await client(null);
+  const password = 'password-for-rules-test';
+  let cred;
+  try { cred = await createUserWithEmailAndPassword(c.auth, email, password); }
+  catch (e) { if (e.code !== 'auth/email-already-in-use') throw e; cred = await signInWithEmailAndPassword(c.auth, email, password); }
+  const r = await fetch(`http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/projects/${PROJECT}/accounts:update`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer owner' },
+    body: JSON.stringify({ localId: cred.user.uid, emailVerified: true }),
+  });
+  if (!r.ok) throw new Error(`メールを確認済みにできませんでした: ${r.status} ${await r.text()}`);
+  const token = await cred.user.getIdTokenResult(true);
+  c.claims = { verified: token.claims.email_verified === true, provider: token.signInProvider };
+  return c;
+}
+
 const results = [];
 let group = '';
 const g = (title) => { group = title; };
@@ -52,6 +75,7 @@ const seedRoster = async () => {
   await admin.set(`${T}/members/member@example.com`, { role: 'member' });
   await admin.set(`${T}/members/unverified@example.com`, { role: 'member' });
   await admin.set(`${T}/members/leaving@example.com`, { role: 'member' });
+  await admin.set(`${T}/members/password-user@example.com`, { role: 'member' });
   await admin.set('teams/other-team/members/other-owner@example.com', { role: 'owner' });
 };
 await seedRoster();
@@ -148,6 +172,17 @@ await expect('名簿: 決められた項目以外を書く', '拒否', write(own
 await expect('名簿: 大文字まじりのメールで登録する', '拒否', write(owner, `${T}/members/Mixed.Case@Example.com`, { role: 'member' }));
 await expect('形式の情報・バックアップ: 作る・更新する', 'できる', async () => { for (const c of [COLLS.meta, COLLS.backups]) { await write(owner, `${T}/${c}/by-owner`)(); await update(owner, `${T}/${c}/by-owner`)(); } });
 await expect('形式の情報: 消す', '拒否', remove(owner, `${T}/${COLLS.meta}/seed`));
+// 「移行済み・使える状態」の印（status: 'done'）は、付いたあとは外せない
+const state = `${T}/${COLLS.meta}/state`;
+await admin.set(state, { formatVersion: 1, status: 'running', attempt: 1 });
+await expect('形式の情報: 移行中（running）の間は、進み具合を更新できる', 'できる', update(owner, state, { attempt: 2 }));
+await expect('形式の情報: 失敗（failed）を記録できる', 'できる', update(owner, state, { status: 'failed' }));
+await expect('形式の情報: 失敗のあと、やり直して完了（done）にできる', 'できる', async () => { await update(owner, state, { status: 'running', attempt: 3 })(); await update(owner, state, { status: 'done' })(); });
+await expect('形式の情報: 完了（done）の印を、失敗（failed）に書き換える', '拒否', update(owner, state, { status: 'failed' }));
+await expect('形式の情報: 完了の印を、移行中（running）に戻す', '拒否', update(owner, state, { status: 'running' }));
+await expect('形式の情報: 完了の印を、丸ごと置き換えて外す', '拒否', write(owner, state, { formatVersion: 1 }));
+await expect('形式の情報: 完了のまま、ほかの項目を更新する', 'できる', update(owner, state, { note: '完了後の記録' }));
+await expect('形式の情報: メンバーは、完了の印を書き換えられない', '拒否', update(member, state, { status: 'failed' }));
 await expect('バックアップ: 消す', '拒否', remove(owner, `${T}/${COLLS.backups}/seed`));
 for (const c of COLLS.legacy) await expect(`${c}（V1・V2 の形式）: 書き換える`, '拒否', write(owner, `${T}/${c}/seed`, { name: '書き換え' }));
 await expect('新アプリのデータ: 読み書き', 'できる', async () => { await write(owner, `${T}/wsProjects/by-owner`)(); await read(owner, `${T}/wsProjects/by-owner`)(); await remove(owner, `${T}/wsProjects/by-owner`)(); });
@@ -173,6 +208,15 @@ const unverified = await client('unverified@example.com', { verified: false }); 
 await expect('名簿にあるがメール未確認: データを読む', '拒否', read(unverified, `${T}/wsProjects/seed`));
 await expect('名簿にあるがメール未確認: データを書く', '拒否', write(unverified, `${T}/wsProjects/by-unverified`));
 await expect('名簿にあるがメール未確認: 自分の登録状況を確認する', '拒否', read(unverified, `${T}/members/unverified@example.com`));
+// このアプリのログイン方法は Google だけ。ほかの方法で作られたアカウントは、メールが確認済みで名簿にあっても通さない
+const byPassword = await passwordClient('password-user@example.com');
+results.push({
+  group, label: '（前提）メールとパスワードで作ったアカウントが、メール確認済みになっている', want: '確認済み・password',
+  got: `${byPassword.claims.verified ? '確認済み' : '未確認'}・${byPassword.claims.provider}`, ok: byPassword.claims.verified && byPassword.claims.provider === 'password',
+});
+await expect('Google 以外の方法でログイン（メール確認済み・名簿にある）: データを読む', '拒否', read(byPassword, `${T}/wsProjects/seed`));
+await expect('Google 以外の方法でログイン（メール確認済み・名簿にある）: データを書く', '拒否', write(byPassword, `${T}/wsProjects/by-password`));
+await expect('Google 以外の方法でログイン（メール確認済み・名簿にある）: 自分の登録状況を確認する', '拒否', read(byPassword, `${T}/members/password-user@example.com`));
 const anon = await client('anonymous');
 await expect('匿名ログイン（メール無し）: データを読む', '拒否', read(anon, `${T}/wsProjects/seed`));
 await expect('匿名ログイン（メール無し）: データを書く', '拒否', write(anon, `${T}/wsProjects/by-anon`));
@@ -220,5 +264,5 @@ for (const r of results) {
 }
 const bad = results.filter((r) => !r.ok);
 console.log(`\nルール: ${RULES} ／ ${results.length} 項目中 ${results.length - bad.length} 合格／${bad.length} 不合格`);
-for (const c of [stranger, member, owner, otherOwner, mixed, mixedStranger, unverified, anon, nobody, dev, leaving]) await deleteApp(c.app).catch(() => {});
+for (const c of [stranger, member, owner, otherOwner, mixed, mixedStranger, unverified, byPassword, anon, nobody, dev, leaving]) await deleteApp(c.app).catch(() => {});
 process.exit(bad.length ? 1 : 0);

@@ -8,7 +8,7 @@ rules_version = '2';
 //
 // 考え方:
 //   - teams/{チーム}/members/{メールアドレス（小文字）} に登録された Google アカウントだけが、
-//     そのチームのデータを読み書きできる。メールが確認済みのアカウントに限る。
+//     そのチームのデータを読み書きできる。メールが確認済みで、Google でログインしたアカウントに限る。
 //   - 名簿を変えられるのは管理者（role: 'owner'）だけ。
 //   - アプリが使う場所だけを名前で許可する。一覧は src/store/collections.json と一致させる
 //     （e2e/sync/rules.mjs が照合する）。それ以外の場所、2 階層より深い場所はすべて拒否。
@@ -21,7 +21,9 @@ service cloud.firestore {
     function signedInWithVerifiedEmail() {
       return request.auth != null
         && request.auth.token.email is string
-        && request.auth.token.email_verified == true;
+        && request.auth.token.email_verified == true
+        // このアプリのログイン方法は Google だけ。ほかの方法（メールとパスワードなど）で作られたアカウントは通さない
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
     }
     function memberDoc(teamId) {
       return /databases/$(database)/documents/teams/$(teamId)/members/$(email());
@@ -60,7 +62,11 @@ service cloud.firestore {
       allow read: if isMember(teamId) && isLegacyData(coll);
       // 形式の情報・バックアップ: 読むのはメンバー、作成と更新は管理者。削除は誰にもできない
       allow read: if isMember(teamId) && isAdminData(coll);
-      allow create, update: if isOwner(teamId) && isAdminData(coll);
+      allow create: if isOwner(teamId) && isAdminData(coll);
+      // 形式の情報の「移行済み・使える状態」の印（status: 'done'）は、付いたあとは外せない
+      // （完了後に、未完了や失敗へ書き換えると、ほかの端末が「移行のやり直し」を案内してしまうため）
+      allow update: if isOwner(teamId) && isAdminData(coll)
+        && !(coll == 'wsMeta' && resource.data.get('status', '') == 'done' && request.resource.data.get('status', '') != 'done');
     }
 
     // 上記以外（別の場所、2 階層より深い場所）はすべて拒否

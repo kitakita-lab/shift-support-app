@@ -6,8 +6,8 @@
 //   - 削除 … deleteDoc
 // V1・V2 の形式の場所（workshopData・workshopProjects）は読むだけで、書き込む処理は作らない。
 import {
-  FirestoreError, collection, deleteDoc, deleteField, doc, getDocFromCache, getDocFromServer, getDocsFromServer,
-  onSnapshot, runTransaction, setDoc, updateDoc, waitForPendingWrites, writeBatch,
+  DocumentReference, FirestoreError, Transaction, collection, deleteDoc, deleteField, doc, getDocFromCache, getDocFromServer,
+  getDocsFromServer, onSnapshot, runTransaction, setDoc, updateDoc, waitForPendingWrites,
 } from 'firebase/firestore';
 import { getDb } from '../firebase';
 import {
@@ -136,12 +136,16 @@ export async function listMembers(): Promise<Member[]> {
     }))
     .sort((a, b) => a.addedAt - b.addedAt || a.email.localeCompare(b.email));
 }
-/** 名簿に登録する・役割を変える（email は小文字にそろえたもの） */
+/**
+ * 名簿に登録する・役割を変える（email は小文字にそろえたもの）。
+ * トランザクションで書く: つながっていなければその場で失敗し、送信待ちに残らない
+ * （「失敗」と表示したあとで、後日つながったときに適用される、ということが起きない）。
+ */
 export function putMember(email: string, role: 'owner' | 'member', addedBy: string, addedAt = Date.now()): Promise<void> {
-  return withTimeout(setDoc(dref(MEMBER_COLL, email), { role, addedAt, addedBy }), 15000);
+  return withTimeout(runTransaction(db(), async (tx) => { tx.set(dref(MEMBER_COLL, email), { role, addedAt, addedBy }); }), 20000);
 }
 export function deleteMember(email: string): Promise<void> {
-  return withTimeout(deleteDoc(dref(MEMBER_COLL, email)), 15000);
+  return withTimeout(runTransaction(db(), async (tx) => { tx.delete(dref(MEMBER_COLL, email)); }), 20000);
 }
 
 // ── 形式の情報（wsMeta/state） ────────────────────────────────
@@ -198,30 +202,52 @@ export async function beginMigration(newBackupId: string, actor: Actor): Promise
     return { backupId, attempt };
   }), 30000);
 }
-export function endMigration(fields: Body): Promise<void> {
-  return withTimeout(updateDoc(dref(META_COLL, META_DOC), forUpdate(fields)), 30000);
+/** この試行が、もう有効でない（ほかの端末がやり直した・完了した・印が無い）ときに投げる */
+export class MigrationSuperseded extends Error {
+  code = 'superseded';
+  constructor() { super('superseded'); }
+}
+/**
+ * 移行の書き込みは、すべて「いまも自分の試行が有効か」を確かめるトランザクションで行う。
+ *   - 形式の情報が running で、試行番号が自分のものであるときだけ書く。そうでなければ何も書かずに中止する。
+ *     → 古い試行（途中で止まった・時間切れになった）や、並行する別の端末の試行が、
+ *       完了後のデータを移行前の内容で上書きすることがない。
+ *   - トランザクションは、つながっていなければその場で失敗し、端末内の送信待ちに残らない
+ *     （後日つながったときに、古い書き込みが送られることがない）。
+ */
+function guarded<T>(attempt: number, body: (tx: Transaction, meta: DocumentReference) => T): Promise<T> {
+  return runTransaction(db(), async (tx) => {
+    const ref = dref(META_COLL, META_DOC);
+    const s = await tx.get(ref);
+    const m = s.exists() ? (s.data() as Body) : null;
+    if (!m || m.status !== 'running' || Number(m.attempt) !== attempt) throw new MigrationSuperseded();
+    return body(tx, ref);
+  });
+}
+/** 移行の結果を記録する（done＝移行済みの印／failed＝失敗の記録）。自分の試行が有効なときだけ */
+export function endMigration(attempt: number, fields: Body): Promise<void> {
+  return withTimeout(guarded(attempt, (tx, ref) => { tx.update(ref, forUpdate(fields)); }), 30000);
 }
 
 /**
- * まとめて書き込み、サーバーが受け付けるまで待つ（移行用）。
- * 置き場所（コレクション）ごとに区切り、さらに 1 回に送る量を抑えて分割する。
- * 途中の 1 回が拒否されたら、そこで止まって例外を投げる（それより前に送った分は書かれたまま残る。
+ * まとめて書き込む（移行用）。置き場所（コレクション）ごとに区切り、さらに 1 回に送る量を抑えて分割する。
+ * 途中の 1 回が拒否されたら、そこで止まって例外を投げる（それより前の分は書かれたまま残る。
  * やり直せば同じ場所に上書きされるだけなので、重複しない）。
  */
-export async function writeAllServer(docs: PlannedDoc[], onProgress?: (done: number, total: number) => void): Promise<void> {
+export async function writeAllGuarded(attempt: number, docs: PlannedDoc[], onProgress?: (done: number, total: number) => void): Promise<void> {
   const MAX_DOCS = 100, MAX_BYTES = 1_500_000;
   let i = 0;
   while (i < docs.length) {
-    const batch = writeBatch(db());
+    const chunk: PlannedDoc[] = [];
     const coll = docs[i].coll;
-    let n = 0, bytes = 0;
-    while (i < docs.length && n < MAX_DOCS && docs[i].coll === coll) {
+    let bytes = 0;
+    while (i < docs.length && chunk.length < MAX_DOCS && docs[i].coll === coll) {
       const size = JSON.stringify(docs[i].body).length * 2;
-      if (n > 0 && bytes + size > MAX_BYTES) break;
-      batch.set(dref(docs[i].coll, docs[i].id), docs[i].body);
-      bytes += size; n += 1; i += 1;
+      if (chunk.length > 0 && bytes + size > MAX_BYTES) break;
+      chunk.push(docs[i]);
+      bytes += size; i += 1;
     }
-    await withTimeout(batch.commit(), 45000);
+    await withTimeout(guarded(attempt, (tx) => { for (const d of chunk) tx.set(dref(d.coll, d.id), d.body); }), 45000);
     onProgress?.(i, docs.length);
   }
 }

@@ -44,17 +44,19 @@ export default function App() {
   // 置き場所を切り替えたら、開いている案件を閉じる（別の入れ物の案件なので）
   const changeSpace = (s: typeof space) => { setOpenId(null); store.setSpace(s); };
   // 開いていた案件が無くなった（ほかの端末で削除された）ときは、一覧に戻して知らせる
-  const lastOpen = useRef<{ id: string; name: string } | null>(null);
+  const lastOpen = useRef<{ id: string; name: string; space: typeof space } | null>(null);
   useEffect(() => {
-    if (open) { lastOpen.current = { id: open.id, name: open.name }; return; }
+    if (open) { lastOpen.current = { id: open.id, name: open.name, space }; return; }
     if (!openId) { lastOpen.current = null; return; }
+    // 置き場所が変わった（ログイン・ログアウトによる自動の切り替えを含む）: 別の入れ物の案件なので、黙って閉じる
+    if (lastOpen.current && lastOpen.current.space !== space) { lastOpen.current = null; setOpenId(null); return; }
     if (!usable) return;                          // 共有データの確認中。戻ったときにまだあれば、そのまま開く
     if (lastOpen.current?.id === openId && onShared) {
       store.notify('info', `開いていた案件「${lastOpen.current.name || '名称未設定'}」は、共有データから無くなりました（ほかの端末で削除された可能性があります）。`);
     }
     lastOpen.current = null;
     setOpenId(null);
-  }, [open, openId, usable, onShared, store]);
+  }, [open, openId, usable, onShared, space, store]);
   useEffect(() => { if (tab === 'members' && !canManageMembers) setTab('projects'); }, [tab, canManageMembers]);
 
   const rows = useMemo(
@@ -124,6 +126,8 @@ export default function App() {
     const to = onShared ? 'local' : 'shared';
     const dest = to === 'shared' ? '共有データ' : 'この端末だけのデータ';
     if (to === 'shared' && shared.phase !== 'ready') { alert('共有データを使える状態になっていません。画面上部の帯で「共有データ」を選び、状態を確認してください。'); return; }
+    // 共有側の最新の内容を受け取れていない間は、コピーしない（「共有側に無い」と判断したものを、上書きしてしまうため）
+    if (to === 'shared' && (!shared.online || shared.fromCache)) { alert('共有データの最新の内容を確認できていないため、いまはコピーできません。\n接続を確認して、少し待ってから、もう一度お試しください。'); return; }
     if (!window.confirm(`案件「${p.name || '名称未設定'}」を、${dest}へコピーします。\n案件が使っている会場・コンテンツ・スタッフ・パーツのうち、コピー先に無いものも一緒に追加します（既にあるものは上書きしません）。\n\nよろしいですか？`)) return;
     store.copyProject(p.id, to);
   };

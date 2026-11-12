@@ -2,7 +2,7 @@ import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, Auth, connectAuthEmulator, signInWithCredential } from 'firebase/auth';
 import {
   Firestore, clearIndexedDbPersistence, connectFirestoreEmulator, getFirestore, initializeFirestore,
-  persistentLocalCache, persistentMultipleTabManager, terminate,
+  memoryLocalCache, persistentLocalCache, persistentMultipleTabManager, terminate,
 } from 'firebase/firestore';
 
 // 必須 env が未設定の場合（Vercel 等で未定義）は初期化をスキップする
@@ -46,11 +46,11 @@ export const isEmulator =
 // ── Firestore ───────────────────────────────────────────────
 // 共有データは Firestore を正とする（端末側に別のコピーは持たない）。
 // 端末内キャッシュを有効にしておくと、圏外で行った変更は送信待ちとして残り、画面を閉じても次に開いたときに送られる。
-function createDb(app: FirebaseApp): Firestore {
+function createDb(app: FirebaseApp, memoryOnly = false): Firestore {
   let d: Firestore;
   try {
     d = initializeFirestore(app, {
-      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+      localCache: memoryOnly ? memoryLocalCache() : persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
       ignoreUndefinedProperties: true,
     });
   } catch {
@@ -64,17 +64,41 @@ function createDb(app: FirebaseApp): Firestore {
 let _db: Firestore | null = _app ? createDb(_app) : null;
 export function getDb(): Firestore | null { return _db; }
 
+// ── 接続の作り直し ─────────────────────────────────────────────
+// 端末内キャッシュ（IndexedDB）は、同じブラウザで開いている画面（タブ）すべてが共有している。
+// 1 つの画面がキャッシュを消すと、ほかの画面の接続は使えなくなる（読み書きが返ってこなくなる）。
+// 消し終えたらほかの画面へ知らせ、知らされた画面は読み込み直す（useAppData.ts）。
+const TAB = Math.random().toString(36).slice(2);
+const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('kkl-firestore-v1') : null;
+const resetListeners = new Set<() => void>();
+/** ほかの画面がキャッシュを消した（＝この画面の接続は使えなくなった）ときに呼ばれる */
+export function onDbResetElsewhere(cb: () => void): () => void {
+  resetListeners.add(cb);
+  return () => { resetListeners.delete(cb); };
+}
+channel?.addEventListener('message', (ev: MessageEvent) => {
+  const m = ev.data as { type?: string; from?: string } | null;
+  if (m?.type === 'reset' && m.from !== TAB) for (const cb of [...resetListeners]) cb();
+});
+/** 終わったら true。失敗、または一定時間で終わらなければ false（ほかの画面の都合で、返ってこないことがあるため） */
+const done = (p: Promise<unknown>, ms: number): Promise<boolean> =>
+  Promise.race([p.then(() => true, () => false), new Promise<boolean>((r) => setTimeout(() => r(false), ms))]);
+
 /**
- * 端末内キャッシュを消して、Firestore への接続を作り直す。
- * ログアウト・アカウントの切り替え時に呼ぶ（前のアカウントで読んだ共有データを端末に残さない。
- * 未送信の変更も破棄されるので、呼ぶ前に利用者へ確認すること）。
+ * 端末内キャッシュ（閲覧用の控えと、送信待ちの書き込み）を消して、Firestore への接続を作り直す。
+ * ログアウト・アカウントの切り替え・名簿から外されたときに呼ぶ。
+ * 送信待ちの書き込みも消える（送信前だった変更は、控え（outbox）に残っている）。
+ * 消せたら true。消せなかった場合は false を返し、この画面は端末内キャッシュを使わずに（メモリ上だけで）動かす
+ * （消せなかったキャッシュに残っている、前のアカウントの送信待ちに触れないため）。
  */
-export async function resetDb(): Promise<void> {
-  if (!_app || !_db) return;
+export async function resetDb(): Promise<boolean> {
+  if (!_app || !_db) return true;
   const old = _db;
-  try { await terminate(old); } catch { /* 既に終了している */ }
-  try { await clearIndexedDbPersistence(old); } catch { /* 別のタブが開いている等。消せなくても、未登録のアカウントには読ませない（useSharedData） */ }
-  _db = createDb(_app);
+  await done(terminate(old), 5000);
+  const cleared = await done(clearIndexedDbPersistence(old), 8000);
+  _db = createDb(_app, !cleared);
+  if (cleared) { try { channel?.postMessage({ type: 'reset', from: TAB }); } catch { /* 知らせられなくても続ける */ } }
+  return cleared;
 }
 
 if (isEmulator && auth) {

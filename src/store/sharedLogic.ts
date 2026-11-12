@@ -54,6 +54,11 @@ export interface Overlay {
   created?: Body;
   /** 編集を始めた時点のサーバーの内容（編集中にサーバー側で消された場合に、画面に残すため） */
   base?: Body;
+  /**
+   * 前回（この画面を開く前）から引き取った、送信前だった変更。共有側の状態を確かめるまでは送らないが、
+   * 画面には重ねて表示する（未送信として数える）。確かめた結果、送る／何もしない／控えに回す、のどれかになる。
+   */
+  adopted?: Body | null;
   /** 送信済みで、届いた内容にまだ反映されていない変更（送った順） */
   issued: { rev: string; patch: Body }[];
   /** まだ送っていない変更（入力がいったん止まるのを待っている） */
@@ -70,6 +75,7 @@ export function applyOverlay(server: Body | undefined, o: Overlay | undefined): 
   const base = server ?? o.created ?? o.base;
   if (!base) return null;
   let out: Body = base;
+  if (o.adopted) out = { ...out, ...o.adopted };                 // 前回の残りは、今回の変更より古いので先に重ねる
   for (const i of o.issued) out = { ...out, ...i.patch };
   if (o.pending) out = { ...out, ...o.pending };
   return out;
@@ -84,7 +90,7 @@ export function settleOverlay(o: Overlay, server: ServerDoc | undefined): Overla
     if (at >= 0) next = { ...next, issued: o.issued.slice(at + 1) };
     if (next.created) next = { ...next, created: undefined };  // サーバー（または送信待ち）に載った
   }
-  if (!next.created && next.issued.length === 0 && !next.pending) return null;
+  if (!next.created && next.issued.length === 0 && !next.pending && !next.adopted) return null;
   return next;
 }
 
@@ -142,6 +148,11 @@ export const MASTER_LABEL: Record<MasterKey, string> = {
   staff: 'スタッフ', venues: '会場', contents: 'コンテンツ', partTypes: 'パーツ', composites: '組み合わせ配置',
 };
 
+/** Firestore のドキュメント名に使える ID か（空・「/」を含む・「.」「..」・「__…__」・長すぎるものは使えない） */
+export function usableDocId(id: string): boolean {
+  return id.length > 0 && id.length <= 500 && !id.includes('/') && id !== '.' && id !== '..' && !/^__.*__$/.test(id);
+}
+
 export function legacyHasData(l: LegacyData): boolean {
   return l.projects.length > 0 || MASTER_KEYS.some((k) => l.masters[k] !== null);
 }
@@ -173,9 +184,12 @@ export function planMigration(
     let n = 0;
     items.forEach((item, i) => {
       let id = typeof item?.id === 'string' ? item.id : '';
-      if (!id) {
+      if (!usableDocId(id)) {
+        const was = id;
         id = `legacy-${key}-${i}`;
-        notes.push(`${MASTER_LABEL[key]}: ${i + 1} 件目に ID が無かったため、「${id}」を付けました。`);
+        notes.push(was
+          ? `${MASTER_LABEL[key]}: ${i + 1} 件目の ID「${was}」は保存先の名前に使えないため、「${id}」に付け替えました。`
+          : `${MASTER_LABEL[key]}: ${i + 1} 件目に ID が無かったため、「${id}」を付けました。`);
       }
       if (seen.has(id)) {
         notes.push(`${MASTER_LABEL[key]}: ID「${id}」が重複していたため、2 つ目以降は移行していません。`);

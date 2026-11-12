@@ -1,8 +1,8 @@
 // 共有データまわりの画面部品: 置き場所の帯／お知らせ／共有データを使えないときの案内（移行を含む）／メンバー名簿。
 import { useCallback, useEffect, useState } from 'react';
 import { AppStore, Notice, Space } from '../store/useAppData';
-import { Member, SharedSession, SharedView } from '../store/sharedSession';
-import { MigrationReport } from '../store/sharedLogic';
+import { Member, SharedSession, SharedView, effectiveOwners } from '../store/sharedSession';
+import { MigrationReport, isValidMemberEmail, normalizeEmail } from '../store/sharedLogic';
 
 // ── 置き場所の帯（いまどちらのデータを見ているかを、常に表示する） ──────────────
 export function SpaceBar({ store, signedIn, configured }: { store: AppStore; signedIn: boolean; configured: boolean }) {
@@ -205,23 +205,28 @@ export function MembersPanel({ shared, session }: { shared: SharedView; session:
   const [role, setRole] = useState<'owner' | 'member'>('member');
   const [busy, setBusy] = useState(false);
 
-  const reload = useCallback(async () => {
-    if (!session) return;
+  /** 名簿を読み直す。読めなかったら、その理由を返す（読めたら空文字） */
+  const reload = useCallback(async (): Promise<string> => {
+    if (!session) return '';
     try {
       setMembers(await session.listMembers());
-      setError('');
+      return '';
     } catch {
-      setError('名簿を読み込めませんでした（接続、または権限を確認してください）。');
+      return '名簿を読み込めませんでした（接続、または権限を確認してください）。';
     }
   }, [session]);
-  useEffect(() => { void reload(); }, [reload, shared.role]);
+  useEffect(() => {
+    let alive = true;
+    void reload().then((msg) => { if (alive) setError(msg); });
+    return () => { alive = false; };
+  }, [reload, shared.role]);
 
   const run = async (fn: () => Promise<string>) => {
     setBusy(true);
     const msg = await fn();
+    const loadError = await reload();
     setBusy(false);
-    setError(msg);
-    await reload();
+    setError(msg || loadError);                    // 変更できなかった理由を、読み直しで消さない
     return msg === '';
   };
   const add = async () => {
@@ -229,7 +234,15 @@ export function MembersPanel({ shared, session }: { shared: SharedView; session:
     if (await run(() => session.saveMember(email, role, members))) { setEmail(''); setRole('member'); }
   };
   const list = members ?? [];
-  const owners = list.filter((m) => m.role === 'owner').length;
+  // 実際に管理者として通る登録の数（キーが「小文字のメールアドレス」でない登録は、ルールの照合に一致しない）
+  const owners = effectiveOwners(list).length;
+  const isIneffective = (m: Member) => m.email !== normalizeEmail(m.email) || !isValidMemberEmail(m.email);
+  const changeRole = (m: Member, next: 'owner' | 'member') => {
+    if (next === m.role) return;
+    if (m.email === shared.email && m.role === 'owner'
+      && !window.confirm('自分自身を「管理者」から「メンバー」に変更します。\n変更後は、名簿の変更と、共有データの初期設定・移行ができなくなります（戻すには、ほかの管理者に変更してもらう必要があります）。\n\nよろしいですか？')) return;
+    void run(() => session!.saveMember(m.email, next, list));
+  };
 
   return (
     <section>
@@ -251,11 +264,15 @@ export function MembersPanel({ shared, session }: { shared: SharedView; session:
           <tbody>
             {list.map((m) => (
               <tr key={m.email} data-email={m.email}>
-                <td className="is-ro"><div className="grid__ro">{m.email}{m.email === shared.email ? '（自分）' : ''}</div></td>
+                <td className={isIneffective(m) ? 'is-warn' : 'is-ro'}>
+                  <div className="grid__ro" title={isIneffective(m) ? 'メールアドレス（小文字）の形になっていないため、この登録は照合に使われません。いったん外して、登録し直してください。' : undefined}>
+                    {m.email}{m.email === shared.email ? '（自分）' : ''}{isIneffective(m) ? '（⚠ 無効な登録）' : ''}
+                  </div>
+                </td>
                 <td>
                   <select
-                    value={m.role} disabled={busy}
-                    onChange={(e) => void run(() => session!.saveMember(m.email, e.target.value === 'owner' ? 'owner' : 'member', list))}
+                    value={m.role} disabled={busy || isIneffective(m)}
+                    onChange={(e) => changeRole(m, e.target.value === 'owner' ? 'owner' : 'member')}
                   >
                     <option value="member">メンバー</option>
                     <option value="owner">管理者</option>

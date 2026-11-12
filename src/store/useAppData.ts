@@ -9,18 +9,19 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useAuth } from '../contexts/AuthContext';
 import { emptyData } from '../domain/seed';
 import { genId } from '../domain/util';
-import { isFirebaseConfigured } from '../firebase';
+import { isFirebaseConfigured, onDbResetElsewhere } from '../firebase';
 import { AppData, Project } from '../types';
 import { loadLocal, saveLocal } from './localData';
+import { Notice, capNotices } from './notices';
 import { MasterKey } from './paths';
 import { OFF_VIEW, SessionHooks, SharedSession, SharedView, claimCache, discardUnsent } from './sharedSession';
 import { ProjectCopy, planProjectCopy } from './sharedLogic';
 
 export { hydrateData } from './localData';
 export type { MasterKey } from './paths';
+export type { Notice } from './notices';
 
 export type Space = 'local' | 'shared';
-export interface Notice { id: string; kind: 'warn' | 'info'; text: string; at: number }
 
 const SPACE_KEY = 'kkl_space_v1';
 const NOTICE_KEY = 'kkl_notices_v1';
@@ -103,12 +104,24 @@ export function useAppData(): AppStore {
 
   // ── この端末だけのデータ: 変更のたびにすぐ保存する ──
   // まとめて遅らせると、入力の直後に再読み込み・タブを閉じた場合（スマホでの画面切り替えを含む）に最後の入力が消える
-  useEffect(() => { saveLocal(local); }, [local]);
+  const notify = useCallback((kind: Notice['kind'], text: string) => {
+    setNotices((n) => capNotices([...n, { id: genId(), kind, text, at: Date.now() }]));
+  }, []);
+  const saveFailed = useRef(false);
+  useEffect(() => {
+    const ok = saveLocal(local);
+    // 保存できなかった（ブラウザの保存領域がいっぱい）ことを、黙ったままにしない。続けて何度も知らせない
+    if (!ok && !saveFailed.current) {
+      notify('warn', 'このブラウザの保存領域がいっぱいのため、「この端末だけのデータ」を保存できませんでした。このまま閉じると、最後の変更が失われます。「データ」タブでバックアップを保存してから、不要な案件を削除してください。');
+    }
+    saveFailed.current = !ok;
+  }, [local, notify]);
   useEffect(() => { saveJson(NOTICE_KEY, notices); }, [notices]);
 
-  const notify = useCallback((kind: Notice['kind'], text: string) => {
-    setNotices((n) => [...n, { id: genId(), kind, text, at: Date.now() }].slice(-12));
-  }, []);
+  // ほかの画面（タブ）が端末内の共有データの控えを消した（ログアウト・アカウントの切り替えなど）:
+  // この画面の Firestore への接続は使えなくなっているので、読み込み直す（送信前の変更は、控えに残っている）
+  useEffect(() => onDbResetElsewhere(() => { window.location.reload(); }), []);
+
   const dismissNotice = useCallback((id: string) => setNotices((n) => n.filter((x) => x.id !== id)), []);
   const setSpace = useCallback((s: Space) => { setPref(s); saveJson(SPACE_KEY, s); }, []);
 
@@ -205,8 +218,15 @@ export function useAppData(): AppStore {
     if (to === 'shared' && (!session || shared.phase !== 'ready')) return false;
     const copy = planProjectCopy(from, id, target, genId());
     if (!copy) return false;
-    if (to === 'shared') session!.importCopy(copy);
-    else setLocal((d) => applyCopy(d, copy));
+    if (to === 'shared') {
+      // 共有側の最新の内容を受け取れていないときは、コピーしない（「共有側に無い」と判断したものを、上書きしてしまうため）
+      if (!session!.importCopy(copy)) {
+        notify('warn', '共有データの最新の内容を確認できていないため、コピーしませんでした。接続を確認して、右上の表示が「保存済み」になってから、もう一度お試しください。');
+        return false;
+      }
+    } else {
+      setLocal((d) => applyCopy(d, copy));
+    }
     const name = copy.project.name || '名称未設定';
     const added = (Object.values(copy.add) as { id: string }[][]).reduce((n, xs) => n + xs.length, 0);
     notify('info', [
