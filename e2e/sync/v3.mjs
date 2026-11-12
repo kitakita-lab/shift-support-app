@@ -784,6 +784,31 @@ async function kill(page) {
 }
 const outbox = (page) => page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kkl_outbox')).length);
 
+add('A17', '名簿を変更できなかった理由は、表示されたまま残る。つながっていない間の変更はその場で失敗し、つながったあとで勝手に適用されない', async ({ device: mk }) => {
+  await roster({ 'owner@example.com': 'owner' });
+  const O = await mk('O');
+  const o = await O.open();
+  await signIn(o, 'owner@example.com');
+  await openMembers(o);
+  // 1. 変更できなかった理由が、直後の名簿の読み直しで消えないこと
+  await o.locator('[data-testid="members"] tr[data-email="owner@example.com"] button').click();
+  ok((await until(() => membersError(o), (t) => t.includes('1 人もいなくなる'))).includes('1 人もいなくなる'), '最後の管理者は外せないこと');
+  await sleep(2500);                           // 名簿の読み直しが終わるのを待つ
+  ok((await membersError(o)).includes('1 人もいなくなる'), `読み直しのあとも理由が表示されていること: 「${await membersError(o)}」`);
+  // 2. つながっていない間の変更は、その場で失敗する
+  await O.block(true);
+  await addMember(o, 'late@example.com');
+  ok((await until(() => membersError(o), (t) => t.includes('名簿を変更できませんでした'), 60000)).includes('名簿を変更できませんでした'), `つながっていない間の変更の表示: 「${await membersError(o)}」`);
+  eq(await admin.get(`${T}/members/late@example.com`), null, '名簿に追加されていないこと');
+  // 3. つながったあとで、失敗した変更が勝手に適用されないこと
+  await O.block(false);
+  await sleep(8000);
+  eq(await admin.get(`${T}/members/late@example.com`), null, 'つながったあとも、名簿に追加されていないこと');
+  // つながっていれば、同じ操作で追加できる
+  await addMember(o, 'late@example.com');
+  eq((await until(() => admin.get(`${T}/members/late@example.com`), (m) => !!m, 30000))?.role, 'member', 'つながっていれば追加できること');
+}, MEMBER_RULES);
+
 add('M17', '移行をやり直した・完了させたあとは、古い試行からは 1 件も書けない（完了後のデータを移行前の内容で上書きしない。完了の印も外せない）', async ({ device: mk }) => {
   const A = await mk('A');
   const a = await A.open();

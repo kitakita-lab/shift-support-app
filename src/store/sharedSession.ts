@@ -101,23 +101,32 @@ export interface SessionHooks {
 //   - 別のアカウントでログインした
 //   - ログアウトした。ただし、この画面がそのキャッシュを使っていたとき、または、ほかに開いている画面が無いとき
 //     （処理が遅れた別の画面が、入り直したあとの新しいキャッシュを消してしまわないようにする）
+//   どちらの場合も、共有データを 1 度も受け取っていないキャッシュ（登録されていないアカウントのもの）は消さない。
+//   消すものが無いうえ、消すたびにほかの画面が読み込み直されるため（2 つの画面が、交互に読み込み直しを続けてしまう）。
 // 消すと、ほかの画面の接続は使えなくなるので、消し終えたら知らせる（firebase.ts。知らされた画面は読み込み直す）。
 const CACHE_KEY = 'kkl_shared_cache_v2';
 const ACCESS_KEY = 'kkl_shared_access_v1';
 /** この画面が「このキャッシュを使っている」と認識している印（ログインのたびに変わる） */
 let myToken: string | null = null;
 let gate: Promise<void> = Promise.resolve();
-function readMark(): { uid: string; token: string } | null {
+/** uid＝誰のキャッシュか／token＝そのログインの印／used＝共有データを受け取り始めたか（＝消すべき中身があるか） */
+interface Mark { uid: string; token: string; used: boolean }
+function readMark(): Mark | null {
   try {
-    const m = JSON.parse(localStorage.getItem(CACHE_KEY) ?? 'null') as { uid?: string; token?: string } | null;
-    return m && typeof m.uid === 'string' && typeof m.token === 'string' ? { uid: m.uid, token: m.token } : null;
+    const m = JSON.parse(localStorage.getItem(CACHE_KEY) ?? 'null') as Partial<Mark> | null;
+    return m && typeof m.uid === 'string' && typeof m.token === 'string' ? { uid: m.uid, token: m.token, used: m.used !== false } : null;
   } catch { return null; }
 }
-function writeMark(m: { uid: string; token: string } | null): void {
+function writeMark(m: Mark | null): void {
   try {
     if (m) localStorage.setItem(CACHE_KEY, JSON.stringify(m));
     else localStorage.removeItem(CACHE_KEY);
   } catch { /* 何もしない */ }
+}
+/** 共有データを受け取り始める（＝端末内キャッシュに入り始める）ときに呼ぶ */
+function markCacheUsed(uid: string): void {
+  const cur = readMark();
+  if (cur && cur.uid === uid && !cur.used) writeMark({ ...cur, used: true });
 }
 function forgetAccess(): void { try { localStorage.removeItem(ACCESS_KEY); } catch { /* 何もしない */ } }
 
@@ -131,21 +140,25 @@ export function claimCache(uid: string | null): Promise<void> {
   gate = gate.then(() => oneAtATime(async () => {
     const cur = readMark();
     if (uid === null) {
-      // 消せなかったときは、印を残す（次に開いたときに、もう一度消す）
-      if (cur && (cur.token === myToken || !(await otherTabsOpen())) && (await resetDb())) {
-        writeMark(null);
-        forgetAccess();
+      if (cur && (cur.token === myToken || !(await otherTabsOpen()))) {
+        // 共有データを 1 度も受け取っていないキャッシュ（登録されていないアカウントなど）には、消すものが無い。
+        // 消さなければ、ほかの画面を読み込み直させることもない。
+        // 消せなかったときは、印を残す（次に開いたときに、もう一度消す）
+        if (!cur.used || (await resetDb())) {
+          writeMark(null);
+          forgetAccess();
+        }
       }
       myToken = null;
       return;
     }
     if (cur && cur.uid === uid) { myToken = cur.token; return; }           // 同じアカウントのキャッシュを使う
-    if (cur) {                                                             // 別のアカウントのキャッシュが残っている
+    if (cur) {                                                             // 別のアカウントの印が残っている
       forgetAccess();
-      if (!(await resetDb())) { myToken = null; return; }                  // 消せなかった: 印は前のアカウントのまま（次に開いたときに、もう一度消す）
+      if (cur.used && !(await resetDb())) { myToken = null; return; }      // 消せなかった: 印は前のアカウントのまま（次に開いたときに、もう一度消す）
     }
     myToken = genId();
-    writeMark({ uid, token: myToken });
+    writeMark({ uid, token: myToken, used: false });
   })).catch(() => { /* 消せなくても、未登録のアカウントには購読を始めない */ });
   return gate;
 }
@@ -461,6 +474,7 @@ export class SharedSession {
   private attach(): void {
     if (this.attached || this.stopped) return;
     this.attached = true;
+    markCacheUsed(this.user.uid);                    // ここから、共有データが端末内キャッシュに入る
     for (const { coll } of COLLS) {
       this.server[coll] = new Map();
       this.first[coll] = false;

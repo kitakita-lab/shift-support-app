@@ -615,6 +615,30 @@ describe('アカウントの登録・端末内キャッシュ', () => {
     expect(browser.store.has('kkl_shared_cache_v2')).toBe(false);
   });
 
+  it('登録されていないアカウントは、端末内キャッシュを使っていないので、消さない（ほかの画面を読み込み直させない）', async () => {
+    fake.access = { role: 'none', enforced: true };
+    const resets = fake.resets;
+    const t = await openTab();
+    await tick(1000);
+    expect(view(t).phase).toBe('unregistered');
+    expect(fake.resets).toBe(resets);
+    expect(browser.store.has('kkl_shared_cache_v2')).toBe(false);
+  });
+
+  it('名簿から外されて消したあと、読み込み直した画面は、もう一度消さない（2 つの画面が交互に読み込み直しを続けない）', async () => {
+    const a = await openTab();
+    await ready(a);
+    fake.access = { role: 'none', enforced: true };
+    const run = a.session.recheck();
+    await tick(1000);
+    await run;
+    const resets = fake.resets;                     // 共有データを受け取っていた画面が、1 回消した
+    const b = await openTab();                      // 知らせを受けて読み込み直した、もう 1 つの画面
+    await tick(1000);
+    expect(view(b).phase).toBe('unregistered');
+    expect(fake.resets).toBe(resets);
+  });
+
   it('別のアカウントに切り替えたら、前のアカウントのキャッシュを消す。消せなければ、印を前のアカウントのまま残す', async () => {
     const a = await openTab();
     await ready(a);
