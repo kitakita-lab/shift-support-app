@@ -245,6 +245,13 @@ describe('指紋と図の突き合わせ', () => {
       expect(fp(s) === (ref === base ? fp0 : fp(ref)), `「${name}」で指紋が変わらないこと`).toBe(true);
     }
   });
+  it('POP の表示名は、改行を入れても 1 行で描かれる。改行の有無だけでは、図も指紋も変わらない', () => {
+    // 独立レビューの指摘: 図は同じなのに指紋だけが変わり、不要に版が上がる組み合わせがあった
+    const one = itemOf('pt-pop-l', { label: '秋の新作 入荷' })(base), two = itemOf('pt-pop-l', { label: '秋の新作\n入荷' })(base);
+    expect(draw(two)).toBe(draw(one));
+    expect(fp(two)).toBe(fp(one));
+    expect(fp(one)).not.toBe(fp(base));
+  });
   it('2 つの変更を重ねても、「図が同じ ⇔ 指紋が同じ」が崩れない（全組み合わせ）', () => {
     const all = [...drawn, ...notDrawn];
     const seen = new Map<string, string>();                       // 指紋 → 図

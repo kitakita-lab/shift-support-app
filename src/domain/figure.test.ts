@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { Layout, PartType } from '../types';
 import {
-  FigureContext, SECTION_LABEL, changedSections, figureModel, figureState, figureTitle, fingerprint, issue, pdfFileName,
+  FigureContext, SECTION_LABEL, changedSections, figureModel, figureState, figureTitle, fingerprint, issue, issueAs, pdfFileName,
 } from './figure';
 import { addPart, bumpIfIssued, emptyLayout, markIssued, undoTo } from './layout';
 import { defaultPartTypes, sampleData } from './seed';
@@ -165,6 +165,33 @@ describe('版の状態（指紋で決める）', () => {
     expect(figureState(back, fpOf(back))).toEqual({ version: 1, status: 'issued', issuedAt: '2026-11-13' });
     const wider = parts.map((p) => (p.id === 'pt-chair' ? { ...p, widthCm: 60 } : p));
     expect(figureState(back, fpOf(back, {}, wider))).toMatchObject({ version: 2, status: 'changed' });
+  });
+});
+
+describe('出力の記録は、その時点の最新のレイアウトに足す（出力の処理中に届いた変更を消さない）', () => {
+  // 独立レビューの指摘: 出力の処理（画像化）が終わったときに、押した時点のレイアウトで丸ごと書き戻していた
+  const start = addPart(emptyLayout(), chair);
+  it('レイアウトが変わっていなければ、これまでの記録のしかた（issue）と同じ結果', () => {
+    const fp = fpOf(start);
+    expect(issueAs(start, 1, fp, '2026-11-13')).toEqual(issue(start, fp, '2026-11-13'));
+    const out = issue(start, fp, '2026-11-13');
+    expect(issueAs(out, 1, fp, '2026-12-01')).toBe(out);               // 出力済みの版の出し直しは、何も変えない
+    const renamed = fpOf(out, { projectName: '別名' });
+    expect(issueAs(out, 2, renamed, '2026-11-20')).toEqual(issue(out, renamed, '2026-11-20'));
+  });
+  it('出力の処理中に、ほかの端末の変更が届いていた場合: 届いた変更は残り、記録だけが足される。図が違うので、表示は次の版（未出力）になる', () => {
+    const printedFp = fpOf(start);                                      // V1 として出力した図
+    const arrived = addPart(addPart(start, chair), chair);              // その間に届いた、椅子が 2 脚増えたレイアウト
+    const after = issueAs(arrived, 1, printedFp, '2026-11-13');
+    expect(after.items).toEqual(arrived.items);                         // 届いた変更は消えていない
+    expect(after.issued).toEqual([{ version: 1, issuedAt: '2026-11-13', fp: printedFp }]);
+    expect(figureState(after, fpOf(after))).toEqual({ version: 2, status: 'changed', since: { version: 1, changed: ['items'] } });
+  });
+  it('出力した版より新しい版が作業中になっていても、作業中の版番号は下がらない', () => {
+    const later = { ...addPart(start, chair), version: 3 };
+    const after = issueAs(later, 1, fpOf(start), '2026-11-13');
+    expect([after.version, after.issued.map((v) => v.version)]).toEqual([3, [1]]);
+    expect(figureState(after, fpOf(after))).toEqual({ version: 3, status: 'draft' });
   });
 });
 

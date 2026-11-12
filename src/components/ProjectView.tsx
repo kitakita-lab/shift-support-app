@@ -1,6 +1,7 @@
 // 案件詳細。下部のシートタブ（基本情報／スタッフ配置／レイアウト／試算）で切り替える。
 import { ReactNode, useMemo, useState } from 'react';
 import { assignmentHours, estimate, laborLine, unitMaterialCost } from '../domain/calc';
+import { issueAs } from '../domain/figure';
 import { applyTemplate } from '../domain/layout';
 import { genId, listDates, num, shortDate, toMinutes, yen } from '../domain/util';
 import { checkNewAssignment, projectWarnings } from '../domain/warnings';
@@ -264,6 +265,8 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
             mode="project" layout={p.layout} partTypes={data.partTypes} composites={data.composites}
             projectName={p.name} venueName={venue?.name ?? ''} startDate={p.startDate} endDate={p.endDate} warnings={warnings}
             onChange={(layout) => onChange((x) => ({ ...x, layout }))}
+            // 出力の記録は、その時点の最新のレイアウトに足す（出力の処理中に、ほかの端末から届いた変更を消さない）
+            onIssue={(version, fp, issuedAt) => onChange((x) => ({ ...x, layout: issueAs(x.layout, version, fp, issuedAt) }))}
             onReloadTemplate={venue ? () => {
               if (!window.confirm(`周辺環境を会場「${venue.name}」の雛形で置き換えます（配置済みパーツは残ります）。よろしいですか？`)) return;
               onChange((x) => ({ ...x, layout: applyTemplate(x.layout, venue.template) }));

@@ -82,10 +82,13 @@ export function figureModel(layout: Layout, partTypes: PartType[], ctx: FigureCo
       const pt = partTypes.find((t) => t.id === it.partTypeId);
       const s = itemSize(it, pt);
       const category = pt?.category ?? 'other';
+      const label = labels.items.get(it.id) ?? '';
       return {
         id: it.id, x: it.x, y: it.y, w: s.w, h: s.h, category,
         role: pt && category === 'chair' ? (pt.seatRole ?? 'work') : null,
-        known: !!pt, label: labels.items.get(it.id) ?? '',
+        known: !!pt,
+        // POP は表示名を枠の上に 1 行で描く（改行は空白でつなぐ）。描かれる形にそろえておく（改行の有無だけで版が上がらないように）
+        label: category === 'pop' ? label.replace(/\n/g, ' ') : label,
       };
     }),
     groups: labels.groups,
@@ -188,7 +191,17 @@ export function figureState(layout: Layout, fp: Fingerprint): FigureState {
  * 出力済みで図が変わっていない版の再出力なら、何も変えない（同じ版・同じ日付のまま）。
  */
 export function issue(layout: Layout, fp: Fingerprint, issuedAt: string): Layout {
-  const st = figureState(layout, fp);
-  if (st.status === 'issued') return layout;
-  return { ...layout, version: st.version, issued: [...layout.issued, { version: st.version, issuedAt, fp }] };
+  return issueAs(layout, figureState(layout, fp).version, fp, issuedAt);
+}
+/**
+ * 「版 version として、指紋 fp の図を出力した」ことを、いまのレイアウトに記録する。
+ * 出力の処理（画像化）には時間がかかるので、その間にレイアウトが変わっていることがある（共有データで、ほかの端末の変更が届いた場合など）。
+ * 押した時点のレイアウトで丸ごと書き戻すと、その変更を消してしまう。記録だけを、いまのレイアウトに足す。
+ *   - その版の記録が既にあれば、何も変えない（出力済みの版の出し直し）
+ *   - 無ければ、記録を足す。作業中の版番号は、出力した版より小さくならないようにする
+ * 記録した指紋と、いまの図が違っていれば、figureState が「次の版（未出力）」と判定する。
+ */
+export function issueAs(layout: Layout, version: number, fp: Fingerprint, issuedAt: string): Layout {
+  if (layout.issued.some((v) => v.version === version)) return layout;
+  return { ...layout, version: Math.max(layout.version, version), issued: [...layout.issued, { version, issuedAt, fp }] };
 }

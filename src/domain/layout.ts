@@ -277,8 +277,11 @@ function groupLabelPoint(members: PlacedItem[], obstacles: Rect[], partTypes: Pa
       const d = Math.min(Infinity, ...obstacles.map((r) => {
         const dx = Math.max(r.x - c.x, 0, c.x - (r.x + r.w));
         const dy = Math.max(r.y - c.y, 0, c.y - (r.y + r.h));
-        // 名前は横長なので、横方向の空きを厳しめ（1/2.2）に評価する
-        return Math.hypot(dx / 2.2, dy);
+        // 名前は横長なので、横方向の空きを厳しめ（1/2.2）に評価する。
+        // 距離の 2 乗どうしで比べる（大小関係は同じ）。Math.hypot は丸め方がブラウザ任せで、僅差のときに選ぶ位置が
+        // 端末によって変わると、図の指紋（版の判定）が端末ごとに食い違うため、四則演算だけで計算する
+        const sx = dx / 2.2;
+        return sx * sx + dy * dy;
       }));
       if (d > bestD) { bestD = d; best = c; }
     }

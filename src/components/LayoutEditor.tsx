@@ -7,7 +7,7 @@
 //   パーツマスタ）で図が変わった場合は、次の版（未出力）として表示し、次に出力した時点でその版として記録する（作業ログ D-21）
 import { KeyboardEvent, PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { countParts } from '../domain/calc';
-import { FigureContext, SECTION_LABEL, figureModel, figureState, fingerprint, issue, pdfFileName } from '../domain/figure';
+import { FigureContext, Fingerprint, SECTION_LABEL, figureModel, figureState, fingerprint, issue, pdfFileName } from '../domain/figure';
 import {
   addComposite, addEnv, addPart, bumpIfIssued, dragSet, itemSize,
   moveEnv, moveItems, nextVersion, removeEnv, removeItems, removeLastPart, rotateItem, undoTo, ungroup, updateItem,
@@ -47,13 +47,19 @@ interface Props {
   onReloadTemplate?: () => void;
   /** いまの周辺環境を会場雛形として保存する（project モード） */
   onSaveAsTemplate?: () => void;
+  /**
+   * PDF を出力したことの記録（project モード）。「版 version として、指紋 fp の図を、issuedAt に出力した」。
+   * 受け取った側は、**その時点の最新のレイアウト**に記録を足す（出力の処理中に届いた変更を消さないため）。
+   * 未指定なら、押した時点のレイアウトに記録して onChange で返す。
+   */
+  onIssue?: (version: number, fp: Fingerprint, issuedAt: string) => void;
 }
 
 type Sel = { type: 'item'; ids: string[]; primary: string } | { type: 'env'; id: string } | null;
 
 export default function LayoutEditor({
   mode, layout, onChange, partTypes, composites, projectName = '', venueName = '', startDate = '', endDate = '', warnings = [],
-  onReloadTemplate, onSaveAsTemplate,
+  onReloadTemplate, onSaveAsTemplate, onIssue,
 }: Props) {
   const [layer, setLayer] = useState<'parts' | 'env'>(mode === 'template' ? 'env' : 'parts');
   const [grid, setGrid] = useState(5);
@@ -82,6 +88,14 @@ export default function LayoutEditor({
   const model = useMemo(() => (draft ? figureModel(draft, partTypes, ctx) : committed), [draft, committed, partTypes, ctx]);
   const fp = useMemo(() => fingerprint(committed), [committed]);
   const state = useMemo(() => figureState(layout, fp), [layout, fp]);
+  // 図に入れる作成日。開いたまま日付が変わっても追従する（図に描いた日付と、出力の記録の日付を、必ず同じ値にする）
+  const [today, setToday] = useState(() => localDate());
+  useEffect(() => {
+    const t = setInterval(() => setToday(localDate()), 30000);
+    return () => clearInterval(t);
+  }, []);
+  /** 図の右上に入れる日付。出力済みで図が変わっていない版は、最初に出力した日（同じ版の PDF は日付まで同じになる） */
+  const stampDate = state.status === 'issued' && state.issuedAt ? state.issuedAt : today;
 
   /** 確定した変更。発行済みの版なら次の版へ繰り上げ、Undo 履歴に積む */
   const commit = (next: Layout) => {
@@ -176,10 +190,15 @@ export default function LayoutEditor({
     if (!svgRef.current) return;
     setBusy(true);
     setSel(null);
+    // 押した時点で図に描かれている版・内容（指紋）・日付を覚えておき、出力が終わったら、そのとおりに記録する
+    const printed = { version: state.version, fp, date: stampDate };
     try {
-      await downloadSvgAsPdf(svgRef.current, pdfFileName(ctx, state.version));
+      await downloadSvgAsPdf(svgRef.current, pdfFileName(ctx, printed.version));
       // 図に表示していた版を、図の内容の指紋つきで「出力済み」にする。以後、図が変われば次の版になる
-      if (mode === 'project') onChange(issue(layout, fp, localDate()));
+      if (mode === 'project') {
+        if (onIssue) onIssue(printed.version, printed.fp, printed.date);
+        else onChange(issue(layout, printed.fp, printed.date));
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'PDF 出力に失敗しました');
     } finally {
@@ -367,8 +386,7 @@ export default function LayoutEditor({
           )}
           <LayoutSvg
             ref={svgRef} model={model} version={state.version}
-            // 出力済みで図が変わっていない版は、最初に出力した日を表示する（同じ版の PDF は日付まで同じになる）
-            stamp={mode === 'project' ? `作成日 ${state.status === 'issued' && state.issuedAt ? state.issuedAt : localDate()}` : undefined}
+            stamp={mode === 'project' ? `作成日 ${stampDate}` : undefined}
             selectedItemIds={sel?.type === 'item' ? sel.ids : []}
             selectedEnvId={sel?.type === 'env' ? sel.id : null}
             onItemDown={layer === 'parts' ? onItemDown : undefined} onEnvDown={layer === 'env' ? onEnvDown : undefined} onBackgroundDown={() => setSel(null)}

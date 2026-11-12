@@ -375,6 +375,27 @@ describe('制作席の過不足（作業ログ D-16）', () => {
       message: '制作席が足りない計算です：必要 20.3 席・日（Σ 予定個数 ÷ 上限回転数）に対し、制作席 10 席 × 2 日 ＝ 20 席・日。席を増やす・日数を延ばす・予定個数か上限回転数を見直す、のいずれかが必要です。',
     }]);
   });
+  it('わずかな超過のとき、警告文の必要量は切り上げて表示する（「必要 80.0 … ＝ 80」と、足りているように読めないようにする）', () => {
+    // 独立レビューの指摘: 制作席 16・5 日、予定 1601・上限回転数 20 → 必要 80.05 席・日
+    const five = { startDate: '2026-12-05', endDate: '2026-12-09', assignments: [] };
+    const w = seatWs(proj(seats(16), [mkContent({ plannedCount: 1601, maxTurns: 20 })], five));
+    expect(w).toHaveLength(1);
+    expect(w[0].message).toContain('必要 80.1 席・日');
+    expect(w[0].message).toContain('＝ 80 席・日');
+    // 切り上げても、割り切れる値・小数第 1 位までの値は変わらない
+    expect(seatWs(proj(seats(10), [mkContent({ plannedCount: 84, maxTurns: 4 })]))[0].message).toContain('必要 21 席・日');
+    expect(seatWs(proj(seats(10), [mkContent({ plannedCount: 81, maxTurns: 2 })]))[0].message).toContain('必要 40.5 席・日');
+  });
+  it('一部のコンテンツにだけ上限回転数が入っているときは、未入力のコンテンツが確認に入っていないことを「参考」で知らせる', () => {
+    const c = [mkContent({ id: 'pc1', plannedCount: 40, maxTurns: 4 }), mkContent({ id: 'pc2', plannedCount: 300, maxTurns: null })];
+    const p = proj(seats(10), c);
+    expect(at(p, 'pc:pc2:maxTurns')).toEqual([{ severity: 'info', target: 'pc:pc2:maxTurns', message: 'フラワーボトル: 上限回転数が未入力のため、制作席の過不足の確認には含めていません。' }]);
+    expect(at(p, 'pc:pc1:maxTurns')).toEqual([]);
+    expect(seatWs(p)).toEqual([]);                                                 // 警告の判定そのものは変わらない（1 つ目の 10 席・日だけ）
+    // どのコンテンツにも入力が無いとき・予定個数が 0 のときは出さない
+    expect(ws(proj(seats(10), [mkContent({ id: 'pc1', maxTurns: null }), mkContent({ id: 'pc2', maxTurns: null })])).filter((w) => w.target.endsWith(':maxTurns'))).toEqual([]);
+    expect(at(proj(seats(10), [mkContent({ id: 'pc1', plannedCount: 40, maxTurns: 4 }), mkContent({ id: 'pc2', plannedCount: 0, maxTurns: null })]), 'pc:pc2:maxTurns')).toEqual([]);
+  });
   it('割り切れない回転数でも、ちょうどの境界で誤って警告しない（100 個 ÷ 3 回 × 3 … のような端数）', () => {
     // 3 日間・制作席 1 → 3 席・日。上限回転数 3 → 9 個でちょうど
     const three = { startDate: '2026-12-05', endDate: '2026-12-07', assignments: [mkAssign({ id: 'a1', date: '2026-12-05' }), mkAssign({ id: 'a2', date: '2026-12-06' }), mkAssign({ id: 'a3', date: '2026-12-07' })] };
@@ -463,6 +484,15 @@ describe('図面の外にあるパーツ（作業ログ D-20）', () => {
     const p = withItems([item('t', 'pt-table', 1290, 0)]);
     expect(outside(p)).toEqual([]);
     expect(outside(p, mkData({ partTypes: withParts({ 'pt-table': { widthCm: 180 } }) }))).toHaveLength(1);
+  });
+  it('端にぴったり寄せたパーツは、小数の計算誤差（1100.3 ＋ 29.7 ＝ 1130.0000000000002）では「外」にしない。実際に 0.01cm でもはみ出せば警告', () => {
+    // 独立レビューの指摘: 寸法 29.7×42 のパーツを回転して下端へ寄せると、エディタが止めた位置でも警告が出ていた
+    const d = mkData({ partTypes: withParts({ 'pt-table': { widthCm: 29.7, depthCm: 42 } }) });
+    const y = 1100.3000000000002;                                                  // 回転後に下端へ寄せたときに、エディタが止めた位置（再現された値）
+    expect(y + 29.7).toBeGreaterThan(1130);                                        // 足すと、誤差で 1130 をわずかに超える
+    expect(outside(withItems([item('t', 'pt-table', 100, y, { rot: 90 })]), d)).toEqual([]);
+    expect(outside(withItems([item('t', 'pt-table', 100, y + 0.01, { rot: 90 })]), d)).toHaveLength(1);
+    expect(outside(withItems([item('t', 'pt-table', -0.01, 0)]), d)).toHaveLength(1);
   });
   it('マスタから削除された種別のパーツも対象（仮の寸法 60×60 で判定）', () => {
     expect(outside(withItems([item('g', 'gone', 1381, 0)]))).toHaveLength(1);
