@@ -121,8 +121,14 @@ function writeMark(m: { uid: string; token: string } | null): void {
 }
 function forgetAccess(): void { try { localStorage.removeItem(ACCESS_KEY); } catch { /* 何もしない */ } }
 
+/** 持ち主の印の確認と消去を、同じブラウザの画面の間で 1 つずつ行う（2 つの画面が同時にログアウトを処理して、二重に消さないため） */
+function oneAtATime<T>(fn: () => Promise<T>): Promise<T> {
+  let locks: LockManager | undefined;
+  try { locks = typeof navigator !== 'undefined' ? navigator.locks : undefined; } catch { locks = undefined; }
+  return locks?.request ? (locks.request('kkl-shared-cache', fn) as Promise<T>) : fn();
+}
 export function claimCache(uid: string | null): Promise<void> {
-  gate = gate.then(async () => {
+  gate = gate.then(() => oneAtATime(async () => {
     const cur = readMark();
     if (uid === null) {
       // 消せなかったときは、印を残す（次に開いたときに、もう一度消す）
@@ -140,7 +146,7 @@ export function claimCache(uid: string | null): Promise<void> {
     }
     myToken = genId();
     writeMark({ uid, token: myToken });
-  }).catch(() => { /* 消せなくても、未登録のアカウントには購読を始めない */ });
+  })).catch(() => { /* 消せなくても、未登録のアカウントには購読を始めない */ });
   return gate;
 }
 /** ログアウトで未送信の変更を破棄するとき */

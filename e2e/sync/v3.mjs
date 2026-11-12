@@ -360,7 +360,7 @@ add('A13', '未送信の変更は、ログアウト時に確認が出て破棄�
   const D = await mk('D');
   const d = await D.open();
   await signIn(d, 'member@example.com');
-  await until(() => staffNames(d), (n) => n.length === 1);
+  await until(() => staffNames(d), (n) => n[0] === '山田');
   const writer = (await server('v3')).staff[0].updatedBy.uid;             // 最後に書いた人（管理者）
   await D.offline(true);
   await setStaffRate(d, '山田', 1999);
@@ -390,7 +390,7 @@ add('A14', '名簿から外されたメンバーは、開いたままの画面�
   const L = await mk('L');
   const l = await L.open();
   await signIn(l, 'member@example.com');
-  await until(() => staffNames(l), (n) => n.length === 1);
+  await until(() => staffNames(l), (n) => n[0] === '山田');
   await openMembers(o);
   await o.locator('[data-testid="members"] tr[data-email="member@example.com"] button').click();
   await until(() => admin.get(`${T}/members/member@example.com`), (m) => m === null);
@@ -771,6 +771,153 @@ add('D23', '圏外で編集したまま閉じた案件が、その間にほか�
   await space(b, 'local');
   await openProject(b, '閉じている間に消される案件（控え）');
   eq(await kv(b, 'メモ').inputValue(), 'B が圏外で書いたメモ', '控えのメモ');
+}, V3);
+
+/** 突然終了の模擬: 閉じるときの「待たずに送る」処理を走らせずに、画面を閉じる */
+async function kill(page) {
+  await page.evaluate(() => {
+    const stop = (e) => e.stopImmediatePropagation();
+    window.addEventListener('pagehide', stop, true);
+    document.addEventListener('visibilitychange', stop, true);
+  });
+  await page.close();
+}
+const outbox = (page) => page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kkl_outbox')).length);
+
+add('M17', '移行をやり直した・完了させたあとは、古い試行からは 1 件も書けない（完了後のデータを移行前の内容で上書きしない。完了の印も外せない）', async ({ device: mk }) => {
+  const A = await mk('A');
+  const a = await A.open();
+  await signIn(a, 'a@example.com', { expectPhase: 'needs-init' });
+  // 移行の書き込みの入口を、直接呼ぶ（画面からは順番どおりにしか呼ばれない。ここでは「止まっていた古い端末が、後から動き出した」場合を作る）
+  const call = (fn, ...args) => a.evaluate(async ([f, xs]) => {
+    try { return { ok: true, value: (await window.__kkl.migration[f](...xs)) ?? null }; } catch (e) { return { ok: false, code: e.code ?? String(e.message ?? e) }; }
+  }, [fn, args]);
+  const actor = { uid: 'test', displayName: 'テスト' };
+  const staff = (name) => [{ coll: 'wsStaff', id: 's1', body: { id: 's1', name, hourlyRate: 1000, transportPerDay: 0, memo: '', order: 0 } }];
+  const s1 = async () => (await admin.get(`${T}/wsStaff/s1`))?.name ?? null;
+  const meta = async () => { const m = await admin.get(`${T}/wsMeta/state`); return [m?.status, m?.attempt]; };
+
+  eq(await call('begin', 'b-1', actor), { ok: true, value: { backupId: 'b-1', attempt: 1 } }, '1 回目の開始');
+  eq((await call('writeAll', 1, staff('1 回目の内容'))).ok, true, '1 回目の試行は書ける');
+  eq(await s1(), '1 回目の内容', 'サーバーの内容');
+  eq(await call('begin', 'b-2', actor), { ok: true, value: { backupId: 'b-1', attempt: 2 } }, 'やり直し（2 回目の開始。バックアップ名は 1 回目のものを使う）');
+  // 止まっていた 1 回目の試行が、後から動き出した
+  eq(await call('writeAll', 1, staff('古い試行が後から書こうとした内容')), { ok: false, code: 'superseded' }, '古い試行の書き込み');
+  eq(await s1(), '1 回目の内容', 'サーバーの内容（古い試行で上書きされていないこと）');
+  eq(await call('end', 1, { status: 'done' }), { ok: false, code: 'superseded' }, '古い試行が「完了」の印を付けようとした場合');
+  eq(await call('end', 1, { status: 'failed', error: '古い試行の失敗' }), { ok: false, code: 'superseded' }, '古い試行が「失敗」を記録しようとした場合');
+  eq(await meta(), ['running', 2], '形式の情報（2 回目の試行のまま）');
+  // つながっていない間の書き込みは、その場で失敗し、あとから送られない
+  await A.block(true);
+  const blocked = await call('writeAll', 2, staff('つながっていない間に書こうとした内容'));
+  ok(!blocked.ok && blocked.code !== 'superseded', `つながっていない間の書き込みは失敗すること: ${JSON.stringify(blocked)}`);
+  await A.block(false);
+  await sleep(5000);
+  eq(await s1(), '1 回目の内容', 'つながったあとも、失敗した書き込みが後から届いていないこと');
+  // 2 回目の試行が完了する
+  eq((await call('writeAll', 2, staff('2 回目の内容'))).ok, true, '有効な試行は書ける');
+  eq((await call('end', 2, { status: 'done' })).ok, true, '有効な試行は「完了」の印を付けられる');
+  eq(await meta(), ['done', 2], '形式の情報（完了）');
+  // 完了のあと
+  eq(await call('writeAll', 2, staff('完了後に書こうとした内容')), { ok: false, code: 'superseded' }, '完了後の書き込み（同じ試行でも書けない）');
+  eq(await call('end', 2, { status: 'failed', error: '完了後の失敗の記録' }), { ok: false, code: 'superseded' }, '完了の印を「失敗」に書き換えようとした場合');
+  eq(await call('begin', 'b-3', actor), { ok: true, value: 'done' }, '完了後に移行を始めようとした場合（何もしない）');
+  eq(await s1(), '2 回目の内容', 'サーバーの内容（完了時のまま）');
+  eq(await meta(), ['done', 2], '形式の情報（完了のまま）');
+  // 画面は、完了した共有データを使い始める
+  await waitShared(a, 20000);
+  eq(await until(() => staffNames(a), (n) => n[0] === '2 回目の内容'), ['2 回目の内容'], 'A の画面');
+}, V3);
+
+add('D24', '入力の直後に画面が突然終了しても、その変更は消えない。サーバーにつながらないまま開き直して同じ案件を編集しても、両方の変更が届く', async ({ device: mk }) => {
+  const A = await mk('A');
+  let a = await A.open();
+  await signIn(a, 'a@example.com');
+  await createProject(a, '突然終了する案件');
+  await until(() => server('v3'), (s) => s.projects[0]?.name === '突然終了する案件');
+  await until(() => syncLabel(a), (t) => t.includes('保存済み'));
+  await openProject(a, '突然終了する案件');
+  await kv(a, 'メモ').fill('終了の直前に書いた一文');
+  await kill(a);                               // 送る前（0.7 秒たつ前）に、画面が消えた
+  await sleep(1500);
+  eq((await server('v3')).projects[0].memo, '', 'サーバーのメモ（まだ届いていないこと）');
+  await A.block(true);                         // サーバーにつながらない状態で開き直す
+  a = await reopen(A, 40000);
+  await openProject(a, '突然終了する案件');
+  eq(await kv(a, 'メモ').inputValue(), '終了の直前に書いた一文', '開き直した画面のメモ（前回の変更が出ていること）');
+  ok((await until(() => syncLabel(a), (t) => t.includes('未送信'), 20000)).includes('未送信 1 件'), `未送信の表示: ${await syncLabel(a)}`);
+  await kv(a, '案件名').fill('突然終了する案件（改名）');
+  await sleep(1500);
+  eq(await outbox(a), 1, '控えは 1 件（前回の変更と今回の変更を、まとめて持っていること）');
+  eq((await server('v3')).projects[0].name, '突然終了する案件', 'サーバーの案件名（つながっていないので、まだ届いていないこと）');
+  await A.block(false);
+  const p = await until(async () => (await server('v3')).projects[0], (x) => x.memo === '終了の直前に書いた一文' && x.name === '突然終了する案件（改名）', 90000);
+  eq([p.memo, p.name], ['終了の直前に書いた一文', '突然終了する案件（改名）'], 'サーバーの内容（両方の変更が届いていること）');
+  await until(() => outbox(a), (n) => n === 0, 20000);
+  eq(await notices(a), [], '余計な表示が出ていないこと');
+  eq(A.errors, [], 'ブラウザのエラーが無いこと');
+}, V3);
+
+add('D25', '同じ端末の別の画面でログアウトしても、もう一方の画面が固まらない（未ログインの表示になり、ログインし直すと読み書きできる）', async ({ device: mk }) => {
+  const A = await mk('A');
+  const t1 = await A.open();
+  await signIn(t1, 'a@example.com');
+  await createProject(t1, '2 つの画面の案件');
+  await until(() => server('v3'), (s) => s.projects[0]?.name === '2 つの画面の案件');
+  await until(() => syncLabel(t1), (t) => t.includes('保存済み'));
+  const t2 = await reopen(A);
+  eq(await until(() => projectRows(t2), (r) => r[0] === '2 つの画面の案件'), ['2 つの画面の案件'], '2 つ目の画面の一覧');
+  await signOutUi(t1);                         // 1 つ目の画面でログアウト
+  await t1.waitForSelector('.auth-user', { state: 'detached', timeout: 20000 });
+  // 2 つ目の画面も未ログインになる（端末内の共有データの控えは消える）
+  await t2.waitForSelector('.auth-user', { state: 'detached', timeout: 20000 });
+  eq(await until(() => shownSpace(t2).catch(() => ''), (v) => v === 'local', 20000), 'local', '2 つ目の画面は「この端末だけのデータ」を表示');
+  await sleep(2500);                           // 読み込み直しが落ち着くのを待つ
+  for (const t of [t1, t2]) await t.waitForFunction(() => !!window.__kkl && document.readyState === 'complete', null, { timeout: 20000 });
+  eq((await cachedKeys(t2)).split('\n').filter((k) => SHARED_KEYS.test(k)), [], '端末内に共有データの控えが残っていないこと');
+  // ログインし直すと、どちらの画面でも読み書きできる（接続が固まっていない）
+  await signIn(t2, 'a@example.com');
+  eq(await until(() => projectRows(t2), (r) => r[0] === '2 つの画面の案件', 20000), ['2 つの画面の案件'], 'ログインし直した 2 つ目の画面');
+  // 1 つ目の画面: ログイン状態が自動で伝わる環境と、伝わらない環境がある。伝わっていなければ、この画面でもログインする
+  await sleep(2000);
+  if ((await t1.locator('.auth-user').count()) === 0) await signIn(t1, 'a@example.com');
+  await waitShared(t1, 30000);
+  eq(await until(() => projectRows(t1), (r) => r[0] === '2 つの画面の案件', 20000), ['2 つの画面の案件'], '1 つ目の画面');
+  await addStaff(t2, '山田', 1200);
+  eq((await until(() => server('v3'), (s) => s.staff[0]?.hourlyRate === 1200, 20000)).staff[0].name, '山田', '2 つ目の画面からの書き込み');
+  eq(await until(() => staffNames(t1), (n) => n[0] === '山田', 20000), ['山田'], '1 つ目の画面に届くこと');
+  eq(A.errors, [], 'ブラウザのエラーが無いこと');
+}, V3);
+
+add('D26', '同じ端末の 2 つの画面で同じ案件を編集し、片方が送る前に突然終了しても、その変更は黙って消えない（残った画面が引き取る）', async ({ device: mk }) => {
+  const A = await mk('A');
+  const t1 = await A.open();
+  await signIn(t1, 'a@example.com');
+  await createProject(t1, '2 画面で編集する案件');
+  await until(() => server('v3'), (s) => s.projects[0]?.name === '2 画面で編集する案件');
+  await until(() => syncLabel(t1), (t) => t.includes('保存済み'));
+  const t2 = await reopen(A);
+  await openProject(t1, '2 画面で編集する案件');
+  await openProject(t2, '2 画面で編集する案件');
+  await kv(t1, 'メモ').fill('画面 1 のメモ');   // 画面 1 が先に編集（0.7 秒後に送られる）
+  await sleep(300);
+  await kv(t2, '案件名').fill('画面 2 で付けた名前');   // 画面 2 が別の項目を編集し…
+  await kill(t2);                              // …送る前に突然終了
+  await until(async () => (await server('v3')).projects[0], (p) => p.memo === '画面 1 のメモ', 15000);
+  // 画面 2 の変更は、残った画面 1 が引き取る: 共有に届くか、届けられない場合は表示して控えを残す（黙って消えない）
+  const result = await until(async () => {
+    const p = (await server('v3')).projects[0];
+    if (p.name === '画面 2 で付けた名前') return 'applied';
+    return (await notices(t1)).some((t) => t.includes('自動では反映していません') && t.includes('控え')) ? 'told' : '';
+  }, (r) => r !== '', 45000);
+  ok(result === 'applied' || result === 'told', `結果: ${result}`);
+  if (result === 'told') {
+    await space(t1, 'local');
+    eq(await until(() => projectRows(t1), (r) => r.length === 1), ['画面 2 で付けた名前（控え）'], '控えの案件（画面 2 の変更が入っていること）');
+  }
+  eq((await server('v3')).projects[0].memo, '画面 1 のメモ', 'サーバーのメモ（画面 1 の変更が残っていること）');
+  await until(() => outbox(t1), (n) => n === 0, 20000);
+  eq(A.errors, [], 'ブラウザのエラーが無いこと');
 }, V3);
 
 await runFile('Version 3 で追加した確認項目', stopLegacyApp);

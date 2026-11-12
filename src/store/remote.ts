@@ -9,7 +9,7 @@ import {
   DocumentReference, FirestoreError, Transaction, collection, deleteDoc, deleteField, doc, getDocFromCache, getDocFromServer,
   getDocsFromServer, onSnapshot, runTransaction, setDoc, updateDoc, waitForPendingWrites,
 } from 'firebase/firestore';
-import { getDb } from '../firebase';
+import { getDb, isEmulator } from '../firebase';
 import {
   FORMAT_VERSION, LEGACY_DATA_COLL, LEGACY_PROJECT_COLL, MASTER_KEYS, MEMBER_COLL, META_COLL, META_DOC,
   PROBE_COLL, PROBE_DOC, collPath, docPath,
@@ -250,4 +250,12 @@ export async function writeAllGuarded(attempt: number, docs: PlannedDoc[], onPro
     await withTimeout(guarded(attempt, (tx) => { for (const d of chunk) tx.set(dref(d.coll, d.id), d.body); }), 45000);
     onProgress?.(i, docs.length);
   }
+}
+
+// ── 検証用（ローカルのエミュレータにつないでいるときだけ） ───────────────────
+// 「古い試行は書けない」ことを、e2e/sync のテストが実物の Firestore（エミュレータ）で確かめるための入口。
+// 本番・プレビューのビルドには含まれない（isEmulator が常に false になり、この部分は取り除かれる）。
+if (isEmulator) {
+  const w = window as unknown as { __kkl?: Record<string, unknown> };
+  w.__kkl = { ...(w.__kkl ?? {}), migration: { begin: beginMigration, end: endMigration, writeAll: writeAllGuarded } };
 }

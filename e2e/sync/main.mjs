@@ -114,7 +114,7 @@ add('S31', '圏外で編集して戻ると、自分の変更は届き、その�
   await until(async () => (await server(format)).staff.length === 2);
   const b = await B.open();
   await signIn(b, 'b@example.com');
-  await until(() => staffNames(b), (n) => n.length === 2);
+  await until(() => staffNames(b), (n) => n.includes('山田') && n.includes('佐藤'));   // 名前まで届いてから（行だけ先に届くことがある）
   await B.offline(true);                      // B が圏外に
   await addStaff(a, '新人D', 1300);           // その間に A が 1 人追加
   await until(async () => (await server(format)).staff.length === 3);
@@ -176,7 +176,7 @@ add('S35', '圏外で行った変更は、送る前に画面を閉じても失�
   await until(async () => (await server(format)).staff.length === 1);
   let b = await B.open();
   await signIn(b, 'b@example.com');
-  await until(() => staffNames(b), (n) => n.length === 1);
+  await until(() => staffNames(b), (n) => n[0] === '山田');   // 名前まで届いてから（行だけ先に届くことがある）
   await B.offline(true);
   await setStaffRate(b, '山田', 1400);
   await sleep(1500);
