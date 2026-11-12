@@ -456,7 +456,8 @@ add('A16', '現在のルール（メンバー制 未適用）では、その旨�
   await admin.loadRules('firestore.v3.rules');
   await a.close();
   a = await reopen(A);
-  eq(await projectRows(a), ['切り替え前の案件'], '管理者は、切り替え後もそのまま使える');
+  // 閉じる直前の入力（案件名）が送信前だった場合は、開き直したあとに送り直される。内容がそろうまで待つ
+  eq(await until(() => projectRows(a), (r) => r[0] === '切り替え前の案件', 10000), ['切り替え前の案件'], '管理者は、切り替え後もそのまま使える');
   ok(!(await a.locator('[data-testid="space"]').innerText()).includes('未適用'), '「未適用」の表示が消えること');
   const M = await mk('M');
   const m = await M.open();
@@ -559,7 +560,7 @@ add('D14', '同じ案件で、一方がスタッフ配置、他方がレイア�
   await sheet(b, 'レイアウト');
   await Promise.all([
     a.locator('.matrix__cell:not(.is-on) button').first().click(),
-    b.getByRole('button', { name: '椅子を増やす' }).click(),
+    b.getByRole('button', { name: '椅子（制作席）を増やす' }).click(),
   ]);
   const p = await until(async () => (await server('v3')).projects[0], (x) => x.assignments.length === p0.assignments.length + 1 && countOf(x, 'pt-chair') === countOf(p0, 'pt-chair') + 1, 8000);
   eq([p.assignments.length, countOf(p, 'pt-chair')], [p0.assignments.length + 1, countOf(p0, 'pt-chair') + 1], 'サーバーの案件（配置 ＋1 と 椅子 ＋1 の両方）');
@@ -574,7 +575,7 @@ add('D15', '後勝ちの限界: 同じ案件のレイアウトを 2 人が同時
   await sheet(a, 'レイアウト');
   await sheet(b, 'レイアウト');
   await Promise.all([
-    a.getByRole('button', { name: '椅子を増やす' }).click(),
+    a.getByRole('button', { name: '椅子（制作席）を増やす' }).click(),
     b.getByRole('button', { name: 'バナースタンドを増やす' }).click(),
   ]);
   await sleep(5000);
