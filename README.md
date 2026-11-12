@@ -13,21 +13,24 @@
 ```bash
 npm install
 npm run dev      # 開発サーバー
-npm test         # 計算・レイアウト・警告・PDF のテスト
+npm test         # 単体テスト（試算・警告・レイアウト・版数・PDF・サンプルデータ）
 npm run build    # 型チェック + ビルド
+node e2e/verify.mjs   # 実ブラウザ（Chromium）での動作確認。playwright が必要（スクリプト先頭の説明を参照）
 ```
 
 Firebase の設定（`.env`。`.env.example` 参照）が無い場合は、ブラウザ内（localStorage）だけで動く。
-まず触ってみるには「データ」タブ →「サンプルデータを読み込む」。
+まず触ってみるには「データ」タブ →「サンプルデータを読み込む」。案件が 2 件入る（デモと、ラソラ札幌 11/13〜17 の土台。数値はすべて仮置き）。
 
 ## 構成
 
 ```
 src/
   types.ts            データモデル
-  domain/             純関数（calc=試算, layout=レイアウト操作・番号・版, warnings=入力警告, seed=初期値）
+  domain/             純関数（calc=試算, layout=レイアウト操作・番号・版, warnings=入力警告, seed=初期値・サンプル）
   store/              localStorage + Firestore 同期
   export/pdf.ts       配置図の PDF 出力
-  components/         Grid（表計算風グリッド）, LayoutEditor, LayoutSvg, ProjectView, Masters
+  components/         Grid（表計算風グリッド）, NumInput（数値欄）, LayoutEditor, LayoutSvg, ProjectView, Masters
+  **/*.test.ts        単体テスト（domain/testkit.ts はテスト用の部品）
+e2e/verify.mjs        実ブラウザでの動作確認（npm test には含めない）
 archive/shift-app-v1/ 旧アプリ一式
 ```
