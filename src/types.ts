@@ -165,6 +165,11 @@ export interface Venue {
   memo: string;
   /** 会場レイアウトの雛形（周辺環境のみ。items は空） */
   template: Layout;
+  /**
+   * 日報での会場名（別名）。日報の同期で、会場名の表記が違う回答をこの会場のものとして扱うための、明示的な対応づけ。
+   * 未設定なら、会場名（name）と一致する回答だけを対象にする。
+   */
+  reportNames?: string[];
 }
 
 // ── 案件 ────────────────────────────────────────────────────
@@ -206,6 +211,108 @@ export interface OtherCost {
   amount: number;
 }
 
+// ── JCOS 案件の収支（請求と実費を分けて持つ）・日報の同期 ─────────────────
+// 計算は domain/jcos.ts、日報の照合と集計は domain/report.ts。設計は docs/02_新アプリ設計書.md「6. Version 4」。
+
+/** JCOS 案件の、日ごとの例外。無い日は「請求する・アルバイト 1 人」 */
+export interface JcosDay {
+  /** false なら、その日は JCOS への請求の対象にしない */
+  billed?: boolean;
+  /** その日に稼働するアルバイトの人数（未設定は 1） */
+  partTimers?: number;
+}
+
+/**
+ * JCOS 案件の収支の条件。金額はすべて「編集できる初期値」で、案件ごとに変えられる。
+ * enabled が true の案件だけ、JCOS の収支計算（請求 − 実費 ＝ 粗利）を使う。false・未設定なら従来の汎用の試算。
+ */
+export interface JcosTerms {
+  enabled: boolean;
+  /** JCOS への請求（売上）: 人件費 1 日あたり（円） */
+  billLaborPerDay: number;
+  /** JCOS への請求（売上）: 材料費 1 日あたり（円） */
+  billMaterialPerDay: number;
+  /** 追加の請求（予備費など。案件によって付く） */
+  extraBillings: OtherCost[];
+  /** こちらの支払い: アルバイト代 1 人・1 稼働日あたり（円） */
+  partTimerPerDay: number;
+  /** こちらの支払い: 材料原価 制作物 1 個あたり（円）。製品の種類では分けない（暫定 220 円） */
+  unitCost: number;
+  /** 日ごとの例外（日付 "YYYY-MM-DD" → 設定） */
+  days: Record<string, JcosDay>;
+}
+
+/** 日報（Google フォームの回答が入るスプレッドシート）の場所 */
+export interface ReportSource {
+  spreadsheetId: string;
+  /** タブの ID（URL の gid）。分かっていれば、タブ名より優先して使う */
+  gid?: number | null;
+}
+
+/** 日報から取り込んだ 1 日分の実績 */
+export interface ReportDay {
+  date: string;
+  /** キットの使用数の合計（＝制作物の実績個数） */
+  count: number;
+  /** 合計のもとになった回答の数 */
+  rows: number;
+}
+
+/** 取り込まなかった回答の理由 */
+export type ReportSkipReason =
+  | 'bad-date'        // 会場は一致するが、開催日を読み取れない
+  | 'bad-count'       // 会場と開催日は一致するが、キットの使用数を読み取れない（空欄を含む）
+  | 'no-venue'        // 開催日は会期内だが、会場名が空欄
+  | 'other-project';  // 会場と開催日は一致するが、会期が重なる別の案件の実績として割り当て済み
+
+export interface ReportSkip {
+  reason: ReportSkipReason;
+  rows: number;
+  /** 対象の開催日（読み取れたものだけ。重複なし・日付順） */
+  dates: string[];
+}
+
+/** 会期が重なる別の案件があり、どちらの実績か決められないため、取り込みを保留した日 */
+export interface ReportHeld {
+  date: string;
+  count: number;
+  rows: number;
+  /** 重なっている案件の名前 */
+  others: string[];
+}
+
+/** 開催日は会期内だが、会場名が一致しなかった回答（別名を登録する候補） */
+export interface ReportUnmatched {
+  /** 日報に書かれていた会場名（前後の空白を除いたもの） */
+  venue: string;
+  rows: number;
+  count: number;
+  dates: string[];
+}
+
+/**
+ * 最後に成功した同期の結果。同期のたびに丸ごと置き換える（足し込まない）ので、何度同期しても二重計上にならず、
+ * 日報の修正・削除もそのまま反映される。失敗した同期では書き換えない。
+ */
+export interface ReportSync {
+  /** 同期した日時（ISO 8601） */
+  at: string;
+  /** 同期したときの会場と会期（あとで会場・会期を変えた場合に、古い実績を使わないための控え） */
+  venueId: string;
+  startDate: string;
+  endDate: string;
+  days: ReportDay[];
+  /** 日報から読んだ回答の数（見出しを除く） */
+  rowsRead: number;
+  /** この案件の実績として取り込んだ回答の数 */
+  rowsUsed: number;
+  /** テスト回答として除いた数 */
+  tests: number;
+  skipped: ReportSkip[];
+  held: ReportHeld[];
+  unmatched: ReportUnmatched[];
+}
+
 export interface Project {
   id: string;
   /** タイトル先頭に入る名称（例: ikyu） */
@@ -229,6 +336,17 @@ export interface Project {
   otherCosts: OtherCost[];
   layout: Layout;
   updatedAt: number;
+  // ── 以下は Version 4 で追加（すべて任意。無ければ従来どおりの汎用の試算） ──
+  /** JCOS 案件の収支の条件 */
+  jcos?: JcosTerms;
+  /** 手入力の実績個数（日付 → 個数）。同じ日に日報の実績があれば、日報を優先する */
+  actualsManual?: Record<string, number>;
+  /** 日報の場所。同期に成功したときに、使った場所を記録する */
+  reportSource?: ReportSource;
+  /** 最後に成功した日報の同期の結果 */
+  reportSync?: ReportSync;
+  /** 会期が重なる別の案件があるときに、「この案件の実績として取り込む」と利用者が決めた日付 */
+  reportClaims?: string[];
 }
 
 // ── アプリ全体 ──────────────────────────────────────────────

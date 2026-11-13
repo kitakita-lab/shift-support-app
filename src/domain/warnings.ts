@@ -2,7 +2,9 @@
 // ここは警告を列挙するだけで、入力値の拒否・自動修正は一切しない。
 import { AppData, Assignment, PlacedItem, Project, Warning } from '../types';
 import { assignmentHours, countParts, countSeats, seatDemand } from './calc';
+import { isJcos } from './jcos';
 import { buildLabels, findOverlaps, itemSize } from './layout';
+import { syncStaleness, unmatchedGaps } from './report';
 import { MAX_DAYS, daySpan, listDates, num, shortDate, toMinutes } from './util';
 
 function overlaps(a: Assignment, b: Assignment): boolean {
@@ -38,6 +40,8 @@ export function projectWarnings(p: Project, data: AppData): Warning[] {
   const w: Warning[] = [];
   const add = (target: string, message: string, severity: Warning['severity'] = 'warn') =>
     w.push({ target, message, severity });
+  // JCOS 案件（請求と実費を分ける収支）では、汎用の試算にだけ関係する確認（時給・材料マスタ・スタッフ配置の有無）は出さない
+  const jcos = isJcos(p);
 
   // ── 基本情報 ──
   if (!p.name.trim()) add('project:name', '案件名が未入力です。');
@@ -55,14 +59,14 @@ export function projectWarnings(p: Project, data: AppData): Warning[] {
   for (const pc of p.contents) {
     const c = data.contents.find((x) => x.id === pc.contentId);
     if (!c) add(`pc:${pc.id}:contentId`, 'コンテンツが未選択です。');
-    if (num(pc.plannedCount) === 0) add(`pc:${pc.id}:plannedCount`, '予定個数が 0 です。材料費・売上が 0 で試算されます。');
+    if (num(pc.plannedCount) === 0) add(`pc:${pc.id}:plannedCount`, jcos ? '予定個数が 0 です。見込みの材料原価が 0 円で計算されます。' : '予定個数が 0 です。材料費・売上が 0 で試算されます。');
     if (num(pc.plannedCount) < 0) add(`pc:${pc.id}:plannedCount`, '予定個数がマイナスです。');
     if (pc.maxTurns != null && num(pc.maxTurns) < 0) add(`pc:${pc.id}:maxTurns`, '上限回転数がマイナスです（席数の確認には使われません）。');
     // 一部のコンテンツにだけ上限回転数が入っている場合、未入力のものは席数の確認に入らない。見落としやすいので参考として知らせる
     else if (num(pc.maxTurns) <= 0 && num(pc.plannedCount) > 0 && p.contents.some((x) => num(x.maxTurns) > 0)) {
       add(`pc:${pc.id}:maxTurns`, `${c?.name ?? 'このコンテンツ'}: 上限回転数が未入力のため、制作席の過不足の確認には含めていません。`, 'info');
     }
-    if (c && c.materials.length === 0) add(`pc:${pc.id}:contentId`, `「${c.name}」に材料が登録されていません（材料費 0 円で試算）。`, 'info');
+    if (c && c.materials.length === 0 && !jcos) add(`pc:${pc.id}:contentId`, `「${c.name}」に材料が登録されていません（材料費 0 円で試算）。`, 'info');
   }
 
   // ── スタッフ配置 ──
@@ -86,7 +90,7 @@ export function projectWarnings(p: Project, data: AppData): Warning[] {
       if (brk >= 0 && worked > 8 && brk < 60) add(`assign:${a.id}:breakMinutes`, `${label}: 実働8時間超ですが休憩が60分未満です。`);
       else if (brk >= 0 && worked > 6 && brk < 45) add(`assign:${a.id}:breakMinutes`, `${label}: 実働6時間超ですが休憩が45分未満です。`);
     }
-    if (s && (a.rateOverride ?? num(s.hourlyRate)) <= 0) add(`assign:${a.id}:rate`, `${label}: 時給が 0 円以下です。`);
+    if (s && !jcos && (a.rateOverride ?? num(s.hourlyRate)) <= 0) add(`assign:${a.id}:rate`, `${label}: 時給が 0 円以下です。`);
     if (p.assignments.some((x) => x.id !== a.id && x.staffId === a.staffId && a.staffId && overlaps(x, a))) {
       add(`assign:${a.id}:staffId`, `${label}: 同じ時間帯に重複して配置されています。`);
     }
@@ -99,7 +103,25 @@ export function projectWarnings(p: Project, data: AppData): Warning[] {
     }
   }
   for (const d of dates) {
-    if (!p.assignments.some((a) => a.date === d)) add(`day:${d}`, `${shortDate(d)}: スタッフが1人も配置されていません。`, 'info');
+    if (!jcos && !p.assignments.some((a) => a.date === d)) add(`day:${d}`, `${shortDate(d)}: スタッフが1人も配置されていません。`, 'info');
+  }
+
+  // ── JCOS 案件: 条件と、日報の同期で確認が必要なもの ──
+  if (jcos) {
+    const t = p.jcos!;
+    if (num(t.unitCost) <= 0) add('jcos:unitCost', '材料原価（1 個あたり）が 0 円以下です。材料原価が 0 円で計算されます。');
+    if (num(t.billLaborPerDay) < 0 || num(t.billMaterialPerDay) < 0 || num(t.partTimerPerDay) < 0) add('jcos:terms', 'JCOS 案件の金額にマイナスの値があります。');
+    const sync = p.reportSync;
+    if (sync) {
+      const stale = syncStaleness(p);
+      if (stale.venue) add('report:stale', '日報の同期のあとで会場が変わっています（同期した実績は使っていません）。もう一度「日報を同期」を押してください。');
+      else if (stale.period) add('report:stale', '日報の同期のあとで会期が変わっています。もう一度「日報を同期」を押してください。');
+      if (sync.held?.length) add('report:held', `日報: 同じ会場で会期が重なる別の案件があるため、取り込みを保留している日が ${sync.held.length} 日あります（どちらの案件の実績か、確認が必要です）。`);
+      const unread = (sync.skipped ?? []).filter((x) => x.reason !== 'other-project').reduce((n, x) => n + x.rows, 0);
+      if (unread > 0) add('report:skipped', `日報: 読み取れずに実績へ入れていない回答が ${unread} 件あります（「日報を同期」の詳細を確認してください）。`);
+      const gaps = unmatchedGaps(sync);
+      if (gaps.length) add('report:unmatched', `日報: この案件の実績が無い日に、別の会場名の回答があります（${gaps.map((u) => `「${u.venue}」`).join('')}）。この会場の別の書き方なら、別名として登録してください。`, 'info');
+    }
   }
 
   // ── レイアウト ──
