@@ -2,13 +2,17 @@
 import { ReactNode, useMemo, useState } from 'react';
 import { assignmentHours, estimate, laborLine, unitMaterialCost } from '../domain/calc';
 import { issueAs } from '../domain/figure';
+import { defaultJcos, isJcos, jcosEstimate } from '../domain/jcos';
 import { applyTemplate } from '../domain/layout';
 import { genId, listDates, num, shortDate, toMinutes, yen } from '../domain/util';
 import { checkNewAssignment, projectWarnings } from '../domain/warnings';
-import { AppData, Assignment, OtherCost, Project, ProjectContent, ProjectStatus, Venue, Warning } from '../types';
+import { AppData, Assignment, JcosTerms, OtherCost, Project, ProjectContent, ProjectStatus, Venue, Warning } from '../types';
 import Grid, { Col, n0, nNull } from './Grid';
+import JcosView from './JcosView';
 import LayoutEditor from './LayoutEditor';
 import NumInput from './NumInput';
+import ReportBar from './ReportBar';
+import { PHONE, useMediaQuery } from './useMedia';
 
 type Sheet = 'basic' | 'staff' | 'layout' | 'estimate';
 const SHEETS: { id: Sheet; label: string }[] = [
@@ -24,6 +28,8 @@ interface Props {
   data: AppData;
   onChange: (fn: (p: Project) => Project) => void;
   onSaveVenueTemplate: (venueId: string, project: Project) => void;
+  /** 会場に「日報での会場名（別名）」を足す */
+  onAddVenueAlias: (venueId: string, name: string) => void;
   onBack: () => void;
 }
 
@@ -36,11 +42,16 @@ function Field({ label, warn, children }: { label: string; warn?: string; childr
   );
 }
 
-export default function ProjectView({ project: p, data, onChange, onSaveVenueTemplate, onBack }: Props) {
+export default function ProjectView({ project: p, data, onChange, onSaveVenueTemplate, onAddVenueAlias, onBack }: Props) {
   const [sheet, setSheet] = useState<Sheet>('basic');
   const [showWarn, setShowWarn] = useState(false);
   const warnings = useMemo(() => projectWarnings(p, data), [p, data]);
   const est = useMemo(() => estimate(p, data), [p, data]);
+  // JCOS 案件（請求と実費を分ける収支）。それ以外は、従来の汎用の試算
+  const jcosOn = isJcos(p);
+  const phone = useMediaQuery(PHONE);
+  const j = useMemo(() => (jcosOn ? jcosEstimate(p) : null), [jcosOn, p]);
+  const profit = j ? j.current.gross : est.profit;
   const venue = data.venues.find((v) => v.id === p.venueId);
   const dates = useMemo(() => listDates(p.startDate, p.endDate), [p.startDate, p.endDate]);
   const wOf = (target: string) => warnings.find((w) => w.target === target)?.message;
@@ -133,7 +144,8 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
     { key: 'rev', title: '参加費売上', width: 100, type: 'readonly', align: 'right', get: (c) => yen(lineOf(c)?.revenue ?? 0) },
   ];
   const ocCols: Col<OtherCost>[] = [
-    { key: 'name', title: '費目', width: 240, get: (o) => o.name, set: (o, v) => ({ ...o, name: v }) },
+    // スマホ幅では、金額と削除ボタンまで横スクロールなしで見えるように、費目の欄を狭くする
+    { key: 'name', title: '費目', width: phone ? 170 : 240, get: (o) => o.name, set: (o, v) => ({ ...o, name: v }) },
     { key: 'amount', title: '金額', width: 110, type: 'number', get: (o) => o.amount, set: (o, v) => ({ ...o, amount: n0(v) }) },
   ];
 
@@ -141,12 +153,25 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
     <NumInput value={String(p[key] ?? '')} blankIsZero onValue={(v) => set({ [key]: n0(v) })} style={{ textAlign: 'right' }} />
   );
 
+  // ── JCOS 案件の条件 ──
+  // 切り替えても、どちらの入力値も消さない（汎用に戻せば元の試算に戻り、JCOS に戻せば前の条件に戻る）
+  const setMode = (on: boolean) => onChange((x) => {
+    if (on) return { ...x, jcos: { ...defaultJcos(), ...(x.jcos ?? {}), enabled: true } };
+    return x.jcos ? { ...x, jcos: { ...x.jcos, enabled: false } } : x;
+  });
+  const setJcos = (patch: Partial<JcosTerms>) => onChange((x) => (x.jcos ? { ...x, jcos: { ...x.jcos, ...patch } } : x));
+  const jcosNum = (key: 'billLaborPerDay' | 'billMaterialPerDay' | 'partTimerPerDay' | 'unitCost') => (
+    <NumInput value={String(p.jcos?.[key] ?? '')} blankIsZero onValue={(v) => setJcos({ [key]: n0(v) })} style={{ textAlign: 'right' }} data-testid={`jcos-${key}`} />
+  );
+  // JCOS 案件の実施コンテンツは、予定個数（と、席数の確認に使う上限回転数）だけを使う。参加費・予備率・材料マスタは、汎用の試算の項目
+  const pcColsShown = jcosOn ? pcCols.filter((c) => ['contentId', 'plannedCount', 'maxTurns'].includes(c.key)) : pcCols;
+
   return (
     <div className="pv">
       <div className="pv__head">
         <button onClick={onBack}>← 案件一覧</button>
         <h2>{p.name || '（名称未設定）'}<small>{venue?.name ?? '会場未選択'}{dates.length ? `・${shortDate(dates[0])}〜${shortDate(dates[dates.length - 1])}（${dates.length}日間）` : ''}</small></h2>
-        <span className="pv__profit">利益 <b className={est.profit < 0 ? 'neg' : ''}>{yen(est.profit)}</b></span>
+        <span className="pv__profit" data-testid="pv-profit" data-jcos={jcosOn ? '1' : '0'}>{jcosOn ? '粗利（管理上）' : '利益'} <b className={profit < 0 ? 'neg' : ''}>{yen(profit)}</b></span>
         <button className={`warnbtn${nWarn ? ' warnbtn--on' : ''}`} onClick={() => setShowWarn((v) => !v)}>
           ⚠ 警告 {nWarn}件{nInfo > 0 ? `・参考 ${nInfo}件` : ''} {showWarn ? '▲' : '▼'}
         </button>
@@ -157,6 +182,7 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
           {warnings.map((w: Warning, i) => <li key={i} className={`warnlist__${w.severity}`}>{w.severity === 'warn' ? '⚠' : 'ℹ'} {w.message}</li>)}
         </ul>
       )}
+      {jcosOn && <ReportBar project={p} data={data} onChange={onChange} onAddVenueAlias={onAddVenueAlias} />}
 
       <div className="pv__body">
         {sheet === 'basic' && (
@@ -179,29 +205,65 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
                     {STATUSES.map((s) => <option key={s}>{s}</option>)}
                   </select>
                 </Field>
-                <Field label="固定売上（受託料など）">{numInput('fixedRevenue')}</Field>
-                <Field label="会場費：固定額">{numInput('venueFeeFixed')}</Field>
-                <Field label="会場費：1日あたり">{numInput('venueFeePerDay')}</Field>
-                <Field label="会場費：参加費売上の歩合(%)">{numInput('venueFeeRatePct')}</Field>
+                <Field label="収支の計算方法">
+                  <div className="seg seg--fill" data-testid="calc-mode" data-mode={jcosOn ? 'jcos' : 'generic'}>
+                    <button className={jcosOn ? '' : 'is-on'} onClick={() => setMode(false)}>汎用</button>
+                    <button className={jcosOn ? 'is-on' : ''} onClick={() => setMode(true)}>JCOS案件</button>
+                  </div>
+                </Field>
+                {jcosOn ? (
+                  <>
+                    <Field label="請求：人件費（1日あたり）">{jcosNum('billLaborPerDay')}</Field>
+                    <Field label="請求：材料費（1日あたり）">{jcosNum('billMaterialPerDay')}</Field>
+                    <Field label="支払い：アルバイト代（1人・1日）">{jcosNum('partTimerPerDay')}</Field>
+                    <Field label="支払い：材料原価（1個あたり・暫定）">{jcosNum('unitCost')}</Field>
+                  </>
+                ) : (
+                  <>
+                    <Field label="固定売上（受託料など）">{numInput('fixedRevenue')}</Field>
+                    <Field label="会場費：固定額">{numInput('venueFeeFixed')}</Field>
+                    <Field label="会場費：1日あたり">{numInput('venueFeePerDay')}</Field>
+                    <Field label="会場費：参加費売上の歩合(%)">{numInput('venueFeeRatePct')}</Field>
+                  </>
+                )}
                 <Field label="メモ"><input value={p.memo} onChange={(e) => set({ memo: e.target.value })} /></Field>
               </tbody>
             </table>
+            {jcosOn && (
+              <p className="hint" data-testid="jcos-note">
+                JCOS 案件：JCOS への<b>請求</b>（人件費・材料費）と、こちらの<b>支払い</b>（アルバイト代・材料原価・その他実費）を分けて、粗利を計算します。
+                金額はこの案件だけの設定で、いつでも変えられます。請求する日・アルバイトの稼働日・実績個数は「試算」の日別の表で入力します。
+                固定売上・会場費・スタッフの時給・材料マスタ・レイアウトの備品費は、この計算には入りません（入力値は残っています）。
+              </p>
+            )}
 
-            <h3>実施コンテンツ</h3>
+            <h3>実施コンテンツ{jcosOn && <small>予定個数の合計を、会期の見込みに使います（製品の種類では分けません）</small>}</h3>
             <Grid
-              rows={p.contents} cols={pcCols} rowKey={(c) => c.id} deletable
+              rows={p.contents} cols={pcColsShown} rowKey={(c) => c.id} deletable
               onChange={(rows) => set({ contents: rows })}
               onAdd={() => set({ contents: [...p.contents, { id: genId(), contentId: data.contents[0]?.id ?? '', plannedCount: 0, priceOverride: null, sparePct: 0 }] })}
               addLabel="＋ コンテンツを追加"
               emptyText="実施するコンテンツを追加してください（コンテンツ自体は「コンテンツ」マスタで登録）"
             />
 
-            <h3>その他費用</h3>
+            {jcosOn && (
+              <>
+                <h3>追加の請求<small>予備費など、案件によって付く請求（JCOS へ）</small></h3>
+                <Grid
+                  rows={p.jcos?.extraBillings ?? []} cols={ocCols} rowKey={(o) => o.id} deletable
+                  onChange={(rows) => setJcos({ extraBillings: rows })}
+                  onAdd={() => setJcos({ extraBillings: [...(p.jcos?.extraBillings ?? []), { id: genId(), name: '', amount: 0 }] })}
+                  addLabel="＋ 請求を追加" emptyText="予備費など（無ければ空のまま）"
+                />
+              </>
+            )}
+
+            <h3>{jcosOn ? 'その他実費' : 'その他費用'}{jcosOn && <small>実際に支払うものだけ（追加のレンタル費・購入費など）。入力したものだけが実費に入ります</small>}</h3>
             <Grid
               rows={p.otherCosts} cols={ocCols} rowKey={(o) => o.id} deletable
               onChange={(rows) => set({ otherCosts: rows })}
               onAdd={() => set({ otherCosts: [...p.otherCosts, { id: genId(), name: '', amount: 0 }] })}
-              addLabel="＋ 費目を追加" emptyText="印刷費・送料・駐車場代など"
+              addLabel="＋ 費目を追加" emptyText={jcosOn ? '追加のレンタル費・購入費・送料など（無ければ空のまま）' : '印刷費・送料・駐車場代など'}
             />
           </>
         )}
@@ -277,7 +339,8 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
           />
         )}
 
-        {sheet === 'estimate' && (
+        {sheet === 'estimate' && j && <JcosView project={p} j={j} generic={est} onChange={onChange} />}
+        {sheet === 'estimate' && !j && (
           <div className="est">
             <table className="grid est__summary">
               <thead><tr><th className="grid__corner" /><th>項目</th><th style={{ width: 130 }}>金額</th><th>計算式</th></tr></thead>
@@ -296,20 +359,20 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
                 ] as [string, number, string, string][]).map(([label, v, formula, cls], i) => (
                   <tr key={label} className={cls ? `est__${cls}` : ''}>
                     <th className="grid__rownum">{i + 1}</th>
-                    <td className="is-ro"><div className="grid__ro">{label}</div></td>
+                    <td className="is-ro"><div className="grid__ro est__label" data-formula={formula}>{label}</div></td>
                     <td className="is-ro"><div className={`grid__ro num${v < 0 ? ' neg' : ''}`}>{yen(v)}</div></td>
-                    <td className="is-ro"><div className="grid__ro formula">{formula}</div></td>
+                    <td className="is-ro est__fcol"><div className="grid__ro formula">{formula}</div></td>
                   </tr>
                 ))}
-                <tr><th className="grid__rownum">11</th><td className="is-ro"><div className="grid__ro">利益率</div></td>
+                <tr><th className="grid__rownum">11</th><td className="is-ro"><div className="grid__ro est__label" data-formula="利益 ÷ 売上 計">利益率</div></td>
                   <td className="is-ro"><div className="grid__ro num">{est.marginPct == null ? '—' : `${est.marginPct.toFixed(1)}%`}</div></td>
-                  <td className="is-ro"><div className="grid__ro formula">利益 ÷ 売上 計</div></td></tr>
-                <tr><th className="grid__rownum">12</th><td className="is-ro"><div className="grid__ro">参考: 総労働時間／制作席／その他の椅子</div></td>
+                  <td className="is-ro est__fcol"><div className="grid__ro formula">利益 ÷ 売上 計</div></td></tr>
+                <tr><th className="grid__rownum">12</th><td className="is-ro"><div className="grid__ro est__label">参考: 総労働時間／制作席／その他の椅子</div></td>
                   <td className="is-ro"><div className="grid__ro num" data-testid="est-seats">{est.totalHours.toFixed(1)}h／制作席 {est.seats}席／その他 {est.otherSeats}脚</div></td>
-                  <td className="is-ro"><div className="grid__ro formula">制作席＝レイアウトの椅子のうち、役割が「制作席」のもの（役割はパーツ画面で設定）</div></td></tr>
-                <tr><th className="grid__rownum">13</th><td className="is-ro"><div className="grid__ro">参考: 必要な回転数（制作席 1 席・1 日あたり）</div></td>
+                  <td className="is-ro est__fcol"><div className="grid__ro formula">制作席＝レイアウトの椅子のうち、役割が「制作席」のもの（役割はパーツ画面で設定）</div></td></tr>
+                <tr><th className="grid__rownum">13</th><td className="is-ro"><div className="grid__ro est__label">参考: 必要な回転数（制作席 1 席・1 日あたり）</div></td>
                   <td className={wOf('layout:seats') ? 'is-warn' : 'is-ro'} title={wOf('layout:seats')}><div className="grid__ro num" data-testid="est-turns">{est.requiredTurns == null ? '—' : `${est.requiredTurns.toFixed(1)}回`}</div></td>
-                  <td className="is-ro"><div className="grid__ro formula">Σ 予定個数 ÷（制作席 × {est.days}日）。実施コンテンツに「上限回転数」を入力すると、席が足りない計算のときに警告します</div></td></tr>
+                  <td className="is-ro est__fcol"><div className="grid__ro formula">Σ 予定個数 ÷（制作席 × {est.days}日）。実施コンテンツに「上限回転数」を入力すると、席が足りない計算のときに警告します</div></td></tr>
               </tbody>
             </table>
 

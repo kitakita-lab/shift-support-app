@@ -3,14 +3,19 @@
 :root {
   --line: #e1e3e6; --head: #f8f9fa; --ink: #202124; --sub: #5f6368;
   --accent: #1a73e8; --brand: #22403a; --warn-bg: #fff4c2; --warn-line: #e0b400;
+  /* 画面下のシートタブの高さ（タッチ端末では押しやすいように高くする） */
+  --tabs-h: 38px;
 }
 html, body { margin: 0; }
+/* スマホを横向きにしたときなどに、ブラウザが文字の大きさを勝手に変えないようにする */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', 'Yu Gothic', 'Meiryo', sans-serif;
   font-size: 13px; color: var(--ink); background: #fff; line-height: 1.5;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
-/* 数値欄のスピンボタン（▲▼）は出さない。数字を選ぼうとして押すと値が ±1 されるため */
+/* 数値欄のスピンボタン（▲▼）は出さない。数字を選ぼうとして押すと値が ±1 されるため
+   （数値欄は type="text" にしたので、いまは該当する欄は無い。type="number" を使う欄が増えたときの備え） */
 input[type='number'] { -moz-appearance: textfield; appearance: textfield; }
 input[type='number']::-webkit-outer-spin-button,
 input[type='number']::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
@@ -41,7 +46,8 @@ h2 small, h3 small { font-weight: 400; color: var(--sub); margin-left: 10px; fon
 .app__tabs { display: flex; gap: 2px; padding: 6px 10px 0; background: var(--head); border-bottom: 1px solid var(--line); overflow-x: auto; }
 .app__tabs button { border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; background: transparent; padding: 6px 14px; }
 .app__tabs button.is-on { background: #fff; border-color: var(--line); font-weight: 700; color: var(--brand); margin-bottom: -1px; }
-.app__main { flex: 1; padding: 12px 14px 60px; min-width: 0; }
+/* 下は、画面下に固定したシートタブと、端末のホームバー（セーフエリア）のぶんを空ける */
+.app__main { flex: 1; padding: 12px 14px calc(var(--tabs-h) + 22px + env(safe-area-inset-bottom, 0px)); min-width: 0; }
 
 /* 認証ボタン（旧アプリから引き継ぎ） */
 .auth-signin-btn, .auth-signout-btn { font-size: 12px; background: rgba(255,255,255,.15); border-color: rgba(255,255,255,.6); color: #fff; }
@@ -91,10 +97,12 @@ h2 small, h3 small { font-weight: 400; color: var(--sub); margin-left: 10px; fon
 .warnlist li { padding: 1px 0; }
 .warnlist__info { color: var(--sub); }
 .sheettabs {
-  position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 2px; padding: 0 12px 6px;
-  background: var(--head); border-top: 1px solid var(--line); z-index: 15;
+  position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 2px; z-index: 15;
+  /* 端末のホームバー・画面の角（セーフエリア）を避ける */
+  padding: 0 max(12px, env(safe-area-inset-right, 0px)) calc(6px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+  background: var(--head); border-top: 1px solid var(--line);
 }
-.sheettabs button { border-top: none; border-radius: 0 0 6px 6px; background: transparent; border-color: transparent; padding: 6px 16px; }
+.sheettabs button { border-top: none; border-radius: 0 0 6px 6px; background: transparent; border-color: transparent; padding: 6px 16px; min-height: calc(var(--tabs-h) - 6px); }
 .sheettabs button.is-on { background: #fff; border-color: var(--line); color: #188038; font-weight: 700; box-shadow: inset 0 -2px 0 #188038; }
 
 .matrix th, .matrix td { text-align: center; }
@@ -104,7 +112,11 @@ h2 small, h3 small { font-weight: 400; color: var(--sub); margin-left: 10px; fon
 .matrix__cell.is-warn button { background: var(--warn-bg); }
 .matrix th.is-info { background: #fff4c2; }
 
-.est__summary td { min-width: 120px; }
+/* まとめの表は、画面の幅に収める（計算式の列は折り返す）。以前は計算式を 1 行で出していて、表が 1,200px 幅になり、ページごと横にはみ出していた */
+.est__summary { width: 100%; max-width: 1100px; }
+.est__summary thead th:nth-child(2) { width: 300px; }
+.est__summary td { min-width: 0; }
+.est__summary .est__fcol .grid__ro { white-space: normal; overflow: visible; }
 .est__sum td.is-ro { background: var(--head); font-weight: 700; }
 .est__total td.is-ro { background: #e6f4ea; font-weight: 700; font-size: 14px; }
 .num { text-align: right; }
@@ -150,6 +162,16 @@ h2 small, h3 small { font-weight: 400; color: var(--sub); margin-left: 10px; fon
   /* 縦並び。図は画面の幅いっぱいに広げる（align-items: flex-start のままだと図が 300px に縮む） */
   .editor__body { flex-direction: column; align-items: stretch; }
   .editor__side { width: 100%; }
+  /* 並び順: パーツの表 → 図 → 選択中のパーツ → 注記。
+     「選択中のパーツ」を図の下に置く（図の上にあると、パーツを選ぶ・選択を外すたびに欄の高さが変わって図が上下に動く。
+     図のすぐ下にあれば、選んだパーツの回転・削除も、図から離れずにできる） */
+  .editor__side { display: contents; }
+  .editor__canvas { order: 1; }
+  .editor__side > .panel--sel { order: 2; min-height: 0; margin-top: 0; }
+  .editor__side > .panel--notes { order: 3; margin-top: 0; }
+  /* 図の警告（重なりなど）も、図の下に出す（図の上に出すと、パーツを置いた瞬間に警告が出て、図が下へ動く） */
+  .editor__canvas { display: flex; flex-direction: column; }
+  .editor__canvas > .warnlist { order: 1; margin: 6px; }
 }
 
 /* ── 置き場所の帯（共有データ／この端末だけのデータ）・お知らせ・共有データの案内 ── */
@@ -180,4 +202,184 @@ h2 small, h3 small { font-weight: 400; color: var(--sub); margin-left: 10px; fon
 @media (max-width: 900px) {
   /* 狭い画面では、帯を 1 行に収める（説明は省く。どちらを見ているかは、色と選択中のボタンで分かる） */
   .spacebar__note, .spacebar__label { display: none; }
+}
+
+/* ============================================================
+   Version 4: JCOS 案件の収支・日報の同期・スマホ（iPhone Safari）向けの表示
+   ============================================================ */
+
+/* 見出しは、画面の角・切り欠き（セーフエリア）を避ける */
+.app__head { padding-left: max(14px, env(safe-area-inset-left, 0px)); padding-right: max(14px, env(safe-area-inset-right, 0px)); }
+
+/* 一覧の案件名（押すと開く） */
+.grid__link {
+  display: block; width: 100%; min-height: 25px; border: none; border-radius: 0; background: transparent; padding: 3px 8px;
+  color: var(--accent); font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+}
+.grid__link:hover:not(:disabled) { background: #e8f0fe; text-decoration: underline; }
+.grid td input[type='checkbox'] { display: inline-block; width: 18px; height: 18px; padding: 0; margin: 0; accent-color: var(--accent); }
+ul.plain { margin: 4px 0; padding-left: 18px; }
+.seg--fill { display: flex; width: 100%; }
+.seg--fill button { flex: 1; min-height: 25px; padding: 0 10px; border-radius: 0 !important; border-top: none; border-bottom: none; }
+
+/* ── 案件一覧（スマホ幅ではカード。カード全体を押して開く） ── */
+.plist { display: flex; flex-direction: column; gap: 8px; }
+.pcard { border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+.pcard__open {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; width: 100%; min-height: 72px;
+  border: none; border-radius: 0; padding: 10px 8px 10px 12px; text-align: left; white-space: normal;
+}
+.pcard__name { grid-column: 1; font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+.pcard__status { margin-left: 8px; padding: 0 8px; border-radius: 10px; background: #e8f0fe; color: var(--accent); font-size: 11px; font-weight: 400; white-space: nowrap; }
+.pcard__warn { margin-left: 6px; padding: 0 8px; border-radius: 10px; background: var(--warn-bg); color: #7a5200; font-size: 11px; font-weight: 400; white-space: nowrap; }
+.pcard__sub { grid-column: 1; color: var(--sub); font-size: 12px; overflow-wrap: anywhere; }
+.pcard__money { grid-column: 1; display: flex; flex-wrap: wrap; gap: 0 12px; align-items: baseline; color: var(--sub); font-size: 12px; }
+.pcard__money b { color: var(--ink); font-size: 14px; }
+.pcard__money b.neg { color: #c5221f; }
+.pcard__go { grid-column: 2; grid-row: 1 / span 3; align-self: center; color: var(--sub); font-size: 24px; padding: 0 4px; }
+.pcard__actions { display: flex; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--head); }
+.pcard__actions button { font-size: 12px; }
+
+/* ── JCOS 案件の収支 ── */
+.cards { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 8px; max-width: 900px; }
+.card { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: #fff; }
+.card--main { background: #e6f4ea; border-color: #b7dfc3; }
+.card--neg { background: #fde8e7; border-color: #f2b8b5; }
+.card__label { color: var(--sub); font-size: 12px; }
+.card__value { font-size: 22px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+.card--main .card__value { font-size: 26px; }
+.card--neg .card__value { color: #c5221f; }
+.card__note { color: var(--sub); font-size: 11px; }
+.matbox__row { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: baseline; }
+.matbox--over { border-color: #f2b8b5; background: #fff8f7; }
+.tag--on { background: #d7f0df; color: #0b5c2e; }
+
+.daygrid th:nth-child(1) { width: 96px; }
+.daygrid th:nth-child(2) { width: 130px; }
+.daygrid th:nth-child(3) { width: 200px; }
+.daygrid th:nth-child(4) { width: 84px; }
+.daygrid th:nth-child(5) { width: 130px; }
+.daygrid th:nth-child(6) { width: 150px; }
+.daygrid th:nth-child(7) { width: 150px; }
+.daygrid .check { display: flex; align-items: center; gap: 6px; min-height: 25px; padding: 0 8px; white-space: nowrap; cursor: pointer; }
+.daygrid .grid__ro { overflow: visible; white-space: normal; }
+.daygrid__note { display: block; font-size: 11px; font-weight: 400; }
+.stepper--inline { justify-content: flex-start; gap: 2px; padding-right: 6px; height: auto; min-height: 25px; }
+.stepper--inline span { flex: none; min-width: 40px; }
+.stepper--inline small { margin-left: 6px; color: var(--sub); white-space: nowrap; }
+
+/* ── 日報の同期（案件の見出しの下の帯） ── */
+.reportbar { margin-bottom: 10px; border: 1px solid #c6dafc; border-radius: 6px; background: #f1f6ff; padding: 6px 10px; }
+.reportbar--warn { background: #fffbe6; border-color: var(--warn-line); }
+.reportbar--error { background: #fde8e7; border-color: #f2b8b5; }
+.reportbar__main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.reportbar__status { flex: 1; min-width: 180px; color: var(--sub); font-size: 12px; }
+.reportbar__more { font-size: 12px; }
+.reportbar__hint { margin: 4px 0; color: var(--sub); font-size: 12px; }
+.reportbar__source label { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; color: var(--sub); font-size: 12px; }
+.reportbar__source input { width: 100%; max-width: 560px; height: 32px; border: 1px solid #dadce0; border-radius: 4px; padding: 2px 8px; background: #fff; color: var(--ink); }
+.reportbar__detail { margin-top: 6px; border-top: 1px dashed #c6c9ce; padding-top: 6px; font-size: 12px; }
+.reportbar__detail p { margin: 4px 0; }
+.reportbar__item { margin: 6px 0; }
+.reportbar__item li { margin: 2px 0; }
+
+/* ── 図の近くの「元に戻す」（上部のツールバーが見えていないときだけ出る） ── */
+.undofab {
+  position: fixed; z-index: 16;
+  right: max(12px, env(safe-area-inset-right, 0px));
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+}
+/* 案件の画面では、下に固定したシートタブの上に置く */
+.pv .undofab { bottom: calc(var(--tabs-h) + 12px + env(safe-area-inset-bottom, 0px)); }
+.undofab button {
+  min-height: 44px; border-radius: 22px; padding: 8px 18px; background: #fff; border-color: #c6c9ce; font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .28);
+}
+.undofab button:disabled { opacity: .6; box-shadow: 0 1px 3px rgba(0, 0, 0, .15); }
+
+/* ── タッチ端末（スマホ・タブレット）・狭い画面 ──
+   入力欄の文字を 16px にする。iPhone の Safari は、16px 未満の入力欄にフォーカスすると画面を自動で拡大し、
+   そのまま戻らないことがある（拡大されたままだと、画面下に固定したタブが見える範囲の外に出る）。 */
+@media (pointer: coarse), (max-width: 700px) {
+  :root { --tabs-h: 50px; }
+  input, select, textarea { font-size: 16px; }
+  .grid th, .grid td { height: 40px; }
+  .grid td input, .grid td select { height: 39px; }
+  .grid__link { min-height: 39px; }
+  .grid td input[type='checkbox'] { width: 22px; height: 22px; }
+  .matrix__cell button { height: 39px; }
+  .stepper { height: 39px; }
+  .stepper button { width: 44px; height: 39px; font-size: 18px; }
+  .stepper--inline { height: auto; }
+  .cellbtn { height: 32px; padding: 2px 10px; }
+  .toolbar select { height: 36px; }
+  .toolbar button, .panel__btns button, .grid__add, .reportbar button, .pv__head button { min-height: 36px; }
+  .panel__row input { height: 38px; }
+  .panel .full { padding: 6px 8px; }
+  .seg--fill button { min-height: 39px; }
+  .reportbar__source input { height: 40px; }
+  .daygrid .check { min-height: 39px; }
+}
+
+@media (max-width: 700px) {
+  .app__head { gap: 8px; }
+  .app__head h1 { font-size: 13px; }
+  /* 上のタブは、横スクロールではなく折り返す（右端のタブが隠れて見つけられなかった） */
+  .app__tabs { flex-wrap: wrap; overflow-x: visible; padding: 4px 6px 0; }
+  .app__tabs button { flex: 1 1 auto; padding: 8px 6px; }
+  .app__main { padding-left: 10px; padding-right: 10px; }
+  h2 small, h3 small { display: block; margin: 2px 0 0; }
+
+  /* 基本情報: 項目名の下に入力欄を置く（横に並べると、画面からはみ出す） */
+  .kv, .kv tbody, .kv tr, .kv th, .kv td { display: block; width: 100%; }
+  .kv tr { margin-bottom: 6px; }
+  .kv .kv__label { width: 100%; height: auto; padding: 4px 8px; border-bottom: none; font-size: 12px; white-space: normal; }
+  .kv td { width: 100%; }
+
+  /* 試算のまとめ: 項目と金額の 2 列。計算式は、項目名の下に小さく出す */
+  .est__summary .grid__corner, .est__summary .grid__rownum, .est__summary .est__fcol, .est__summary thead th:last-child { display: none; }
+  .est__summary thead th:nth-child(2) { width: auto; }
+  .est__summary thead th:nth-child(3) { width: 124px !important; }
+  .est__summary td { height: auto; }
+  .est__summary .grid__ro { white-space: normal; overflow: visible; }
+  .est__summary .est__label::after { content: attr(data-formula); display: block; color: var(--sub); font-size: 11px; font-weight: 400; }
+
+  .cards { grid-template-columns: 1fr 1fr; }
+  .card--main { grid-column: 1 / -1; }
+  .card__value { font-size: 18px; }
+
+  /* 日別の表は、1 日＝1 枚のカードにする（横スクロールなしで、請求・アルバイト・個数・粗利が見える） */
+  .daygrid, .daygrid tbody, .daygrid tfoot { display: block; width: 100%; }
+  .daygrid thead { display: none; }
+  .daygrid tr { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+  .daygrid td {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; height: auto; min-height: 42px;
+    border: none; border-top: 1px solid var(--line); padding: 2px 8px; background: #fff !important; box-shadow: none !important;
+  }
+  .daygrid td::before { content: attr(data-label); flex: none; color: var(--sub); font-size: 11px; white-space: nowrap; }
+  .daygrid td .grid__ro { padding: 0; text-align: right; }
+  .daygrid td.daygrid__date { order: 1; border-top: none; background: var(--head) !important; font-weight: 700; }
+  .daygrid td.daygrid__date::before { content: none; }
+  .daygrid td[data-label='粗利'] { order: 2; border-top: none; background: var(--head) !important; }
+  .daygrid td[data-label='請求'] { order: 3; }
+  .daygrid td[data-label='予定個数'] { order: 4; }
+  .daygrid td[data-label='アルバイト'] { order: 5; grid-column: 1 / -1; }
+  .daygrid td[data-label='実績個数'] { order: 6; }
+  .daygrid td[data-label='材料原価'] { order: 7; }
+  .daygrid td[data-label='実績個数'] input { width: 96px; border: 1px solid #dadce0; border-radius: 4px; background: #fff; }
+  .daygrid .check { padding: 0; }
+  .daygrid tfoot tr { background: var(--head); }
+  .daygrid tfoot td { background: var(--head) !important; font-weight: 700; }
+  .daygrid tfoot td:first-child { order: 1; grid-column: 1 / -1; border-top: none; }
+  .daygrid tfoot td[data-label='粗利'] { order: 7; }
+  .daygrid tfoot td[data-label='材料原価'] { order: 6; }
+  .daygrid tfoot td[data-label='アルバイト'] { order: 3; grid-column: 1 / -1; }
+  .daygrid tfoot td[data-label='請求'] { order: 2; grid-column: 1 / -1; }
+
+  /* 下のシートタブは、4 つを等幅で並べる */
+  .sheettabs { gap: 0; padding-left: max(4px, env(safe-area-inset-left, 0px)); padding-right: max(4px, env(safe-area-inset-right, 0px)); }
+  .sheettabs button { flex: 1; padding: 6px 2px; }
+  .pv__head { gap: 8px; }
+  .pv__head h2 { flex-basis: 100%; }
+  .pv__head h2 small { margin-left: 0; }
 }

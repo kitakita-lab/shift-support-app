@@ -67,6 +67,18 @@ export default function LayoutEditor({
   const [draft, setDraft] = useState<Layout | null>(null);
   const [busy, setBusy] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
+  // 上部のツールバーが画面に見えているか。見えていない間は、図の近く（画面の右下）に「元に戻す」を固定で出す
+  // （図は縦に長く、スマホでは、図を操作するたびにツールバーまで戻らないと元に戻せなかったため。Issue #87）
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barVisible, setBarVisible] = useState(true);
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
+    // 上から 90px（画面上部に固定している見出しと帯の高さ）の下に隠れている間も「見えていない」とみなす
+    const io = new IntersectionObserver(([e]) => setBarVisible(e.isIntersecting), { rootMargin: '-90px 0px 0px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
   const drag = useRef<{
     /** 押した位置（画面上） */
     cx: number; cy: number;
@@ -249,7 +261,7 @@ export default function LayoutEditor({
 
   return (
     <div className="editor" tabIndex={0} onKeyDown={onKey}>
-      <div className="toolbar">
+      <div className="toolbar" ref={barRef}>
         {mode === 'project' && (
           <div className="seg">
             <button className={layer === 'parts' ? 'is-on' : ''} onClick={() => { setLayer('parts'); setSel(null); }}>パーツ配置</button>
@@ -365,7 +377,7 @@ export default function LayoutEditor({
           )}
 
           {mode === 'project' && (
-            <div className="panel">
+            <div className="panel panel--notes">
               <div className="panel__title">タイトル下の注記</div>
               <input className="full" value={layout.caption} onChange={(e) => commit({ ...layout, caption: e.target.value })} />
               <div className="panel__title" style={{ marginTop: 8 }}>未確認事項（1行に1項目）</div>
@@ -394,6 +406,12 @@ export default function LayoutEditor({
           />
         </div>
       </div>
+
+      {!barVisible && (
+        <div className="undofab" data-testid="undo-fab">
+          <button onClick={undo} disabled={busy || history.current.length === 0} aria-label="元に戻す（直前の配置の変更を取り消す）">↩ 元に戻す</button>
+        </div>
+      )}
 
       {layer === 'env' && (
         <div className="editor__envgrid">
