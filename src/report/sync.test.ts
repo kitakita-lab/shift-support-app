@@ -111,6 +111,12 @@ describe('日報の同期: 失敗したときは、前回の実績をそのま�
     await run(d);
     expect(d.log).not.toContain('forget');
   });
+  it('捨てるのは、その同期が使った認証（あとから届いた古い同期の失敗で、新しく得た認証を捨てないよう、どの認証かを渡す）', async () => {
+    const forgotten: string[] = [];
+    const d = deps({ token: async () => 'tok-old', rows: async () => { throw new ReportError('auth-expired', 'x'); }, forget: (t) => { forgotten.push(t); } });
+    await run(d);
+    expect(forgotten).toEqual(['tok-old']);
+  });
 });
 
 describe('日報の同期: 通信する前に分かる問題', () => {

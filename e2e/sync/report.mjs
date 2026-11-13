@@ -7,7 +7,8 @@
 // ここで確かめられないもの: 実際の Google の確認画面（未審査アプリの警告・許可のチェック）、Sheets API の有効化、
 //   実際の日報の閲覧権限。これらは、実環境での確認事項として残る。
 import {
-  add, admin, createProject, eq, loadSample, ok, openProject, runFile, sheet, signIn, sleep, space, tab, until, TEAM,
+  LEGACY_COLLS, V3_COLLS, add, admin, createProject, eq, loadSample, notices, ok, openProject, runFile, sheet, signIn, signOut, sleep, space, startApp, tab,
+  until, TEAM,
 } from './lib.mjs';
 
 const T = `teams/${TEAM}`;
@@ -40,9 +41,11 @@ const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers
  * 端末（ブラウザ）に、差し替えの日報をつなぐ。返した state を書き換えると、次の同期からその内容になる。
  *   state.rows … 回答／state.header … 見出し／state.fail … 'network' | 状態コード（403 など）| null／state.failBody … エラーの本文
  *   state.calls … ブラウザが送った問い合わせの記録
+ *   state.hold … Promise を入れておくと、次の回答の取得への応答を、それが済むまで止める（通信が遅い場合の再現。応答の内容は、要求が届いた時点の日報）
+ *   state.answered … 回答の取得に応答した回数
  */
 async function fakeSheets(d, init = {}) {
-  const state = { header: HEADER, rows: baseRows(), tabs: [{ sheetId: 0, title: '集計' }, { sheetId: 1622532141, title: TAB }], fail: null, failBody: null, calls: [], ...init };
+  const state = { header: HEADER, rows: baseRows(), tabs: [{ sheetId: 0, title: '集計' }, { sheetId: 1622532141, title: TAB }], fail: null, failBody: null, calls: [], hold: null, answered: 0, ...init };
   await d.ctx.route('https://sheets.googleapis.com/**', async (route) => {
     const req = route.request();
     const u = new URL(req.url());
@@ -53,12 +56,18 @@ async function fakeSheets(d, init = {}) {
     if (typeof state.fail === 'number') { await json(state.fail, state.failBody ?? { error: { code: state.fail, message: 'The caller does not have permission', status: 'PERMISSION_DENIED' } }); return; }
     if (!u.pathname.startsWith(`/v4/spreadsheets/${SHEET_ID}`)) { await json(404, { error: { code: 404, message: 'Requested entity was not found.', status: 'NOT_FOUND' } }); return; }
     if (u.pathname.endsWith('/values:batchGet')) {
-      await json(200, { spreadsheetId: SHEET_ID, valueRanges: state.calls[state.calls.length - 1].ranges.map((range) => {
+      const rows = state.rows.map((r) => [...r]);                                        // 要求が届いた時点の日報
+      const ranges = state.calls[state.calls.length - 1].ranges;
+      const hold = state.hold;
+      state.hold = null;
+      if (hold) await hold;
+      await json(200, { spreadsheetId: SHEET_ID, valueRanges: ranges.map((range) => {
         const col = letterIndex(/!([A-Z]+)2:/.exec(range)[1]);
-        const values = state.rows.map((r) => r[col] ?? '');
+        const values = rows.map((r) => r[col] ?? '');
         while (values.length && values[values.length - 1] === '') values.pop();          // 実物と同じく、末尾の空欄は返さない
         return values.length ? { range, majorDimension: 'COLUMNS', values: [values] } : { range, majorDimension: 'COLUMNS' };
       }) });
+      state.answered += 1;
       return;
     }
     if (u.pathname.includes('/values/')) { await json(200, { range: `'${TAB}'!A1:Z1`, majorDimension: 'ROWS', values: [state.header] }); return; }
@@ -99,6 +108,41 @@ async function syncNow(page, url) {
   await until(() => busy(page), (b) => b === '0', 10000);
   await sleep(150);
 }
+/** 回答の取得（同期 1 回につき 1 回）が、何回届いたか */
+const fetches = (sheets) => sheets.calls.filter((c) => c.path.endsWith('/values:batchGet')).length;
+/**
+ * 「日報を同期」を押して、回答の取得への応答を待っているところで止める（通信が遅い場合の再現）。
+ * 返した関数を呼ぶと、止めていた応答（押した時点の日報の内容）が届く。
+ */
+async function startHeld(page, sheets) {
+  const n = fetches(sheets);
+  let release;
+  sheets.hold = new Promise((r) => { release = r; });
+  await page.locator('[data-testid="report-sync"]').click();
+  const clickedAt = Date.now();
+  eq(await until(() => fetches(sheets), (v) => v === n + 1, 5000), n + 1, '回答の取得の要求が届くこと（ここで応答を止める）');
+  eq(sheets.hold, null, '止める仕掛けが、この要求に使われたこと');
+  eq(await busy(page), '1', '同期中の表示');
+  const deliver = async () => {
+    const answered = sheets.answered;
+    release();
+    eq(await until(() => sheets.answered, (v) => v === answered + 1, 5000), answered + 1, '止めていた応答が、ブラウザに渡ること');
+  };
+  deliver.clickedAt = clickedAt;
+  return deliver;
+}
+/** 「同期をやめる」を押す（同期が長引くと出る） */
+async function stopSync(page) {
+  await page.locator('[data-testid="report-stop"]').click({ timeout: 10000 });
+  eq(await until(() => busy(page), (b) => b === '0', 3000), '0', '「同期をやめる」のあとの、同期中の表示');
+}
+const toggleText = (page) => page.locator('[data-testid="report-toggle"]').innerText();
+/** 日報の内容（11/13 の個数だけを変える。11/14 は 58 個） */
+const twoDays = (first) => [answer(serial('2026-11-13'), CENTER, first), answer(serial('2026-11-14'), CENTER, 58)];
+/** あとから届いた応答が処理され、共有データへ送られるまでの時間（送信の待ち 0.7 秒）より、十分に長く待つ */
+const SETTLE_MS = 2500;
+/** 共有データの案件のうち、書き込みのたびに変わるところ（同期の結果・版の印・更新時刻） */
+const written = (doc) => JSON.stringify([doc?.reportSync ?? null, doc?.reportSource ?? null, doc?.rev ?? null, doc?.updatedAt ?? null]);
 async function detail(page) {
   if (!(await page.locator('[data-testid="report-detail"]').count())) await page.locator('[data-testid="report-toggle"]').click();
   return (await page.locator('[data-testid="report-detail"]').innerText()).replace(/\s+/g, ' ');
@@ -533,8 +577,9 @@ add('R13', '最初の同期が、読み取れない回答で止まったとき: 
   eq([stopped?.reportSync ?? null, stopped?.reportSource ?? null], [null, null], '共有データ（同期の結果も、日報の場所も、書いていないこと）');
   // 日報そのものは読めたので、場所は、この端末が覚えている（URL の欄を、もう出さない）
   eq(await a.locator('[data-testid="report-url"]').count(), 0, '止まったあとの、日報の場所の入力欄');
-  // 端末に置いた失敗の記録が壊れていても、同期の欄は表示できる
-  for (const junk of ['null', '[1,2]', JSON.stringify({ [stopped.id]: 5 }), JSON.stringify({ [stopped.id]: { at: 't', message: 'm', issues: 'x', more: 'y' } }), '{壊れた']) {
+  // 端末に置いた失敗の記録が壊れていても、同期の欄は表示できる（記録の名前は、置き場所 ＋ 案件の ID）
+  const mine = `shared:${stopped.id}`;
+  for (const junk of ['null', '[1,2]', JSON.stringify({ [mine]: 5 }), JSON.stringify({ [mine]: { at: 't', message: 'm', issues: 'x', more: 'y' } }), JSON.stringify({ [stopped.id]: 5 }), '{壊れた']) {
     await a.evaluate((v) => localStorage.setItem('kkl_report_error_v1', v), junk);
     await a.reload();
     await a.waitForSelector('[data-testid="space"][data-space="shared"]');
@@ -550,6 +595,301 @@ add('R13', '最初の同期が、読み取れない回答で止まったとき: 
   eq((await jcos(a)).actual, 120, '直したあとの実績（コンテストの回答 62 個を含む）');
   const done = await until(() => projectDoc('秋の花まつり'), (p) => !!p?.reportSync, 10000);
   eq([days(done), done.reportSync.tests, done.reportSource], [[['2026-11-13', 62, 1], ['2026-11-14', 58, 1]], 0, { spreadsheetId: SHEET_ID, gid: 1622532141 }], '共有データ（実績・テスト回答の数・日報の場所）');
+});
+
+// ── 同じ案件の同期が重なったとき（古い同期の結果で、新しい実績を上書きしない） ──────────
+add('R14', '同期の途中で案件を閉じて開き直しても、同期中のままに見え、もう一度は始められない。結果は 1 回だけ届き、成功も失敗も、開き直した画面に出る', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  eq((await jcos(a)).actual, 120, '最初の実績（62 ＋ 58）');
+  // 同期の途中（応答が止まっている）で、案件一覧に戻って、同じ案件を開き直す
+  sheets.rows = twoDays(70);
+  const release = await startHeld(a, sheets);
+  await a.getByRole('button', { name: '← 案件一覧' }).click();
+  await openProject(a, '秋の花まつり');
+  eq(await busy(a), '1', '開き直した画面でも、同期中');
+  const button = a.locator('[data-testid="report-sync"]');
+  eq([await button.isDisabled(), (await button.innerText()).trim()], [true, '同期中…'], '「日報を同期」のボタン');
+  // 開き直しただけでは、2 つ目の同期は始まらない（同期を始める処理そのものが、動いている同期があると始めないことは、
+  // 単体テスト syncJob.test.ts で確かめている。画面では、ボタンが押せないことを確かめる）
+  await sleep(400);
+  eq([fetches(sheets), await busy(a)], [2, '1'], '回答の取得の回数・同期中の表示');
+  await release();
+  await until(() => busy(a), (b) => b === '0', 10000);
+  ok((await status(a)).includes('2 日分 128 個'), `開き直した画面に、同期の結果が出る: ${await status(a)}`);
+  eq((await jcos(a)).actual, 128, '実績（70 ＋ 58）');
+  eq(days(await syncedDoc('秋の花まつり', (p) => days(p)[0]?.[1] === 70)), [['2026-11-13', 70, 1], ['2026-11-14', 58, 1]], '共有データ');
+  // 失敗で終わったときも、開き直した画面に出る（内容が開く）。前回の実績は残る
+  sheets.rows = twoDays('たくさん');
+  const release2 = await startHeld(a, sheets);
+  await a.getByRole('button', { name: '← 案件一覧' }).click();
+  await openProject(a, '秋の花まつり');
+  eq(await busy(a), '1', '開き直した画面でも、同期中（2 回目）');
+  await release2();
+  await until(() => busy(a), (b) => b === '0', 10000);
+  ok((await toggleText(a)).includes('同期できませんでした'), `開き直した画面に、失敗が出る: ${await toggleText(a)}`);
+  await a.waitForSelector('[data-testid="report-issues"]', { timeout: 3000 });
+  ok((await a.locator('[data-testid="report-issues"]').innerText()).includes('日報の 2 行目'), `読み取れない回答の表示: ${await a.locator('[data-testid="report-issues"]').innerText()}`);
+  ok((await status(a)).includes('2 日分 128 個'), `前回の実績が残る: ${await status(a)}`);
+  eq(fetches(sheets), 3, '回答の取得の回数（同期 1 回につき 1 回）');
+});
+
+add('R15', '同期の完了の順序が逆転しても、先に始めた同期の結果は、新しい実績を上書きしない（画面も、共有データも）', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  // 1 つ目の同期: 直される前の日報（11/13 = 70）を読んだ応答が、止まっている。利用者は、同期をやめる
+  sheets.rows = twoDays(70);
+  const release = await startHeld(a, sheets);
+  // 「同期をやめる」は、同期が長引く（4 秒）まで出ない（ここまでに時間がかかりすぎた場合は、確かめない）
+  const shown = await a.locator('[data-testid="report-stop"]').count();
+  if (Date.now() - release.clickedAt < 3000) eq(shown, 0, '押した直後の「同期をやめる」');
+  await stopSync(a);
+  // 日報が直された（11/13 = 99）。2 つ目の同期は、すぐに終わる
+  sheets.rows = twoDays(99);
+  await syncNow(a);
+  ok((await status(a)).includes('2 日分 157 個'), `2 つ目の同期の結果: ${await status(a)}`);
+  const second = await syncedDoc('秋の花まつり', (p) => days(p)[0]?.[1] === 99);
+  // 1 つ目の同期の応答が、あとから届く
+  await release();
+  await sleep(SETTLE_MS);
+  ok((await status(a)).includes('2 日分 157 個'), `あとから届いた古い結果で、表示が変わっていないこと: ${await status(a)}`);
+  eq((await jcos(a)).actual, 157, '実績（99 ＋ 58 のまま）');
+  eq(await busy(a), '0', '同期中の表示');
+  ok(!(await toggleText(a)).includes('同期できませんでした'), `失敗の表示は出ない: ${await toggleText(a)}`);
+  const after = await projectDoc('秋の花まつり');
+  eq(days(after), [['2026-11-13', 99, 1], ['2026-11-14', 58, 1]], '共有データの実績（2 つ目の同期の結果のまま）');
+  eq(written(after), written(second), '共有データへの書き込み（古い結果を、書き戻していないこと）');
+  eq(fetches(sheets), 3, '回答の取得の回数');
+  // やめただけで、次の同期を始めていないときも、あとから届いた結果は使わない
+  sheets.rows = twoDays(11);
+  const release3 = await startHeld(a, sheets);
+  await stopSync(a);
+  await release3();
+  await sleep(SETTLE_MS);
+  ok((await status(a)).includes('2 日分 157 個'), `やめた同期の結果は使わない: ${await status(a)}`);
+  eq(written(await projectDoc('秋の花まつり')), written(second), '共有データ（やめた同期の結果を、書いていないこと）');
+});
+
+add('R16', '最新の同期が失敗したとき、先に始めた同期の結果は、あとから届いても確定されない（前回の実績のまま。表示は、最新の同期の失敗）', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  const first = await syncedDoc('秋の花まつり');                 // 前回の実績（120 個）
+  const cases = [
+    ['Google 側のエラー', { fail: 503 }, 'Google 側でエラーが起きました'],
+    ['読み取れない回答', { rows: twoDays('たくさん') }, '読み取れない'],
+  ];
+  for (const [name, patch, expect] of cases) {
+    // 先の同期（成功するはずの応答が、止まっている）→ やめる → 次の同期は、失敗する
+    Object.assign(sheets, { fail: null, rows: twoDays(70) });
+    const release = await startHeld(a, sheets);
+    await stopSync(a);
+    Object.assign(sheets, patch);
+    await syncNow(a);
+    ok((await toggleText(a)).includes('同期できませんでした'), `${name}: 最新の同期の失敗が出る: ${await toggleText(a)}`);
+    const shown = (await a.locator('[data-testid="report-error"]').innerText()).replace(/\s+/g, ' ');
+    ok(shown.includes(expect), `${name}: 失敗の内容「${shown}」に「${expect}」がありません`);
+    // 先の同期の応答が、あとから届く
+    sheets.fail = null;
+    await release();
+    await sleep(SETTLE_MS);
+    ok((await status(a)).includes('2 日分 120 個'), `${name}: 前回の実績のまま: ${await status(a)}`);
+    eq((await jcos(a)).actual, 120, `${name}: 実績（先の同期の 128 個が、確定されていないこと）`);
+    eq(written(await projectDoc('秋の花まつり')), written(first), `${name}: 共有データ（1 項目も変わっていないこと）`);
+    eq((await a.locator('[data-testid="report-error"]').innerText()).replace(/\s+/g, ' '), shown, `${name}: 表示は、最新の同期の失敗のまま`);
+  }
+});
+
+add('R17', 'ほかの端末の同期の結果が先に届いていたら、あとから届いた自分の同期の結果で上書きしない。そのことを知らせ、もう一度同期すると取り込める', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  await syncedDoc('秋の花まつり');
+  const B = await mk('B');
+  await fakeSheets(B, { rows: twoDays(99) });
+  const b = await openPage(B);
+  await signIn(b, 'b@example.com');
+  await openProject(b, '秋の花まつり');
+  // A: 同期の途中（直される前の日報〔11/13 = 70〕を読んだ応答が、止まっている）
+  sheets.rows = twoDays(70);
+  const release = await startHeld(a, sheets);
+  // B: 直されたあとの日報（11/13 = 99）で同期して、結果が共有データに保存される。A にも届く（A は、まだ同期中）
+  await syncNow(b);
+  const theirs = await syncedDoc('秋の花まつり', (p) => days(p)[0]?.[1] === 99);
+  await until(() => status(a), (t) => t.includes('2 日分 157 個'), 8000);
+  eq(await busy(a), '1', 'A は、まだ同期中');
+  // A の応答が、あとから届く
+  await release();
+  await until(() => busy(a), (v) => v === '0', 10000);
+  await sleep(SETTLE_MS);
+  ok((await status(a)).includes('2 日分 157 個'), `A の表示（B の結果のまま）: ${await status(a)}`);
+  eq(written(await projectDoc('秋の花まつり')), written(theirs), '共有データ（B の結果のまま。A の古い結果を、書き戻していないこと）');
+  ok((await status(b)).includes('2 日分 157 個'), `B の表示: ${await status(b)}`);
+  ok((await toggleText(a)).includes('同期できませんでした'), `A に、知らせが出る: ${await toggleText(a)}`);
+  const note = (await a.locator('[data-testid="report-error"]').innerText()).replace(/\s+/g, ' ');
+  ok(note.includes('ほかの端末') && note.includes('使っていません') && note.includes('もう一度「日報を同期」'), `知らせの内容: ${note}`);
+  // もう一度同期すると、取り込める（知らせは消える）。B にも届く
+  await syncNow(a);
+  ok((await status(a)).includes('2 日分 128 個'), `A がもう一度同期したあと: ${await status(a)}`);
+  ok(!(await toggleText(a)).includes('同期できませんでした'), `知らせは消える: ${await toggleText(a)}`);
+  await until(() => status(b), (t) => t.includes('2 日分 128 個'), 8000);
+  eq(days(await syncedDoc('秋の花まつり', (p) => days(p)[0]?.[1] === 70)), [['2026-11-13', 70, 1], ['2026-11-14', 58, 1]], '共有データ');
+});
+
+add('R18', '2 台の同期が、ほぼ同時に終わったとき（守れない範囲）: どちらか一方の、欠けのない結果が残り、2 台の表示は同じ結果にそろう（2 つの結果が混ざらない）', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  await syncedDoc('秋の花まつり');
+  const B = await mk('B');
+  // B の日報は、会期の外の回答が 1 件多い（読んだ回答の数で、どちらの結果かを見分ける）
+  const sheetsB = await fakeSheets(B, { rows: [...twoDays(99), answer(serial('2026-12-01'), CENTER, 5)] });
+  const b = await openPage(B);
+  await signIn(b, 'b@example.com');
+  await openProject(b, '秋の花まつり');
+  sheets.rows = twoDays(70);
+  const releaseA = await startHeld(a, sheets);
+  const releaseB = await startHeld(b, sheetsB);
+  // 2 台の応答が、同時に届く（相手の結果は、まだどちらにも届いていない）
+  await Promise.all([releaseA(), releaseB()]);
+  await until(async () => [await busy(a), await busy(b)].join(''), (v) => v === '00', 10000);
+  await sleep(SETTLE_MS + 1500);
+  const doc = await projectDoc('秋の花まつり');
+  const got = JSON.stringify([days(doc), doc.reportSync.rowsRead, doc.reportSync.rowsUsed]);
+  const fromA = JSON.stringify([[['2026-11-13', 70, 1], ['2026-11-14', 58, 1]], 2, 2]);
+  const fromB = JSON.stringify([[['2026-11-13', 99, 1], ['2026-11-14', 58, 1]], 3, 2]);
+  ok(got === fromA || got === fromB, `共有データは、どちらか一方の結果そのもの: ${got}`);
+  const expected = got === fromA ? '2 日分 128 個（取り込み 2 件／読んだ回答 2 件）' : '2 日分 157 個（取り込み 2 件／読んだ回答 3 件）';
+  await until(() => status(a), (t) => t.includes(expected), 8000);
+  await until(() => status(b), (t) => t.includes(expected), 8000);
+  eq(await status(a), await status(b), '2 台の表示が、同じ結果にそろう');
+  eq([(await jcos(a)).actual, (await jcos(b)).actual], got === fromA ? [128, 128] : [157, 157], '2 台の実績');
+});
+
+add('R21', '同じ端末の別のタブ（共有データ）の同期の結果が先に届いていたら、あとから届いた自分の同期の結果で上書きしない（同期中の状態は、タブごと）', async ({ device: mk }) => {
+  const { A, a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  await syncedDoc('秋の花まつり');
+  // 同じ端末の 2 つ目のタブ（ログインの状態は、引き継がれる）
+  const t2 = await openPage(A);
+  await t2.waitForSelector('[data-testid="space"][data-space="shared"]', { timeout: 20000 });
+  await openProject(t2, '秋の花まつり');
+  // タブ 1: 同期の途中（直される前の日報〔11/13 = 70〕を読んだ応答が、止まっている）
+  sheets.rows = twoDays(70);
+  const release = await startHeld(a, sheets);
+  eq(await busy(t2), '0', 'タブ 2 は、同期中ではない');
+  // タブ 2: 直されたあとの日報（11/13 = 99）で同期して、結果が共有データに保存される。タブ 1 にも届く
+  sheets.rows = twoDays(99);
+  await syncNow(t2);
+  const theirs = await syncedDoc('秋の花まつり', (p) => days(p)[0]?.[1] === 99);
+  eq(await until(() => status(a), (t) => t.includes('2 日分 157 個'), 8000).then((t) => t.includes('2 日分 157 個')), true, 'タブ 1 に、タブ 2 の結果が届くこと');
+  eq(await busy(a), '1', 'タブ 1 は、まだ同期中');
+  // タブ 1 の応答が、あとから届く
+  await release();
+  eq(await until(() => busy(a), (v) => v === '0', 10000), '0', 'タブ 1 の同期が終わること');
+  await sleep(SETTLE_MS);
+  ok((await status(a)).includes('2 日分 157 個'), `タブ 1 の表示（タブ 2 の結果のまま）: ${await status(a)}`);
+  eq(written(await projectDoc('秋の花まつり')), written(theirs), '共有データ（タブ 2 の結果のまま）');
+  ok((await toggleText(a)).includes('同期できませんでした'), `タブ 1 に、知らせが出る: ${await toggleText(a)}`);
+  ok(!(await toggleText(t2)).includes('同期できませんでした'), `タブ 2 には、出ない: ${await toggleText(t2)}`);
+});
+
+add('R22', '端末に失敗の記録を置けないとき（保存領域がいっぱい、など）でも、同期の失敗は画面に出る。案件を開き直しても出て、次に成功すると消える', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  // 失敗の記録の保存だけを、失敗させる
+  await a.evaluate(() => {
+    const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function setItem(k, v) {
+      if (k === 'kkl_report_error_v1') throw new DOMException('quota exceeded', 'QuotaExceededError');
+      return set.call(this, k, v);
+    };
+  });
+  const stored = () => a.evaluate(() => localStorage.getItem('kkl_report_error_v1'));
+  const before = await stored();
+  sheets.fail = 'network';
+  await syncNow(a);
+  eq(await stored(), before, '端末の記録（保存できていないこと）');
+  ok((await toggleText(a)).includes('同期できませんでした'), `失敗が出る: ${await toggleText(a)}`);
+  ok((await a.locator('[data-testid="report-error"]').innerText()).includes('そのまま残しています'), '失敗の内容（前回の実績を残していること）');
+  await a.getByRole('button', { name: '← 案件一覧' }).click();
+  await openProject(a, '秋の花まつり');
+  ok((await toggleText(a)).includes('同期できませんでした'), `開き直しても、失敗が出る: ${await toggleText(a)}`);
+  sheets.fail = null;
+  await syncNow(a);
+  ok(!(await toggleText(a)).includes('同期できませんでした'), `成功すると消える: ${await toggleText(a)}`);
+  ok((await status(a)).includes('2 日分 120 個'), `同期の表示: ${await status(a)}`);
+});
+
+add('R20', '同期の途中でログアウトしたとき、あとから届いた結果は、共有データにも、送信待ちの控えにも書かれない（次のログインで「前回の残り」として扱われない）。保存できなかったことは、同期の欄に出る', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  const first = await syncedDoc('秋の花まつり');
+  const outbox = () => a.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kkl_outbox')).length);
+  await until(outbox, (n) => n === 0, 8000);                    // 最初の同期の結果は、送り終わっている
+  // 同期の途中（応答が止まっている）で、ログアウトする。そのあとで、応答が届く
+  sheets.rows = twoDays(70);
+  const release = await startHeld(a, sheets);
+  await signOut(a);
+  await release();
+  await sleep(SETTLE_MS);
+  eq(written(await projectDoc('秋の花まつり')), written(first), 'ログアウトのあとに届いた結果は、共有データに書かれない');
+  eq(await outbox(), 0, '送信待ちの控えにも入らない');
+  // もう一度ログインしても、何も送られず、控えの案件もできない
+  await signIn(a, 'a@example.com');
+  await sleep(4000);
+  eq(written(await projectDoc('秋の花まつり')), written(first), '次のログインのあとも、共有データは変わらない');
+  eq((await notices(a)).filter((t) => t.includes('控え') || t.includes('前回')), [], '「前回の残り」のお知らせ（出ないこと）');
+  await openProject(a, '秋の花まつり');
+  ok((await status(a)).includes('2 日分 120 個'), `実績は、前回のまま: ${await status(a)}`);
+  ok((await toggleText(a)).includes('同期できませんでした'), `保存できなかったことが出る: ${await toggleText(a)}`);
+  ok((await detail(a)).includes('同期の結果を保存できませんでした'), `知らせの内容: ${await detail(a)}`);
+  // もう一度同期すると、取り込める
+  await a.evaluate((t) => { window.__kkl.sheetsToken = () => t; }, TOKEN);
+  await syncNow(a);
+  ok((await status(a)).includes('2 日分 128 個'), `もう一度同期したあと: ${await status(a)}`);
+  ok(!(await toggleText(a)).includes('同期できませんでした'), `知らせは消える: ${await toggleText(a)}`);
+});
+
+// ── 実機での確認を、安全に行うための前提 ──────────────────────────
+add('R19', '実機確認の安全策: 現在のルールが許可していないチーム名（VITE_TEAM_ID）でビルドしたアプリは、ログインしても共有データを読めず、書けない。「この端末だけのデータ」では日報を同期でき、Firestore には 1 件も書かれない', async ({ device: mk }) => {
+  const OTHER = 'kkl-preview-check';
+  const app = await startApp({ env: { VITE_TEAM_ID: OTHER } });
+  try {
+    const P = await mk('P', app.url);
+    const sheets = await fakeSheets(P, { rows: [answer(serial('2026-11-13'), 'ラソラ札幌', 81), answer(serial('2026-11-14'), 'ラソラ札幌', 64)] });
+    const p = await openPage(P);
+    // ログインすると、共有データは「表示できません」になる（使い始める・移行するためのボタンは出ない）
+    await signIn(p, 'a@example.com', { expectPhase: 'unregistered' });
+    const panel = (await p.locator('[data-testid="shared-phase"]').innerText()).replace(/\s+/g, ' ');
+    ok(panel.includes('共有データは表示できません') && panel.includes('「この端末だけのデータ」は、これまでどおり使えます'), `ログイン直後の表示: ${panel}`);
+    eq(await p.locator('[data-testid="shared-phase"] button').allInnerTexts(), ['「この端末だけのデータ」を表示する', '登録されたので、もう一度確認する'], '押せるボタン');
+    await p.getByRole('button', { name: '登録されたので、もう一度確認する' }).click();
+    await sleep(1500);
+    eq(await p.locator('[data-testid="space"]').getAttribute('data-phase'), 'unregistered', 'もう一度確認しても、共有データは使えないまま');
+    // 「この端末だけのデータ」で、案件を用意して、日報を同期する
+    await p.getByRole('button', { name: '「この端末だけのデータ」を表示する' }).click();
+    await p.waitForSelector('[data-testid="space"][data-space="local"]');
+    await loadSample(p);
+    await openProject(p, 'ikyu');
+    await p.locator('[data-testid="calc-mode"] button', { hasText: 'JCOS案件' }).click();
+    await syncNow(p, SHEET_URL);
+    ok((await status(p)).includes('2 日分 145 個'), `同期後の表示: ${await status(p)}`);
+    eq((await jcos(p)).actual, 145, '実績（81 ＋ 64）');
+    eq(sheets.calls.length, 3, '日報への問い合わせの数');
+    // 案件一覧の「共有へコピー」を押しても、共有データには書かれない（共有データを使える状態ではないため、何も起きない）
+    await p.getByRole('button', { name: '← 案件一覧' }).click();
+    await p.getByRole('button', { name: '共有へコピー' }).first().click();
+    await sleep(2500);
+    // Firestore には、本番と同じチーム名の下にも、このチーム名の下にも、1 件も無い
+    const counts = {};
+    for (const team of [TEAM, OTHER]) {
+      for (const c of [...V3_COLLS, ...LEGACY_COLLS, 'members', 'wsRulesProbe']) {
+        const n = (await admin.list(`teams/${team}/${c}`)).length;
+        if (n > 0) counts[`teams/${team}/${c}`] = n;
+      }
+    }
+    eq(counts, {}, 'Firestore に書かれたドキュメント');
+  } finally {
+    app.stop();
+  }
 });
 
 await runFile('日報の同期（Version 4）');

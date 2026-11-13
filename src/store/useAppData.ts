@@ -78,6 +78,11 @@ export interface AppStore {
   setMaster: <K extends MasterKey>(key: K, items: AppData[K]) => void;
   addProject: (p: Project) => void;
   updateProject: (id: string, fn: (p: Project) => Project) => void;
+  /**
+   * 表示している置き場所の、いまの案件（画面の描画を待たずに読む。無ければ undefined）。
+   * あとから届く処理（日報の同期など）の結果を書く前に、案件が変わっていないかを確かめるために使う
+   */
+  getProject: (id: string) => Project | undefined;
   removeProject: (id: string) => void;
   /** 「この端末だけのデータ」を丸ごと置き換える（サンプル読込・バックアップ復元）。共有データには触れない */
   replaceLocal: (d: AppData) => void;
@@ -122,6 +127,9 @@ export function useAppData(): AppStore {
   const setSpace = useCallback((s: Space) => { setPref(s); saveJson(SPACE_KEY, s); }, []);
 
   // ── 共有データのセッション（ログインしているアカウントごと） ──
+  // いま動いているセッション（始めてから、止めるまで）。止めたセッションは、最後に表示していた内容を持ったまま残るので、
+  // あとから届いた処理の結果を、そこへ書かないようにするために見分ける（getProject）
+  const alive = useRef<SharedSession | null>(null);
   const hooks = useRef<SessionHooks>(null as unknown as SessionHooks);
   hooks.current = {
     // 共有に反映できなかった案件を、参照している会場・コンテンツ・スタッフ・パーツごと、この端末に控えとして残す
@@ -153,7 +161,8 @@ export function useAppData(): AppStore {
     });
     setSession(s);
     s.start();
-    return () => s.stop();
+    alive.current = s;
+    return () => { alive.current = null; s.stop(); };
   }, [uid, email, displayName, loading]);
 
   // ログインした瞬間は、共有データを表示する（再読み込みでログイン状態が戻っただけのときは、前回の選択のまま）
@@ -195,6 +204,21 @@ export function useAppData(): AppStore {
   const updateProject = useCallback((id: string, fn: (p: Project) => Project) => {
     if (space === 'shared') session?.updateProject(id, fn);
     else setLocal((d) => ({ ...d, projects: d.projects.map((p) => (p.id === id ? { ...fn(p), updatedAt: Date.now() } : p)) }));
+  }, [space, session]);
+
+  // 置き場所にある、いまの案件（画面の描画を待たずに読む）。あとから届いた処理（日報の同期など）の結果を書く前に、
+  // 案件が、処理を始めたときから変わっていないかを確かめるために使う。古い画面が持っている関数から呼んでも、いまの内容が返る
+  const localNow = useRef(local);
+  localNow.current = local;
+  const getProject = useCallback((id: string): Project | undefined => {
+    if (space === 'shared') {
+      // ログアウト・アカウントの切り替えのあとで、以前の画面が持っている関数から呼ばれたときは、読めない扱いにする
+      // （止めたセッションへ書くと、送信待ちの控えに入り、次のログインのときに「前回の残り」として扱われてしまう）
+      if (!session || alive.current !== session) return undefined;
+      const v = session.getView();
+      return v.phase === 'ready' ? v.data.projects.find((p) => p.id === id) : undefined;
+    }
+    return localNow.current.projects.find((p) => p.id === id);
   }, [space, session]);
 
   const removeProject = useCallback((id: string) => {
@@ -246,7 +270,7 @@ export function useAppData(): AppStore {
 
   return useMemo(() => ({
     space, setSpace, canShare, data, usable, local, shared, session, notices, notify, dismissNotice,
-    setMaster, addProject, updateProject, removeProject, replaceLocal, copyProject, beforeSignOut, discardUnsent: discard,
+    setMaster, addProject, updateProject, getProject, removeProject, replaceLocal, copyProject, beforeSignOut, discardUnsent: discard,
   }), [space, setSpace, canShare, data, usable, local, shared, session, notices, notify, dismissNotice,
-    setMaster, addProject, updateProject, removeProject, replaceLocal, copyProject, beforeSignOut, discard]);
+    setMaster, addProject, updateProject, getProject, removeProject, replaceLocal, copyProject, beforeSignOut, discard]);
 }

@@ -14,8 +14,8 @@ export interface SyncDeps {
   rows: (source: ReportSource, token: string) => Promise<RawReportRow[]>;
   /** いまの時刻（ISO 8601） */
   now: () => string;
-  /** 認証が無効だったときに、覚えている認証を捨てる */
-  forget: () => void;
+  /** 認証が無効だったときに、覚えている認証を捨てる。token は、無効だった認証（覚えているものが、それと同じときだけ捨てる） */
+  forget: (token: string) => void;
 }
 
 export interface SyncInput {
@@ -46,7 +46,8 @@ export async function runReportSync({ project, projects, venues, source }: SyncI
     try {
       rows = await deps.rows(source, token);
     } catch (e) {
-      if (e instanceof ReportError && (e.code === 'auth-expired' || e.code === 'no-scope')) deps.forget();
+      // 無効だったのは、この同期が使った認証。あとから届いた古い同期の失敗で、新しく得た認証を捨てないよう、どの認証かを渡す
+      if (e instanceof ReportError && (e.code === 'auth-expired' || e.code === 'no-scope')) deps.forget(token);
       throw e;
     }
     const plan = planReportSync({ project, projects, venues, rows, now: deps.now() });

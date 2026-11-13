@@ -199,6 +199,7 @@ export default function App() {
         {tab === 'projects' && open && (
           <ProjectView
             project={open} data={data} onBack={() => setOpenId(null)}
+            space={space} current={() => store.getProject(open.id)}
             onChange={(fn) => store.updateProject(open.id, fn)}
             onSaveVenueTemplate={(venueId, p) => setMaster('venues', data.venues.map((v) => (v.id === venueId
               ? { ...v, template: { ...v.template, width: p.layout.width, height: p.layout.height, env: p.layout.env.map((e) => ({ ...e, id: genId() })) } }

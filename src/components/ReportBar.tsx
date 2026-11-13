@@ -2,19 +2,26 @@
 // 「日報を同期」を 1 回押すと、認証 → 必要な列だけ取得 → 会場＋会期で照合 → 日別の実績を丸ごと置き換える。
 // 失敗したときは、案件のデータに触れない（前回の実績が残る）。流れそのものは report/sync.ts。
 // 日報に読み取れない回答があるときも、取り込まずに止めて、どの回答のどの項目かを示す。
-import { useEffect, useRef, useState } from 'react';
+// 「同期中か」は、この部品の外（report/syncJob.ts）に置く。案件の画面を閉じて開き直しても、同期中のままに見え、
+// 同じ案件の同期が重なって、古い結果が新しい実績を上書きすることがない。
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { contestedReportDays, findReportSource, parseSheetUrl, rivalClaimedDates, syncStaleness, unmatchedGaps, usableReportDays } from '../domain/report';
 import { shortDate } from '../domain/util';
 import { isFirebaseConfigured } from '../firebase';
 import { forgetSheetsToken, requestSheetsToken } from '../report/googleToken';
 import { fetchReportRows } from '../report/sheets';
-import { SyncFailure, applySync, failureIsCurrent, failureOf, hydrateFailure, runReportSync } from '../report/sync';
+import { SyncFailure, failureIsCurrent, hydrateFailure } from '../report/sync';
+import { abandonSync, isSyncRunning, startSyncJob, subscribeSyncJobs, syncJobsVersion, syncKey, syncRunningSince } from '../report/syncJob';
 import { AppData, Project, ReportSkipReason, ReportSource, ReportSync, Venue } from '../types';
 
 interface Props {
   project: Project;
   data: AppData;
+  /** 案件の置き場所（共有データか、この端末だけのデータか） */
+  scope: 'shared' | 'local';
+  /** 同じ置き場所の、いまの案件（画面の描画を待たずに読む。あとから届いた同期の結果を書く前に、変わっていないかを確かめる） */
+  current: () => Project | undefined;
   onChange: (fn: (p: Project) => Project) => void;
   /** 会場に「日報での会場名（別名）」を足す */
   onAddVenueAlias: (venueId: string, name: string) => void;
@@ -31,8 +38,20 @@ function loadMap(key: string): Record<string, unknown> {
   const v = load<unknown>(key, null);
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
-/** この案件の、最後の失敗の記録 */
-const lastFailure = (projectId: string): SyncFailure | null => hydrateFailure(loadMap(ERROR_KEY)[projectId]);
+// このタブで記録した失敗。端末にも置くが、置けなかったとき（保存領域がいっぱい・保存できない設定）でも、
+// このタブでは表示できるように、メモリにも持つ（失敗したのに、何も表示されない、を防ぐ）
+const recent = new Map<string, SyncFailure | null>();
+/** この案件（key ＝ 置き場所 ＋ 案件の ID）の、最後の失敗の記録 */
+const lastFailure = (key: string): SyncFailure | null => (recent.has(key) ? recent.get(key) ?? null : hydrateFailure(loadMap(ERROR_KEY)[key]));
+/** 失敗の記録を、このタブのメモリと、端末に置く（null … 消す） */
+function recordFailure(key: string, f: SyncFailure | null): void {
+  recent.set(key, f);
+  const all = loadMap(ERROR_KEY);
+  if (f) all[key] = f; else delete all[key];
+  save(ERROR_KEY, all);
+}
+/** 同期を始めてから、「同期をやめる」を出すまでの時間（ふつうの同期は、数秒で終わる） */
+const SLOW_MS = 4000;
 function save(key: string, value: unknown): void {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 保存できなくても、同期そのものには影響しない */ }
 }
@@ -54,22 +73,42 @@ const dates = (ds: string[]): string => ds.map(shortDate).join('・');
 /** 確認が必要なものの数（保留の日・読み取れない回答・実績の無い日にある、別の会場名の回答） */
 const attention = (s: ReportSync | undefined): number => (s ? s.held.length + s.skipped.length + unmatchedGaps(s).length : 0);
 
-export default function ReportBar({ project: p, data, onChange, onAddVenueAlias }: Props) {
+export default function ReportBar({ project: p, data, scope, current, onChange, onAddVenueAlias }: Props) {
   const { user } = useAuth();
-  const [busy, setBusy] = useState(false);
+  const key = syncKey(scope, p.id);
+  // 同期の状態は、この部品の外にある。同期が始まった・終わった・やめたときに、読み直す
+  const jobs = useSyncExternalStore(subscribeSyncJobs, syncJobsVersion);
+  // この案件の同期が動いているか。この画面を開く前に始めた同期（案件を閉じて、開き直した）も含む
+  const busy = isSyncRunning(key);
+  // 最後の失敗の記録（端末に置いてある）。同期が終わるたびに読み直すので、開き直した画面にも、同期の結果が出る
+  const recorded = useMemo(() => lastFailure(key), [key, jobs]);
   const [open, setOpen] = useState(false);
-  const [recorded, setFailure] = useState<SyncFailure | null>(() => lastFailure(p.id));
   const [editing, setEditing] = useState(false);
   const [url, setUrl] = useState('');
   const [urlError, setUrlError] = useState('');
-  useEffect(() => { setFailure(lastFailure(p.id)); }, [p.id]);
+  const [slow, setSlow] = useState(false);
 
   const sync = p.reportSync;
   // 失敗の記録は、そのあとで同期の結果が新しくなっていたら（ほかの端末で同期が成功した）、出さない
   const failure = recorded && failureIsCurrent(recorded, sync?.at) ? recorded : null;
-  // いまの同期の結果の日時（同期の完了は、あとから届く。失敗を記録するときに、その時点の値を使う）
-  const syncAt = useRef('');
-  syncAt.current = sync?.at ?? '';
+  // 同期が失敗で終わったら、内容を開いて見せる（この画面を開く前に始めた同期を含む）。
+  // 同期の前から出ていた失敗のままなら、開かない（同期をやめたときに、前の失敗を、いまの同期の結果のように見せない）
+  const wasBusy = useRef(false);
+  const shownBefore = useRef<string | undefined>(undefined);
+  const failedAt = failure?.at;
+  useEffect(() => {
+    if (busy && !wasBusy.current) shownBefore.current = failedAt;
+    if (!busy && wasBusy.current && failedAt && failedAt !== shownBefore.current) setOpen(true);
+    wasBusy.current = busy;
+  }, [busy, failedAt]);
+  // 同期が長引いているときだけ、「同期をやめる」を出す。時間は、同期を始めたときから数える（画面を開き直しても、数え直さない）
+  useEffect(() => {
+    if (!busy) { setSlow(false); return undefined; }
+    const wait = SLOW_MS - (Date.now() - (syncRunningSince(key) ?? Date.now()));
+    if (wait <= 0) { setSlow(true); return undefined; }
+    const t = setTimeout(() => setSlow(true), wait);
+    return () => clearTimeout(t);
+  }, [busy, key]);
   const stale = syncStaleness(p, data);
   const venue = data.venues.find((v) => v.id === p.venueId);
   const known = findReportSource(p, data.projects) ?? load<ReportSource | null>(SOURCE_KEY, null);
@@ -117,39 +156,41 @@ export default function ReportBar({ project: p, data, onChange, onAddVenueAlias 
    */
   const claimable = (hs: { date: string }[]) => (cancelled ? [] : hs.map((h) => h.date).filter((d) => !claimed.has(d) && !theirClaims.has(d)));
 
-  const remember = (f: SyncFailure | null) => {
-    setFailure(f);
-    const all = loadMap(ERROR_KEY);
-    if (f) all[p.id] = f; else delete all[p.id];
-    save(ERROR_KEY, all);
-  };
-
-  /** 同期する。project・venues・source は、直前の操作（別名の登録・割り当ての決定）を反映したものを渡せる */
+  /**
+   * 同期する。project・venues・source は、直前の操作（別名の登録・割り当ての決定）を反映したものを渡せる。
+   * この案件の同期が動いている間は、始めない。結果を書くのは、最後に始めた同期だけ（report/syncJob.ts）。
+   * 同期の完了は、あとから届く。そのとき、この画面が閉じられていても、端末に置く記録と案件への書き込みは行う
+   * （画面の状態を変える setOpen などは、閉じた画面には効かない。開き直した画面は、記録を読み直す）。
+   */
   const run = (opt: { project?: Project; venues?: Venue[]; source?: ReportSource | null } = {}) => {
-    if (busy) return;
     const project = opt.project ?? p;
     const source = opt.source ?? known;
-    setBusy(true);
-    // runReportSync は、最初に（何も待たずに）認証を呼ぶ。ここはボタンのタップの中なので、Google の画面が止められない
-    void runReportSync(
+    // startSyncJob は、最初に（何も待たずに）認証を呼ぶ。ここはボタンのタップの中なので、Google の画面が止められない
+    void startSyncJob(
+      key,
       { project, projects: data.projects.map((x) => (x.id === project.id ? project : x)), venues: opt.venues ?? data.venues, source },
       { token: requestSheetsToken, rows: fetchReportRows, now: () => new Date().toISOString(), forget: forgetSheetsToken },
-    ).then((out) => {
-      if (out.ok) {
-        onChange((cur) => applySync(cur, out));        // 実績を丸ごと置き換える（成功したときだけ）
-        save(SOURCE_KEY, out.source);
-        remember(null);
-        setEditing(false);
-        setUrl('');
-        setOpen(attention(out.sync) > 0);
-      } else {
-        // 案件のデータには触れない（読み取れない回答があるときも、何も取り込まない）
-        remember(failureOf(out, new Date().toISOString(), syncAt.current));
-        // 読み取れない回答で止めたときは、日報そのものは読めている。場所だけは、この端末に覚えておく（直したあとで、URL を貼り直さずに同期できるように）
-        if (out.code === 'bad-rows' && source?.spreadsheetId) save(SOURCE_KEY, source);
-        setOpen(true);
-      }
-    }).finally(() => setBusy(false));
+      {
+        current,
+        update: onChange,                              // 実績を丸ごと置き換える（成功して、結果を書けるときだけ呼ばれる）
+        settled: (r) => {
+          if (r.kind === 'dropped') return;            // このあとに始めた同期がある・やめた … 何も残さない
+          if (r.kind === 'applied') {
+            save(SOURCE_KEY, r.outcome.source);
+            recordFailure(key, null);
+            setEditing(false);
+            setUrl('');
+            setOpen(attention(r.outcome.sync) > 0);
+          } else {
+            // 案件のデータには触れていない（読み取れない回答があるときも、何も取り込まない）
+            recordFailure(key, r.failure);
+            // 読み取れない回答で止めたときは、日報そのものは読めている。場所だけは、この端末に覚えておく（直したあとで、URL を貼り直さずに同期できるように）
+            if (r.code === 'bad-rows' && source?.spreadsheetId) save(SOURCE_KEY, source);
+            setOpen(true);                             // 開き直した画面では、上の useEffect が開く
+          }
+        },
+      },
+    );
   };
 
   const start = () => {
@@ -160,6 +201,7 @@ export default function ReportBar({ project: p, data, onChange, onAddVenueAlias 
     run({ source: src });
   };
   const claim = (ds: string[]) => {
+    if (isSyncRunning(key)) return;                    // 同期中は、決定を変えない（決定だけが保存されて、同期が始まらないのを防ぐ）
     const next = [...new Set([...(p.reportClaims ?? []), ...ds])].sort();
     onChange((cur) => ({ ...cur, reportClaims: next }));
     run({ project: { ...p, reportClaims: next } });
@@ -167,12 +209,13 @@ export default function ReportBar({ project: p, data, onChange, onAddVenueAlias 
   // 決定を取り消す。取り消した日の実績は、その場で使わなくなる（保存してある実績は、使うたびに、いまの決定と照らすため。
   // このあとの同期が失敗しても、同じ回答が相手の案件と二重に数えられることはない）。続けて同期し直して、表示を最新にする
   const unclaim = (d: string) => {
+    if (isSyncRunning(key)) return;
     const next = (p.reportClaims ?? []).filter((x) => x !== d);
     onChange((cur) => ({ ...cur, reportClaims: next }));
     run({ project: { ...p, reportClaims: next } });
   };
   const addAlias = (name: string) => {
-    if (!venue) return;
+    if (!venue || isSyncRunning(key)) return;
     onAddVenueAlias(venue.id, name);
     const names = [...new Set([...(venue.reportNames ?? []), name])];
     run({ venues: data.venues.map((v) => (v.id === venue.id ? { ...v, reportNames: names } : v)) });
@@ -200,12 +243,19 @@ export default function ReportBar({ project: p, data, onChange, onAddVenueAlias 
     <div className={`reportbar${failure ? ' reportbar--error' : notes > 0 ? ' reportbar--warn' : ''}`} data-testid="report-bar" data-busy={busy ? '1' : '0'}>
       <div className="reportbar__main">
         <button className="primary" onClick={start} disabled={busy || !canSync} data-testid="report-sync">{busy ? '同期中…' : '日報を同期'}</button>
+        {busy && slow && <button onClick={() => abandonSync(key)} data-testid="report-stop">同期をやめる</button>}
         <span className="reportbar__status" data-testid="report-status">{summary}</span>
         <button className="reportbar__more" onClick={() => setOpen((v) => !v)} data-testid="report-toggle">
           {failure ? '✕ 同期できませんでした' : notes > 0 ? `⚠ 確認 ${notes} 件` : '詳細'} {open ? '▲' : '▼'}
         </button>
       </div>
 
+      {busy && slow && (
+        <p className="reportbar__hint" data-testid="report-slow">
+          同期に時間がかかっています。Google の確認画面が開いたままのときは、そちらを先に済ませてください。
+          「同期をやめる」を押すと、この同期の結果は、あとから届いても使いません（実績は前回のままです）。
+        </p>
+      )}
       {!canSync && (
         <p className="reportbar__hint" data-testid="report-login">
           日報の同期には、Google でのログインが必要です（画面右上）。ログインしなくても、試算の「日別」の表に実績個数を手入力できます。
