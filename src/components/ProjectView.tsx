@@ -50,7 +50,8 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
   // JCOS 案件（請求と実費を分ける収支）。それ以外は、従来の汎用の試算
   const jcosOn = isJcos(p);
   const phone = useMediaQuery(PHONE);
-  const j = useMemo(() => (jcosOn ? jcosEstimate(p) : null), [jcosOn, p]);
+  // いまの案件と会場の一覧も渡す（同じ会場で会期が重なる案件があるとき、同じ日報の回答を 2 つの案件で数えないため）
+  const j = useMemo(() => (jcosOn ? jcosEstimate(p, data) : null), [jcosOn, p, data]);
   const profit = j ? j.current.gross : est.profit;
   const venue = data.venues.find((v) => v.id === p.venueId);
   const dates = useMemo(() => listDates(p.startDate, p.endDate), [p.startDate, p.endDate]);

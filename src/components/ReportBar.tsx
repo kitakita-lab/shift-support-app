@@ -3,7 +3,7 @@
 // 失敗したときは、案件のデータに触れない（前回の実績が残る）。流れそのものは report/sync.ts。
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { findReportSource, parseSheetUrl, syncStaleness, unmatchedGaps } from '../domain/report';
+import { contestedReportDays, findReportSource, parseSheetUrl, syncStaleness, unmatchedGaps, usableReportDays } from '../domain/report';
 import { shortDate } from '../domain/util';
 import { isFirebaseConfigured } from '../firebase';
 import { forgetSheetsToken, requestSheetsToken } from '../report/googleToken';
@@ -57,14 +57,33 @@ export default function ReportBar({ project: p, data, onChange, onAddVenueAlias 
   useEffect(() => { setFailure(load<Record<string, Failure>>(ERROR_KEY, {})[p.id] ?? null); }, [p.id]);
 
   const sync = p.reportSync;
-  const stale = syncStaleness(p);
+  const stale = syncStaleness(p, data);
   const venue = data.venues.find((v) => v.id === p.venueId);
   const known = findReportSource(p, data.projects) ?? load<ReportSource | null>(SOURCE_KEY, null);
   const canSync = isFirebaseConfigured && !!user;
   const needsSource = !known?.spreadsheetId || editing;
   const total = sync ? sync.days.reduce((s, d) => s + d.count, 0) : 0;
   const gaps = unmatchedGaps(sync);
-  const notes = attention(sync) + (stale.venue || stale.period ? 1 : 0) + (failure ? 1 : 0);
+  // 同期した実績のうち、いまは使っていない日（同期のあとで、会期が重なる案件が増えた・決定が変わった）
+  const contested = contestedReportDays(p, data);
+  // この案件が「自分の実績にする」と決めている日。決めているのに使えていない日は、相手の案件も同じ日を決めている
+  const claimed = new Set(p.reportClaims ?? []);
+  const undecided = contested.filter((h) => h.state === 'held');
+  const assigned = contested.filter((h) => h.state === 'theirs');
+  const notes = attention(sync) + undecided.length + (stale.venue || stale.period || stale.names ? 1 : 0) + (failure ? 1 : 0);
+  /** 保留の日の一覧（両方の案件が決めている日には、その旨を添える） */
+  const heldList = (hs: { date: string; count: number; rows: number; others: string[] }[]) => (
+    <ul className="plain">
+      {hs.map((h) => (
+        <li key={h.date}>
+          {shortDate(h.date)}：{h.count} 個（{h.rows} 件）／重なっている案件：{h.others.map((n) => `「${n}」`).join('')}
+          {claimed.has(h.date) && '（この案件も相手の案件も、この日を自分の実績と決めています。どちらかの案件で、決定を取り消してください）'}
+        </li>
+      ))}
+    </ul>
+  );
+  /** まだこの案件が決めていない日（＝「この案件の実績にする」を押せる日） */
+  const claimable = (hs: { date: string }[]) => hs.map((h) => h.date).filter((d) => !claimed.has(d));
 
   const remember = (f: Failure | null) => {
     setFailure(f);
@@ -109,7 +128,8 @@ export default function ReportBar({ project: p, data, onChange, onAddVenueAlias 
     onChange((cur) => ({ ...cur, reportClaims: next }));
     run({ project: { ...p, reportClaims: next } });
   };
-  // 決定を取り消す。取り込み済みの実績をそのままにしないよう、続けて同期し直す（その日は、また保留に戻る）
+  // 決定を取り消す。取り消した日の実績は、その場で使わなくなる（保存してある実績は、使うたびに、いまの決定と照らすため。
+  // このあとの同期が失敗しても、同じ回答が相手の案件と二重に数えられることはない）。続けて同期し直して、表示を最新にする
   const unclaim = (d: string) => {
     const next = (p.reportClaims ?? []).filter((x) => x !== d);
     onChange((cur) => ({ ...cur, reportClaims: next }));
@@ -122,8 +142,11 @@ export default function ReportBar({ project: p, data, onChange, onAddVenueAlias 
     run({ venues: data.venues.map((v) => (v.id === venue.id ? { ...v, reportNames: names } : v)) });
   };
 
+  // 同期した実績のうち、いまは使っていない日数（会場・会期・会場名を変えた／会期が重なる案件があって、この案件のものと決まっていない）
+  const usable = usableReportDays(p, data);
+  const unused = sync ? sync.days.filter((d) => !usable.has(d.date)).length : 0;
   const summary = sync
-    ? `最終同期 ${stamp(sync.at)}・${sync.days.length} 日分 ${total} 個（取り込み ${sync.rowsUsed} 件／読んだ回答 ${sync.rowsRead} 件）`
+    ? `最終同期 ${stamp(sync.at)}・${sync.days.length} 日分 ${total} 個（取り込み ${sync.rowsUsed} 件／読んだ回答 ${sync.rowsRead} 件）${unused > 0 ? `／うち ${unused} 日分は、いまは使っていません` : ''}`
     : 'まだ同期していません';
 
   // ログインしていなくて、同期の記録も無いときは、1 行の案内だけにする（画面を取らない）
@@ -171,8 +194,12 @@ export default function ReportBar({ project: p, data, onChange, onAddVenueAlias 
               {sync ? `（前回 ${stamp(sync.at)} の実績 ${sync.days.length} 日分・${total} 個は、そのまま残しています）` : ''}
             </p>
           )}
-          {(stale.venue || stale.period) && (
-            <p data-testid="report-stale">⚠ 同期のあとで、案件の{stale.venue ? '会場' : '会期'}が変わっています。{stale.venue ? '同期した実績は使っていません。' : '会期内の日の実績だけを使っています。'}もう一度「日報を同期」を押してください。</p>
+          {(stale.venue || stale.period || stale.names) && (
+            <p data-testid="report-stale">
+              ⚠ 同期のあとで、{stale.venue ? '案件の会場' : stale.names ? '会場名または別名' : '案件の会期'}が変わっています。
+              {stale.venue ? '同期した実績は使っていません。' : stale.names ? '変わった名前で取り込んだ日の実績は使っていません。' : '会期内の日の実績だけを使っています。'}
+              もう一度「日報を同期」を押してください。
+            </p>
           )}
           {sync && (
             <>
@@ -185,11 +212,28 @@ export default function ReportBar({ project: p, data, onChange, onAddVenueAlias 
               ) : (
                 <p data-testid="report-days">この会場・会期に一致する回答は、まだありません（読んだ回答 {sync.rowsRead} 件）。</p>
               )}
+              {undecided.length > 0 && (
+                <div className="reportbar__item" data-testid="report-contested">
+                  <p>⚠ 同期した実績のうち、次の日は、同じ会場で会期が重なる別の案件があり、どちらの実績か決まっていないため、<b>いまは使っていません</b>：</p>
+                  {heldList(undecided)}
+                  {claimable(undecided).length > 0 && (
+                    <button onClick={() => claim(claimable(undecided))} disabled={busy || !canSync} data-testid="report-claim-contested">この {claimable(undecided).length} 日を、この案件の実績にする</button>
+                  )}
+                </div>
+              )}
+              {assigned.length > 0 && (
+                <div className="reportbar__item" data-testid="report-assigned">
+                  <p>同期した実績のうち、次の日は、<b>別の案件の実績として割り当て済み</b>のため、いまは使っていません（もう一度同期すると、同期の結果からも外れます）：</p>
+                  {heldList(assigned)}
+                </div>
+              )}
               {sync.held.length > 0 && (
                 <div className="reportbar__item" data-testid="report-held">
                   <p>⚠ 次の日は、同じ会場で会期が重なる別の案件があり、どちらの実績か決められないため、<b>取り込んでいません</b>：</p>
-                  <ul className="plain">{sync.held.map((h) => <li key={h.date}>{shortDate(h.date)}：{h.count} 個（{h.rows} 件）／重なっている案件：{h.others.map((n) => `「${n}」`).join('')}</li>)}</ul>
-                  <button onClick={() => claim(sync.held.map((h) => h.date))} disabled={busy || !canSync} data-testid="report-claim">この {sync.held.length} 日を、この案件の実績として取り込む</button>
+                  {heldList(sync.held)}
+                  {claimable(sync.held).length > 0 && (
+                    <button onClick={() => claim(claimable(sync.held))} disabled={busy || !canSync} data-testid="report-claim">この {claimable(sync.held).length} 日を、この案件の実績として取り込む</button>
+                  )}
                 </div>
               )}
               {sync.unmatched.length > 0 && (

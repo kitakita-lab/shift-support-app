@@ -4,9 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { Project, ReportSync, Venue } from '../types';
 import { emptyLayout } from './layout';
 import {
-  RawReportRow, columnLetter, findReportColumns, findReportSource, isBlankRow, isTestRow, parseReportCount, parseReportDate, parseSheetUrl,
-  planReportSync, reportVenue, syncStaleness, unmatchedGaps, usableReportDays, venueKey, venueKeys,
+  RawReportRow, columnLetter, contestedReportDays, findReportColumns, findReportSource, hydrateReportSync, isBlankRow, isTestRow, parseReportCount,
+  parseReportDate, parseSheetUrl, planReportSync, reportVenue, syncStaleness, unmatchedGaps, usableReportDays, venueKey, venueKeys,
 } from './report';
+import { rng } from './testkit';
 import { mkProject } from './testkit';
 
 // ── テスト用の部品 ───────────────────────────────────────────
@@ -373,6 +374,170 @@ describe('どの案件の実績か決められないときは、取り込まず�
   });
 });
 
+describe('保存してある実績は、使うたびに、いまの状況と照らす（同じ回答を 2 つの案件で数えない）', () => {
+  // 同じ会場で、11/14・11/15 が重なる 2 つの案件
+  const A = mkProject({ id: 'pa', name: '秋の花まつり', venueId: 'v-center', startDate: '2026-11-13', endDate: '2026-11-15' });
+  const B = mkProject({ id: 'pb', name: '週末フェア', venueId: 'v-center', startDate: '2026-11-14', endDate: '2026-11-16' });
+  const rows = [row('2026/11/13', CENTER, '10'), row('2026/11/14', CENTER, '20'), row('2026/11/15', CENTER, '100'), row('2026/11/16', CENTER, '40')];
+  const sync = (p: Project, all: Project[]) => ({ ...p, reportSync: plan(rows, { project: p, projects: all }) });
+  const used = (p: Project, all: Project[]) => [...usableReportDays(p, { projects: all, venues }).values()].map((d) => [d.date, d.count]);
+  const total = (all: Project[]) => all.reduce((s, p) => s + used(p, all).reduce((t, [, c]) => t + (c as number), 0), 0);
+
+  it('取り込んだ実績には、もとになった回答の会場名（照合用の形）を持つ', () => {
+    expect(plan(rows, { project: A }).days.map((d) => d.keys)).toEqual([[venueKey(CENTER)], [venueKey(CENTER)], [venueKey(CENTER)]]);
+  });
+
+  it('「この案件の実績にする」を取り消したあとの同期が失敗しても、取り消した日の実績は使わない。相手の案件が取り込んでも、二重には数えない', () => {
+    // A が 11/15 を自分の実績と決めて同期（100 個を取り込む）
+    let a: Project = sync({ ...A, reportClaims: ['2026-11-15'] }, [{ ...A, reportClaims: ['2026-11-15'] }, B]);
+    let b: Project = sync(B, [a, B]);
+    expect(used(a, [a, b])).toEqual([['2026-11-13', 10], ['2026-11-15', 100]]);
+    expect(used(b, [a, b])).toEqual([['2026-11-16', 40]]);
+    // A が取り消す。続く同期は失敗（＝同期の結果は前のまま残る）
+    a = { ...a, reportClaims: [] };
+    expect(a.reportSync!.days.map((d) => d.date)).toContain('2026-11-15');          // 保存してある結果には、まだ入っている
+    expect(used(a, [a, b])).toEqual([['2026-11-13', 10]]);                           // が、使わない
+    expect(contestedReportDays(a, { projects: [a, b], venues })).toEqual([{ date: '2026-11-15', count: 100, rows: 1, others: ['週末フェア'], state: 'held' }]);
+    // その間に、相手の B が同じ日を自分の実績と決めて同期する
+    b = sync({ ...b, reportClaims: ['2026-11-15'] }, [a, { ...b, reportClaims: ['2026-11-15'] }]);
+    expect(used(b, [a, b])).toEqual([['2026-11-15', 100], ['2026-11-16', 40]]);
+    expect(used(a, [a, b])).toEqual([['2026-11-13', 10]]);
+    expect(total([a, b])).toBe(10 + 100 + 40);                                       // 100 個は 1 回だけ（11/14 の 20 個は、どちらも決めていないので保留）
+    // A から見ると、11/15 は「相手の案件が決めた日」になる
+    expect(contestedReportDays(a, { projects: [a, b], venues }).map((h) => [h.date, h.state])).toEqual([['2026-11-15', 'theirs']]);
+  });
+
+  it('同期のあとで、同じ会場・重なる会期の案件が増えたら、重なる日の実績は使わない（決めれば、また使う）', () => {
+    const a = sync(A, [A]);                                                          // 相手がいない間に、3 日とも取り込んだ
+    expect(used(a, [a])).toEqual([['2026-11-13', 10], ['2026-11-14', 20], ['2026-11-15', 100]]);
+    expect(used(a, [a, B])).toEqual([['2026-11-13', 10]]);                           // B ができた
+    expect(contestedReportDays(a, { projects: [a, B], venues }).map((h) => h.date)).toEqual(['2026-11-14', '2026-11-15']);
+    const claimed = { ...a, reportClaims: ['2026-11-14', '2026-11-15'] };
+    expect(used(claimed, [claimed, B])).toEqual([['2026-11-13', 10], ['2026-11-14', 20], ['2026-11-15', 100]]);
+    // 相手も同じ日を決めたら、どちらも使わない
+    const b = { ...B, reportClaims: ['2026-11-15'] };
+    expect(used(claimed, [claimed, b])).toEqual([['2026-11-13', 10], ['2026-11-14', 20]]);
+    // 相手が中止になった・会期が重ならなくなったら、また使う
+    expect(used(a, [a, { ...B, status: '中止' }]).length).toBe(3);
+    expect(used(a, [a, { ...B, startDate: '2026-11-16' }]).length).toBe(3);
+  });
+
+  it('会場の別名を共有しているだけの案件は、その別名で書かれた回答の日だけが相手になる', () => {
+    const vs = [mkVenue('v-center', CENTER, ['北街モール']), mkVenue('v-east', EAST, ['北街モール']), venues[2]];
+    const east = mkProject({ id: 'pe', name: '東口の催事', venueId: 'v-east', startDate: '2026-11-13', endDate: '2026-11-15' });
+    const mixed = [row('2026/11/13', CENTER, '10'), row('2026/11/14', '北街モール', '20')];
+    const s = plan(mixed, { project: A, projects: [A, east], venues: vs });
+    expect(dayList(s)).toEqual([['2026-11-13', 10, 1]]);                             // 「北街モール」とだけ書かれた 11/14 は、どちらの会場か決められない
+    expect(s.held.map((h) => h.date)).toEqual(['2026-11-14']);
+    const a = { ...A, reportSync: s };
+    expect([...usableReportDays(a, { projects: [a, east], venues: vs }).keys()]).toEqual(['2026-11-13']);   // 正式な会場名の日は、相手がいても使える
+  });
+
+  it('以前の版で同期した実績（会場名の記録が無い）は、案件の会場名すべてを使って確かめる', () => {
+    const a = sync(A, [A]);
+    const old = { ...a, reportSync: { ...a.reportSync!, days: a.reportSync!.days.map(({ keys: _keys, ...d }) => d) } };
+    expect(used(old, [old])).toHaveLength(3);
+    expect(used(old, [old, B])).toEqual([['2026-11-13', 10]]);
+    expect(hydrateReportSync(old.reportSync)!.days.every((d) => !('keys' in d))).toBe(true);
+    expect(hydrateReportSync(a.reportSync)!.days[0].keys).toEqual([venueKey(CENTER)]);
+  });
+
+  it('案件と会場の一覧を渡さないとき（1 件の案件だけを見る計算）は、会場と会期だけで決める', () => {
+    const a = sync(A, [A]);
+    expect([...usableReportDays(a).keys()]).toEqual(['2026-11-13', '2026-11-14', '2026-11-15']);
+  });
+
+  it('中止の案件は、重なる日の実績を自分のものにできない（決定があっても数えない）。進行中の案件は、中止の案件を相手にしない', () => {
+    const a = sync(A, [A]);
+    const cancelled = { ...a, status: '中止' as const, reportClaims: ['2026-11-14', '2026-11-15'] };
+    expect(used(cancelled, [cancelled])).toHaveLength(3);                            // 相手がいなければ、中止でも保存してある実績は見える
+    const b = sync(B, [cancelled, B]);                                               // 進行中の B は、中止の A を相手にしないので、重なる日も取り込む
+    expect(used(b, [cancelled, b])).toEqual([['2026-11-14', 20], ['2026-11-15', 100], ['2026-11-16', 40]]);
+    expect(used(cancelled, [cancelled, b])).toEqual([['2026-11-13', 10]]);           // 中止の A は、決定があっても、重なる日を使わない
+    expect(total([cancelled, b])).toBe(10 + 20 + 100 + 40);
+    // 中止の案件どうしが重なる日は、どちらも使わない
+    const b2 = { ...b, status: '中止' as const };
+    expect(used(cancelled, [cancelled, b2])).toEqual([['2026-11-13', 10]]);
+    expect(used(b2, [cancelled, b2])).toEqual([['2026-11-16', 40]]);
+    // 中止の案件を同期しても、相手がいる日は取り込まない（決定は数えない）
+    const s = plan(rows, { project: cancelled, projects: [cancelled, B] });
+    expect(dayList(s)).toEqual([['2026-11-13', 10, 1]]);
+    expect(s.held.map((h) => h.date)).toEqual(['2026-11-14', '2026-11-15']);
+  });
+
+  it('同期のあとで会場名・別名を変えたら、変わった名前で取り込んだ日の実績は使わない（同期し直すまで）', () => {
+    const vs = [mkVenue('v-center', CENTER, ['北街モール1F']), venues[1], venues[2]];
+    const data = [row('2026/11/13', CENTER, '10'), row('2026/11/14', '北街モール1F', '20'), row('2026/11/15', CENTER, '30'), row('2026/11/15', '北街モール1F', '5')];
+    const a = { ...A, reportSync: plan(data, { project: A, venues: vs }) };
+    const days = (v: Venue[]) => [...usableReportDays(a, { projects: [a], venues: v }).keys()];
+    expect(days(vs)).toEqual(['2026-11-13', '2026-11-14', '2026-11-15']);
+    expect(syncStaleness(a, { projects: [a], venues: vs }).names).toBe(false);
+    // 別名を外す → その別名の回答が入っている日（11/14・11/15）は使わない
+    expect(days(venues)).toEqual(['2026-11-13']);
+    expect(syncStaleness(a, { projects: [a], venues }).names).toBe(true);
+    expect(contestedReportDays(a, { projects: [a], venues })).toEqual([]);            // 相手がいるわけではないので、「重なる案件」としては示さない
+    // 会場名そのものを変える → 元の名前で取り込んだ日は、どれも使わない
+    const renamed = [mkVenue('v-center', '北街モール 新館', ['北街モール1F']), venues[1], venues[2]];
+    expect(days(renamed)).toEqual(['2026-11-14']);
+    // 会場がマスタから消えた → 使わない
+    expect(days([venues[1], venues[2]])).toEqual([]);
+    // 別名を戻せば、また使う
+    expect(days(vs)).toHaveLength(3);
+  });
+
+  it('どんな順番で、決定の変更・同期（成功／失敗）・会期や会場や別名の変更・中止が起きても、同じ会場名・同じ日の回答を 2 つの案件が同時に使うことはない', () => {
+    const r = rng(89);
+    const int = (n: number) => Math.floor(r() * n);
+    const DAYS = ['2026-11-13', '2026-11-14', '2026-11-15', '2026-11-16', '2026-11-17'];
+    const NAMES = [CENTER, EAST, '北街モール'];                                        // 3 つ目は、どちらの会場の別名にもなりうる名前
+    const data = DAYS.flatMap((d, i) => NAMES.map((name, k) => row(d.replace(/-/g, '/'), name, String(10 * (i + 1) + k))));
+    let checked = 0;
+    let inUse = 0;                                                                  // 実績として使われていた回数（確認が空回りしていないことを見る）
+    for (let round = 0; round < 400; round += 1) {
+      let alias = [int(2) === 0, int(2) === 0];                                       // 中央広場・東口前が、それぞれ「北街モール」を別名に持つか
+      const vs = () => [mkVenue('v-center', CENTER, alias[0] ? ['北街モール'] : []), mkVenue('v-east', EAST, alias[1] ? ['北街モール'] : []), venues[2]];
+      let ps: Project[] = [0, 1, 2].map((i) => mkProject({
+        id: `p${i}`, name: `案件${i}`, venueId: int(2) ? 'v-center' : 'v-east', startDate: DAYS[int(3)], endDate: DAYS[2 + int(3)],
+      }));
+      for (let step = 0; step < 30; step += 1) {
+        const i = int(3);
+        const op = int(8);
+        const cur = ps[i];
+        let next = cur;
+        if (op === 0 || op === 1) {                                 // 同期（成功）
+          const res = planReportSync({ project: cur, projects: ps, venues: vs(), rows: data, now: NOW });
+          if (res.ok) next = { ...cur, reportSync: res.sync };
+        } else if (op === 2) {                                      // 決める（続く同期は失敗＝結果は前のまま）
+          next = { ...cur, reportClaims: [...new Set([...(cur.reportClaims ?? []), DAYS[int(5)]])] };
+        } else if (op === 3) {                                      // 取り消す（続く同期は失敗＝結果は前のまま）
+          const d = DAYS[int(5)];
+          next = { ...cur, reportClaims: (cur.reportClaims ?? []).filter((x) => x !== d) };
+        } else if (op === 4) {                                      // 会期を変える
+          next = { ...cur, startDate: DAYS[int(3)], endDate: DAYS[2 + int(3)] };
+        } else if (op === 5) {                                      // 中止にする／戻す
+          next = { ...cur, status: cur.status === '中止' ? '計画中' : '中止' };
+        } else if (op === 6) {                                      // 会場を変える
+          next = { ...cur, venueId: cur.venueId === 'v-center' ? 'v-east' : 'v-center' };
+        } else {                                                    // 会場の別名を付ける／外す
+          const k = int(2);
+          alias = alias.map((v, x) => (x === k ? !v : v));
+        }
+        ps = ps.map((p, k) => (k === i ? next : p));
+        const ctx = { projects: ps, venues: vs() };
+        const usable = ps.map((p) => usableReportDays(p, ctx));
+        for (const d of DAYS) for (const name of NAMES) {
+          const users = ps.filter((_, k) => usable[k].get(d)?.keys?.includes(venueKey(name)));
+          expect(users.length, `round ${round} step ${step} ${d} ${name}: ${users.map((p) => p.id).join(',')}`).toBeLessThanOrEqual(1);
+          checked += 1;
+          inUse += users.length;
+        }
+      }
+    }
+    expect(checked).toBe(400 * 30 * DAYS.length * NAMES.length);
+    expect(inUse).toBeGreaterThan(10000);
+  });
+});
+
 describe('照合できない案件は、エラーにして何も作らない', () => {
   const run = (project: Project, vs = venues) => planReportSync({ project, projects: [project], venues: vs, rows: ROWS, now: NOW });
   it('会場が未選択・会場がマスタから削除されている', () => {
@@ -393,21 +558,21 @@ describe('同期の結果を、いまの案件に使えるか', () => {
   const synced = { ...P, reportSync: plan(ROWS) };
   it('会場・会期が同期のときのままなら、そのまま使える', () => {
     expect([...usableReportDays(synced).keys()]).toEqual(['2026-11-13', '2026-11-14', '2026-11-15']);
-    expect(syncStaleness(synced)).toEqual({ venue: false, period: false });
+    expect(syncStaleness(synced)).toEqual({ venue: false, period: false, names: false });
   });
   it('会場を変えたら使わない', () => {
     const moved = { ...synced, venueId: 'v-east' };
     expect(usableReportDays(moved).size).toBe(0);
-    expect(syncStaleness(moved)).toEqual({ venue: true, period: false });
+    expect(syncStaleness(moved)).toEqual({ venue: true, period: false, names: false });
   });
   it('会期を変えたら、会期内の日だけ使う（同期のやり直しを勧める）', () => {
     const shorter = { ...synced, startDate: '2026-11-14' };
     expect([...usableReportDays(shorter).keys()]).toEqual(['2026-11-14', '2026-11-15']);
-    expect(syncStaleness(shorter)).toEqual({ venue: false, period: true });
+    expect(syncStaleness(shorter)).toEqual({ venue: false, period: true, names: false });
   });
   it('同期していない案件', () => {
     expect(usableReportDays(P).size).toBe(0);
-    expect(syncStaleness(P)).toEqual({ venue: false, period: false });
+    expect(syncStaleness(P)).toEqual({ venue: false, period: false, names: false });
   });
   it('空行だけの行', () => {
     expect(isBlankRow(row('', '', ''))).toBe(true);

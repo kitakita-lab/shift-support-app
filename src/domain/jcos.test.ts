@@ -329,6 +329,29 @@ describe('実績のもと（日報・手入力）', () => {
   });
 });
 
+describe('同じ会場で会期が重なる案件があるとき（案件と会場の一覧を渡した計算）', () => {
+  const data = mkData();
+  const a = jp({ id: 'pa', startDate: D5[0], endDate: D5[2], contents: [mkContent({ plannedCount: 90 })] });
+  const b = jp({ id: 'pb', name: '重なる案件', startDate: D5[1], endDate: D5[3], contents: [mkContent({ plannedCount: 90 })] });
+  const synced = { ...a, reportSync: sync(a, [[D5[0], 40], [D5[1], 50], [D5[2], 60]]), actualsManual: { [D5[2]]: 33 } };
+
+  it('重なる日の日報の実績は、この案件のものと決まるまで使わない（手入力があれば手入力、無ければ予定で計算する）', () => {
+    const alone = jcosEstimate(synced, { ...data, projects: [synced] });
+    expect(alone.days.map((d) => [d.count, d.actual?.source ?? null])).toEqual([[40, 'report'], [50, 'report'], [60, 'report']]);
+    const both = jcosEstimate(synced, { ...data, projects: [synced, b] });
+    expect(both.days.map((d) => [d.count, d.actual?.source ?? null])).toEqual([[40, 'report'], [30, null], [33, 'manual']]);
+    expect(both.current.materialCost).toBe((40 + 30 + 33) * 220);
+    // 「この案件の実績にする」と決めた日は、また日報の実績を使う
+    const claimed = { ...synced, reportClaims: [D5[1], D5[2]] };
+    expect(jcosEstimate(claimed, { ...data, projects: [claimed, b] }).actualCount).toBe(150);
+  });
+  it('一覧・見出しの金額も、同じ決め方で計算する（案件ごとに違う数字にならない）', () => {
+    const all = { ...data, projects: [synced, b] };
+    expect(projectMoney(synced, all).profit).toBe(jcosEstimate(synced, all).current.gross);
+    expect(projectMoney(synced, all).profit).not.toBe(jcosEstimate(synced).current.gross);
+  });
+});
+
 describe('材料費の超過（請求した材料費を、原価が超えた額）', () => {
   it('1 日 10,000 円の請求に対し、45 個（9,900 円）までは超過なし、46 個（10,120 円）で 120 円の超過', () => {
     const at = (n: number) => jcosEstimate(jp({ actualsManual: { '2026-11-13': n } }));
@@ -493,6 +516,12 @@ describe('JCOS 案件の警告', () => {
     const other = { venue: '別の書き方', rows: 1, count: 9, dates: [D5[1]] };
     const w = projectWarnings({ ...p, reportSync: { ...base, unmatched: [other] } }, { ...data, projects: [] });
     expect(w.map((x) => [x.target, x.severity])).toEqual([['report:unmatched', 'info']]);
+    // 同期したあとで、同じ会場・重なる会期の案件が増えた日（決まっていない＝警告。相手が決めた＝参考）
+    const rival = jp({ id: 'rival', name: '重なる案件', startDate: D5[0], endDate: D5[0] });
+    const all = (r: Project) => projectWarnings({ ...p, reportSync: base }, { ...data, projects: [{ ...p, reportSync: base }, r] }).map((x) => [x.target, x.severity]);
+    expect(all(rival)).toEqual([['report:contested', 'warn']]);
+    expect(all({ ...rival, reportClaims: [D5[0]] })).toEqual([['report:assigned', 'info']]);
+    expect(all({ ...rival, status: '中止' })).toEqual([]);
     // その日にこの案件の実績があれば、別の会場の回答があっても知らせない
     expect(targets({ ...p, reportSync: { ...base, unmatched: [{ ...other, dates: [D5[0]] }] } })).toEqual([]);
   });

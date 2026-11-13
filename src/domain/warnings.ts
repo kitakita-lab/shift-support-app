@@ -4,7 +4,7 @@ import { AppData, Assignment, PlacedItem, Project, Warning } from '../types';
 import { assignmentHours, countParts, countSeats, seatDemand } from './calc';
 import { isJcos } from './jcos';
 import { buildLabels, findOverlaps, itemSize } from './layout';
-import { syncStaleness, unmatchedGaps } from './report';
+import { contestedReportDays, syncStaleness, unmatchedGaps } from './report';
 import { MAX_DAYS, daySpan, listDates, num, shortDate, toMinutes } from './util';
 
 function overlaps(a: Assignment, b: Assignment): boolean {
@@ -113,10 +113,17 @@ export function projectWarnings(p: Project, data: AppData): Warning[] {
     if (num(t.billLaborPerDay) < 0 || num(t.billMaterialPerDay) < 0 || num(t.partTimerPerDay) < 0) add('jcos:terms', 'JCOS 案件の金額にマイナスの値があります。');
     const sync = p.reportSync;
     if (sync) {
-      const stale = syncStaleness(p);
+      const stale = syncStaleness(p, data);
       if (stale.venue) add('report:stale', '日報の同期のあとで会場が変わっています（同期した実績は使っていません）。もう一度「日報を同期」を押してください。');
+      else if (stale.names) add('report:stale', '日報の同期のあとで、会場名または別名が変わっています（変わった名前で取り込んだ日の実績は使っていません）。もう一度「日報を同期」を押してください。');
       else if (stale.period) add('report:stale', '日報の同期のあとで会期が変わっています。もう一度「日報を同期」を押してください。');
       if (sync.held?.length) add('report:held', `日報: 同じ会場で会期が重なる別の案件があるため、取り込みを保留している日が ${sync.held.length} 日あります（どちらの案件の実績か、確認が必要です）。`);
+      // 同期したあとで、会期が重なる案件が増えた・決定が変わった日（同じ回答を 2 つの案件で数えないよう、使っていない）
+      const contested = contestedReportDays(p, data);
+      const undecided = contested.filter((h) => h.state === 'held');
+      const assigned = contested.filter((h) => h.state === 'theirs');
+      if (undecided.length) add('report:contested', `日報: 同期済みの実績のうち ${undecided.length} 日は、同じ会場で会期が重なる別の案件があるため、使っていません（${undecided.map((h) => shortDate(h.date)).join('・')}）。どちらの案件の実績か、確認が必要です。`);
+      if (assigned.length) add('report:assigned', `日報: 同期済みの実績のうち ${assigned.length} 日は、別の案件の実績として割り当て済みのため、使っていません（${assigned.map((h) => shortDate(h.date)).join('・')}）。`, 'info');
       const unread = (sync.skipped ?? []).filter((x) => x.reason !== 'other-project').reduce((n, x) => n + x.rows, 0);
       if (unread > 0) add('report:skipped', `日報: 読み取れずに実績へ入れていない回答が ${unread} 件あります（「日報を同期」の詳細を確認してください）。`);
       const gaps = unmatchedGaps(sync);

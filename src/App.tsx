@@ -218,14 +218,17 @@ export default function App() {
                   <div key={r.p.id} className="pcard" data-testid="project-card">
                     {/* カード全体が「開く」ボタン。複製・コピー・削除は、下の小さいボタン（押し間違えにくいように分ける） */}
                     <button className="pcard__open" onClick={() => setOpenId(r.p.id)} aria-label={`案件「${r.p.name || '名称未設定'}」を開く`}>
-                      <span className="pcard__name">{r.p.name || '（名称未設定）'}<span className="pcard__status">{r.p.status}</span>{r.warn > 0 && <span className="pcard__warn">⚠ {r.warn}</span>}</span>
-                      <span className="pcard__sub">{venueName(r.p.venueId) || '会場未選択'}{period(r.p) ? `・${period(r.p)}` : ''}</span>
-                      <span className="pcard__money">
-                        <span>{r.money.jcos ? '請求' : '売上'} {yen(r.money.revenue)}</span>
-                        <span>{r.money.jcos ? '実費' : '費用'} {yen(r.money.cost)}</span>
-                        <b className={r.money.profit < 0 ? 'neg' : ''}>{r.money.jcos ? '粗利' : '利益'} {yen(r.money.profit)}</b>
+                      {/* 並びは内側の要素で組む（ボタンそのものを格子の入れ物にすると、効かないブラウザがある） */}
+                      <span className="pcard__body">
+                        <span className="pcard__name">{r.p.name || '（名称未設定）'}<span className="pcard__status">{r.p.status}</span>{r.warn > 0 && <span className="pcard__warn">⚠ {r.warn}</span>}</span>
+                        <span className="pcard__sub">{venueName(r.p.venueId) || '会場未選択'}{period(r.p) ? `・${period(r.p)}` : ''}</span>
+                        <span className="pcard__money">
+                          <span>{r.money.jcos ? '請求' : '売上'} {yen(r.money.revenue)}</span>
+                          <span>{r.money.jcos ? '実費' : '費用'} {yen(r.money.cost)}</span>
+                          <b className={r.money.profit < 0 ? 'neg' : ''}>{r.money.jcos ? '粗利' : '利益'} {yen(r.money.profit)}</b>
+                        </span>
+                        <span className="pcard__go" aria-hidden="true">›</span>
                       </span>
-                      <span className="pcard__go" aria-hidden="true">›</span>
                     </button>
                     <div className="pcard__actions">
                       <button onClick={() => duplicate(r.p)}>複製</button>

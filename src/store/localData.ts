@@ -1,6 +1,8 @@
 // 「この端末だけのデータ」の読み書き（ブラウザの localStorage）と、保存された生データをアプリの形に整える処理。
 // ここにあるデータは同期しない。共有データ（Firestore）とは別の入れ物で、自動では混ざらない。
+import { hydrateJcos } from '../domain/jcos';
 import { hydrateLayout } from '../domain/layout';
+import { hydrateReportSync } from '../domain/report';
 import { emptyData } from '../domain/seed';
 import { AppData, Composite, Content, PartType, Project, Staff, Venue } from '../types';
 
@@ -8,7 +10,7 @@ import { AppData, Composite, Content, PartType, Project, Staff, Venue } from '..
 export const LS_KEY = 'kkl_workshop_v1';
 
 export function hydrateProject(p: Project): Project {
-  return {
+  const out: Project = {
     ...p,
     contents: p.contents ?? [],
     assignments: p.assignments ?? [],
@@ -16,6 +18,29 @@ export function hydrateProject(p: Project): Project {
     layout: hydrateLayout(p.layout),
     updatedAt: p.updatedAt ?? 0,
   };
+  // Version 4 の項目（どれも任意）。あるものだけ形をそろえ、扱えない形のものは外す。無い案件には足さない
+  const raw = p as unknown as Record<string, unknown>;
+  const put = <K extends 'jcos' | 'reportSync' | 'actualsManual' | 'reportClaims' | 'reportSource'>(key: K, value: Project[K] | undefined) => {
+    if (value === undefined) delete out[key]; else out[key] = value;
+  };
+  if (raw.jcos !== undefined) put('jcos', hydrateJcos(raw.jcos));
+  if (raw.reportSync !== undefined) put('reportSync', hydrateReportSync(raw.reportSync));
+  if (raw.actualsManual !== undefined) {
+    const m = raw.actualsManual;
+    put('actualsManual', m && typeof m === 'object' && !Array.isArray(m)
+      ? Object.fromEntries(Object.entries(m as Record<string, unknown>).filter((e): e is [string, number] => typeof e[1] === 'number' && Number.isFinite(e[1]) && e[1] >= 0))
+      : undefined);
+  }
+  if (raw.reportClaims !== undefined) {
+    put('reportClaims', Array.isArray(raw.reportClaims) ? raw.reportClaims.filter((d): d is string => typeof d === 'string') : undefined);
+  }
+  if (raw.reportSource !== undefined) {
+    const s = raw.reportSource as { spreadsheetId?: unknown; gid?: unknown } | null;
+    put('reportSource', s && typeof s === 'object' && typeof s.spreadsheetId === 'string' && s.spreadsheetId
+      ? { spreadsheetId: s.spreadsheetId, gid: typeof s.gid === 'number' && Number.isFinite(s.gid) ? s.gid : null }
+      : undefined);
+  }
+  return out;
 }
 
 /** マスタ 1 件を整える（共有データは 1 件ずつ届くので、1 件単位でも使う） */

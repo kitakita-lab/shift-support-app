@@ -365,4 +365,49 @@ add('R10', '「この端末だけのデータ」の案件でも、ログイン�
   eq(sheets.calls.length, 3, '問い合わせの数');
 });
 
+add('R11', '「この案件の実績にする」を取り消したあとの同期が失敗しても、取り消した日の実績は使わない。相手の案件が取り込んでも、同じ回答を二重には数えない', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);                                                             // 秋の花まつり 11/13〜11/15
+  await jcosProject(a, { name: '週末フェア', venue: CENTER, start: '2026-11-15', end: '2026-11-16' });   // 11/15 が重なる
+  sheets.rows = [answer(serial('2026-11-13'), CENTER, 10), answer(serial('2026-11-15'), CENTER, 100), answer(serial('2026-11-16'), CENTER, 40)];
+  await openProject(a, '秋の花まつり');
+  await syncNow(a, SHEET_URL);
+  eq((await jcos(a)).actual, 10, '重なる日（11/15）は保留');
+  await detail(a);
+  await a.locator('[data-testid="report-claim"]').click();                                             // 11/15 を、この案件の実績にする
+  await until(() => busy(a), (b) => b === '0', 10000);
+  eq((await until(() => jcos(a), (j) => j.actual === 110)).actual, 110, '決めたあとの実績（10 ＋ 100）');
+  // 決定を取り消す。ただし、続く同期は失敗する（通信エラー）
+  sheets.fail = 'network';
+  await detail(a);
+  await a.locator('[data-testid="report-claims"] button').click();
+  await until(() => busy(a), (b) => b === '0', 10000);
+  ok((await a.locator('[data-testid="report-error"]').innerText()).includes('通信できない'), `同期の失敗の表示: ${await a.locator('[data-testid="report-error"]').innerText()}`);
+  ok((await status(a)).includes('2 日分 110 個'), `保存してある同期の結果は、前のまま: ${await status(a)}`);
+  const contested = (await a.locator('[data-testid="report-contested"]').innerText()).replace(/\s+/g, ' ');
+  ok(contested.includes('いまは使っていません') && contested.includes('11/15(日)：100 個') && contested.includes('「週末フェア」'), `使っていない日の表示: ${contested}`);
+  eq((await jcos(a)).actual, 10, '取り消した日の 100 個は、同期が失敗しても数えない');
+  const cleared = await until(() => projectDoc('秋の花まつり'), (p) => !!p && (p.reportClaims ?? []).length === 0, 10000);
+  eq([cleared?.reportClaims ?? null, days(cleared)], [[], [['2026-11-13', 10, 1], ['2026-11-15', 100, 1]]], '共有データ: 決定は取り消され、同期の結果は前のまま（失敗した同期は、何も書いていない）');
+  // 相手の案件が、同じ日を自分の実績と決めて同期する（今度は成功）
+  sheets.fail = null;
+  await openProject(a, '週末フェア');
+  await syncNow(a);
+  eq((await jcos(a)).actual, 40, '相手の案件: 重なっていない日（11/16）だけ');
+  await detail(a);
+  await a.locator('[data-testid="report-claim"]').click();
+  await until(() => busy(a), (b) => b === '0', 10000);
+  eq((await until(() => jcos(a), (j) => j.actual === 140)).actual, 140, '相手の案件が決めたあとの実績（100 ＋ 40）');
+  // 元の案件は、同期し直していなくても、11/15 を数えない（2 つの案件の合計は 10 ＋ 100 ＋ 40）
+  await openProject(a, '秋の花まつり');
+  eq((await jcos(a)).actual, 10, '元の案件の実績');
+  const assigned = (await detail(a)).replace(/\s+/g, ' ');
+  ok(assigned.includes('別の案件の実績として割り当て済み') && assigned.includes('11/15(日)：100 個'), `元の案件の表示: ${assigned}`);
+  ok((await status(a)).includes('うち 1 日分は、いまは使っていません'), `元の案件の同期の表示: ${await status(a)}`);
+  // 一覧の粗利も、同じ数え方（元の案件: 3 日・10 個／相手の案件: 2 日・140 個）
+  await a.getByRole('button', { name: '← 案件一覧' }).click();
+  const rowText = async (name) => (await a.locator('.grid tbody tr', { has: a.locator('td', { hasText: new RegExp(`^${name}$`) }) }).innerText()).replace(/\s+/g, ' ');
+  ok((await rowText('秋の花まつり')).includes(`¥${(40000 * 3 - 15000 * 3 - 10 * 220).toLocaleString('ja-JP')}（粗利）`), `元の案件の一覧の粗利: ${await rowText('秋の花まつり')}`);
+  ok((await rowText('週末フェア')).includes(`¥${(40000 * 2 - 15000 * 2 - 140 * 220).toLocaleString('ja-JP')}（粗利）`), `相手の案件の一覧の粗利: ${await rowText('週末フェア')}`);
+});
+
 await runFile('日報の同期（Version 4）');

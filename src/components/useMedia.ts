@@ -12,8 +12,13 @@ export function useMediaQuery(query: string): boolean {
     const m = window.matchMedia(query);
     const update = () => setOn(m.matches);
     update();
-    m.addEventListener('change', update);
-    return () => m.removeEventListener('change', update);
+    // 古い Safari（iOS 13 以前）の MediaQueryList には addEventListener が無い（addListener だけ）。無いものを呼ぶと画面ごと落ちるので、分けて呼ぶ
+    if (typeof m.addEventListener === 'function') {
+      m.addEventListener('change', update);
+      return () => m.removeEventListener('change', update);
+    }
+    m.addListener(update);
+    return () => m.removeListener(update);
   }, [query]);
   return on;
 }

@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyLayout } from '../domain/layout';
 import { jcosEstimate, defaultJcos } from '../domain/jcos';
-import { RawReportRow } from '../domain/report';
+import { RawReportRow, venueKey } from '../domain/report';
 import { mkContent, mkProject } from '../domain/testkit';
 import { Project, ReportSource, Venue } from '../types';
 import { ReportError, ReportErrorCode } from './sheets';
@@ -46,7 +46,8 @@ describe('日報の同期: 成功したとき', () => {
     const out = await run(d);
     expect(d.log).toEqual(['token', 'rows']);
     expect(out).toMatchObject({ ok: true, source: SOURCE });
-    if (out.ok) expect(out.sync.days).toEqual([{ date: '2026-11-13', count: 62, rows: 1 }, { date: '2026-11-14', count: 58, rows: 1 }]);
+    const keys = [venueKey(VENUE.name)];
+    if (out.ok) expect(out.sync.days).toEqual([{ date: '2026-11-13', count: 62, rows: 1, keys }, { date: '2026-11-14', count: 58, rows: 1, keys }]);
   });
   it('結果を案件に書くと、粗利が実績で計算される。もう一度同期しても同じ（二重計上しない）', async () => {
     const store = { p: P };
@@ -65,7 +66,7 @@ describe('日報の同期: 成功したとき', () => {
     const store = { p: P };
     await syncInto(store, deps());
     await syncInto(store, deps({ rows: async () => [row('2026/11/13', 70)] }));        // 11/13 を修正・11/14 を削除
-    expect(store.p.reportSync!.days).toEqual([{ date: '2026-11-13', count: 70, rows: 1 }]);
+    expect(store.p.reportSync!.days).toEqual([{ date: '2026-11-13', count: 70, rows: 1, keys: [venueKey(VENUE.name)] }]);
     expect(jcosEstimate(store.p).actualCount).toBe(70);
   });
 });

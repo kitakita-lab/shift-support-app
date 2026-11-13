@@ -10,7 +10,7 @@
 // ここには入れない（二重計上を防ぐ。レイアウトのパーツを増減しても、JCOS の粗利は変わらない）。
 import { AppData, JcosDay, JcosTerms, Project } from '../types';
 import { Estimate, estimate } from './calc';
-import { usableReportDays } from './report';
+import { ReportContext, usableReportDays } from './report';
 import { listDates, num, roundYen } from './util';
 
 /** JCOS 案件の標準の条件（2026-11 時点。案件ごとに変えられる初期値） */
@@ -23,6 +23,38 @@ export const JCOS_DEFAULTS = {
 
 export function defaultJcos(): JcosTerms {
   return { enabled: true, ...JCOS_DEFAULTS, extraBillings: [], days: {} };
+}
+
+/**
+ * 保存されていた JCOS の条件を、画面が前提にしている形にそろえる（欠けた金額は標準の値、欠けた一覧は空にする）。
+ * 条件として扱えないもの（オブジェクトでない）は undefined。
+ */
+export function hydrateJcos(v: unknown): JcosTerms | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const t = v as Record<string, unknown>;
+  const amount = (key: keyof typeof JCOS_DEFAULTS): number => (typeof t[key] === 'number' && Number.isFinite(t[key] as number) ? (t[key] as number) : JCOS_DEFAULTS[key]);
+  const days: Record<string, JcosDay> = {};
+  if (t.days && typeof t.days === 'object' && !Array.isArray(t.days)) {
+    for (const [date, d] of Object.entries(t.days as Record<string, unknown>)) {
+      if (!d || typeof d !== 'object') continue;
+      const src = d as Record<string, unknown>;
+      const day: JcosDay = {};
+      if (src.billed === false) day.billed = false;
+      if (typeof src.partTimers === 'number' && Number.isFinite(src.partTimers)) day.partTimers = Math.max(0, src.partTimers);
+      if (Object.keys(day).length > 0) days[date] = day;
+    }
+  }
+  return {
+    enabled: t.enabled === true,
+    billLaborPerDay: amount('billLaborPerDay'),
+    billMaterialPerDay: amount('billMaterialPerDay'),
+    partTimerPerDay: amount('partTimerPerDay'),
+    unitCost: amount('unitCost'),
+    extraBillings: (Array.isArray(t.extraBillings) ? t.extraBillings : [])
+      .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+      .map((o, i) => ({ id: typeof o.id === 'string' && o.id ? o.id : `extra-${i}`, name: typeof o.name === 'string' ? o.name : '', amount: num(o.amount) })),
+    days,
+  };
 }
 
 /** JCOS の収支計算を使う案件か */
@@ -74,10 +106,13 @@ function manualActual(p: Project, date: string): number | null {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 }
 
-/** 日ごとの実績。日報の実績がある日は日報、無ければ手入力。どちらも無い日は入らない */
-export function actualsByDate(p: Project): Map<string, Actual> {
+/**
+ * 日ごとの実績。日報の実績がある日は日報、無ければ手入力。どちらも無い日は入らない。
+ * ctx（いまの案件と会場の一覧）を渡すと、会期が重なる案件があって、この案件のものと決まっていない日の日報の実績は使わない（report.ts の usableReportDays）。
+ */
+export function actualsByDate(p: Project, ctx?: ReportContext): Map<string, Actual> {
   const out = new Map<string, Actual>();
-  const report = usableReportDays(p);
+  const report = usableReportDays(p, ctx);
   for (const date of listDates(p.startDate, p.endDate)) {
     const r = report.get(date);
     if (r) { out.set(date, { count: Math.max(0, num(r.count)), source: 'report', rows: num(r.rows) }); continue; }
@@ -170,14 +205,17 @@ function totals(lines: JcosDayLine[], counts: number[], unitCost: number, extraB
   };
 }
 
-/** JCOS 案件の収支。p.jcos が無い案件でも、標準の条件で計算する（画面は isJcos のときだけ使う） */
-export function jcosEstimate(p: Project): JcosEstimate {
+/**
+ * JCOS 案件の収支。p.jcos が無い案件でも、標準の条件で計算する（画面は isJcos のときだけ使う）。
+ * 画面からは、ctx（いまの案件と会場の一覧）を必ず渡す（同じ回答を 2 つの案件で数えないため。actualsByDate を参照）。
+ */
+export function jcosEstimate(p: Project, ctx?: ReportContext): JcosEstimate {
   const terms: JcosTerms = { ...defaultJcos(), ...(p.jcos ?? {}), extraBillings: p.jcos?.extraBillings ?? [], days: p.jcos?.days ?? {} };
   const dates = listDates(p.startDate, p.endDate);
   const unit = Math.max(0, num(terms.unitCost));
   const plannedCount = sum(p.contents ?? [], (c) => Math.max(0, num(c.plannedCount)));
   const plan = splitEvenly(plannedCount, dates.length);
-  const actuals = actualsByDate(p);
+  const actuals = actualsByDate(p, ctx);
 
   const days: JcosDayLine[] = dates.map((date, i) => {
     const d = jcosDay(terms, date);
@@ -240,9 +278,12 @@ export function jcosExcluded(est: Estimate): { label: string; amount: number }[]
 
 /** 一覧・見出しに出す金額（JCOS 案件は 請求・実費・粗利、それ以外は従来の 売上・費用・利益） */
 export interface Money { jcos: boolean; revenue: number; cost: number; profit: number }
-export function projectMoney(p: Project, data: Pick<AppData, 'staff' | 'contents' | 'partTypes'>, generic?: Estimate): Money {
+export function projectMoney(
+  p: Project, data: Pick<AppData, 'staff' | 'contents' | 'partTypes'> & Partial<ReportContext>, generic?: Estimate,
+): Money {
   if (isJcos(p)) {
-    const t = jcosEstimate(p).current;
+    const ctx = data.projects && data.venues ? { projects: data.projects, venues: data.venues } : undefined;
+    const t = jcosEstimate(p, ctx).current;
     return { jcos: true, revenue: t.billing, cost: t.cost, profit: t.gross };
   }
   const e = generic ?? estimate(p, data);
