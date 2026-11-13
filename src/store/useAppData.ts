@@ -127,6 +127,9 @@ export function useAppData(): AppStore {
   const setSpace = useCallback((s: Space) => { setPref(s); saveJson(SPACE_KEY, s); }, []);
 
   // ── 共有データのセッション（ログインしているアカウントごと） ──
+  // いま動いているセッション（始めてから、止めるまで）。止めたセッションは、最後に表示していた内容を持ったまま残るので、
+  // あとから届いた処理の結果を、そこへ書かないようにするために見分ける（getProject）
+  const alive = useRef<SharedSession | null>(null);
   const hooks = useRef<SessionHooks>(null as unknown as SessionHooks);
   hooks.current = {
     // 共有に反映できなかった案件を、参照している会場・コンテンツ・スタッフ・パーツごと、この端末に控えとして残す
@@ -158,7 +161,8 @@ export function useAppData(): AppStore {
     });
     setSession(s);
     s.start();
-    return () => s.stop();
+    alive.current = s;
+    return () => { alive.current = null; s.stop(); };
   }, [uid, email, displayName, loading]);
 
   // ログインした瞬間は、共有データを表示する（再読み込みでログイン状態が戻っただけのときは、前回の選択のまま）
@@ -208,8 +212,11 @@ export function useAppData(): AppStore {
   localNow.current = local;
   const getProject = useCallback((id: string): Project | undefined => {
     if (space === 'shared') {
-      const v = session?.getView();
-      return v && v.phase === 'ready' ? v.data.projects.find((p) => p.id === id) : undefined;
+      // ログアウト・アカウントの切り替えのあとで、以前の画面が持っている関数から呼ばれたときは、読めない扱いにする
+      // （止めたセッションへ書くと、送信待ちの控えに入り、次のログインのときに「前回の残り」として扱われてしまう）
+      if (!session || alive.current !== session) return undefined;
+      const v = session.getView();
+      return v.phase === 'ready' ? v.data.projects.find((p) => p.id === id) : undefined;
     }
     return localNow.current.projects.find((p) => p.id === id);
   }, [space, session]);

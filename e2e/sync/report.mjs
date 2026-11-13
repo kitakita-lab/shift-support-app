@@ -7,7 +7,8 @@
 // ここで確かめられないもの: 実際の Google の確認画面（未審査アプリの警告・許可のチェック）、Sheets API の有効化、
 //   実際の日報の閲覧権限。これらは、実環境での確認事項として残る。
 import {
-  LEGACY_COLLS, V3_COLLS, add, admin, createProject, eq, loadSample, ok, openProject, runFile, sheet, signIn, sleep, space, startApp, tab, until, TEAM,
+  LEGACY_COLLS, V3_COLLS, add, admin, createProject, eq, loadSample, notices, ok, openProject, runFile, sheet, signIn, signOut, sleep, space, startApp, tab,
+  until, TEAM,
 } from './lib.mjs';
 
 const T = `teams/${TEAM}`;
@@ -118,13 +119,16 @@ async function startHeld(page, sheets) {
   let release;
   sheets.hold = new Promise((r) => { release = r; });
   await page.locator('[data-testid="report-sync"]').click();
+  const clickedAt = Date.now();
   await until(() => fetches(sheets), (v) => v === n + 1, 5000);
   eq(await busy(page), '1', '同期中の表示');
-  return async () => {
+  const deliver = async () => {
     const answered = sheets.answered;
     release();
     await until(() => sheets.answered, (v) => v === answered + 1, 5000);              // 応答が、ブラウザに渡った
   };
+  deliver.clickedAt = clickedAt;
+  return deliver;
 }
 /** 「同期をやめる」を押す（同期が長引くと出る） */
 async function stopSync(page) {
@@ -636,7 +640,9 @@ add('R15', '同期の完了の順序が逆転しても、先に始めた同期�
   // 1 つ目の同期: 直される前の日報（11/13 = 70）を読んだ応答が、止まっている。利用者は、同期をやめる
   sheets.rows = twoDays(70);
   const release = await startHeld(a, sheets);
-  ok((await a.locator('[data-testid="report-stop"]').count()) === 0, '「同期をやめる」は、同期が長引くまで出ない');
+  // 「同期をやめる」は、同期が長引く（4 秒）まで出ない（ここまでに時間がかかりすぎた場合は、確かめない）
+  const shown = await a.locator('[data-testid="report-stop"]').count();
+  if (Date.now() - release.clickedAt < 3000) eq(shown, 0, '押した直後の「同期をやめる」');
   await stopSync(a);
   // 日報が直された（11/13 = 99）。2 つ目の同期は、すぐに終わる
   sheets.rows = twoDays(99);
@@ -755,6 +761,36 @@ add('R18', '2 台の同期が、ほぼ同時に終わったとき（守れない
   await until(() => status(b), (t) => t.includes(expected), 8000);
   eq(await status(a), await status(b), '2 台の表示が、同じ結果にそろう');
   eq([(await jcos(a)).actual, (await jcos(b)).actual], got === fromA ? [128, 128] : [157, 157], '2 台の実績');
+});
+
+add('R20', '同期の途中でログアウトしたとき、あとから届いた結果は、共有データにも、送信待ちの控えにも書かれない（次のログインで「前回の残り」として扱われない）。保存できなかったことは、同期の欄に出る', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  const first = await syncedDoc('秋の花まつり');
+  const outbox = () => a.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kkl_outbox')).length);
+  await until(outbox, (n) => n === 0, 8000);                    // 最初の同期の結果は、送り終わっている
+  // 同期の途中（応答が止まっている）で、ログアウトする。そのあとで、応答が届く
+  sheets.rows = twoDays(70);
+  const release = await startHeld(a, sheets);
+  await signOut(a);
+  await release();
+  await sleep(SETTLE_MS);
+  eq(written(await projectDoc('秋の花まつり')), written(first), 'ログアウトのあとに届いた結果は、共有データに書かれない');
+  eq(await outbox(), 0, '送信待ちの控えにも入らない');
+  // もう一度ログインしても、何も送られず、控えの案件もできない
+  await signIn(a, 'a@example.com');
+  await sleep(4000);
+  eq(written(await projectDoc('秋の花まつり')), written(first), '次のログインのあとも、共有データは変わらない');
+  eq((await notices(a)).filter((t) => t.includes('控え') || t.includes('前回')), [], '「前回の残り」のお知らせ（出ないこと）');
+  await openProject(a, '秋の花まつり');
+  ok((await status(a)).includes('2 日分 120 個'), `実績は、前回のまま: ${await status(a)}`);
+  ok((await toggleText(a)).includes('同期できませんでした'), `保存できなかったことが出る: ${await toggleText(a)}`);
+  ok((await detail(a)).includes('同期の結果を保存できませんでした'), `知らせの内容: ${await detail(a)}`);
+  // もう一度同期すると、取り込める
+  await a.evaluate((t) => { window.__kkl.sheetsToken = () => t; }, TOKEN);
+  await syncNow(a);
+  ok((await status(a)).includes('2 日分 128 個'), `もう一度同期したあと: ${await status(a)}`);
+  ok(!(await toggleText(a)).includes('同期できませんでした'), `知らせは消える: ${await toggleText(a)}`);
 });
 
 // ── 実機での確認を、安全に行うための前提 ──────────────────────────

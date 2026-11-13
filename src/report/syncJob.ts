@@ -95,7 +95,7 @@ export type SyncJobResult =
 export const syncStamp = (p: Project): string => p.reportSync?.at ?? '';
 
 export const SUPERSEDED_MESSAGE = 'この同期の途中で、案件の同期の結果が、ほかの操作（ほかの端末・ほかのタブでの同期など）で変わりました。あとから届いたこの同期の結果は、使っていません（いまの結果を、そのまま残しています）。もう一度「日報を同期」を押すと、最新の日報で取り込み直します。';
-export const GONE_MESSAGE = '同期の結果を保存できませんでした（同期の途中で、案件が削除されたか、共有データを読めない状態になりました）。案件を開き直して、もう一度お試しください。';
+export const GONE_MESSAGE = '同期の結果を保存できませんでした（同期の途中で、案件が削除されたか、ログアウトなどで、共有データを読めない状態になりました）。案件を開き直して、もう一度お試しください。';
 const UNKNOWN_MESSAGE = '日報を同期できませんでした（予期しないエラー）。もう一度お試しください。';
 
 function settle(ticket: Ticket, base: string, out: SyncOutcome, deps: SyncDeps, io: SyncJobIo): SyncJobResult {
