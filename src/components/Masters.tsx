@@ -51,12 +51,19 @@ export function VenueMaster({ data, setMaster }: Props) {
     { key: 'feePerDay', title: '会場費 日額(円)', width: 120, type: 'number', get: (v) => v.feePerDay, set: (v, x) => ({ ...v, feePerDay: n0(x) }) },
     { key: 'feeRatePct', title: '売上歩合(%)', width: 100, type: 'number', get: (v) => v.feeRatePct, set: (v, x) => ({ ...v, feeRatePct: n0(x) }) },
     { key: 'env', title: '雛形の要素数', width: 100, type: 'readonly', align: 'right', get: (v) => v.template.env.length },
+    {
+      // 日報の同期で、会場名の書き方が違う回答を、この会場のものとして扱うための別名（明示的な対応づけ。あいまい一致はしない）
+      key: 'reportNames', title: '日報での会場名（別名。複数は「｜」で区切る）', width: 300,
+      get: (v) => (v.reportNames ?? []).join('｜'),
+      set: (v, x) => ({ ...v, reportNames: x === '' ? [] : x.split('｜') }),
+      placeholder: () => '会場名と同じなら空欄',
+    },
     { key: 'memo', title: 'メモ', width: 280, get: (v) => v.memo, set: (v, x) => ({ ...v, memo: x }) },
   ];
   const used = (id: string) => data.projects.filter((p) => p.venueId === id).length;
   return (
     <section>
-      <h2>会場<small>会場費の既定値と、レイアウトの雛形（周辺店舗・入口・通路など）を管理します</small></h2>
+      <h2>会場<small>会場費の既定値と、レイアウトの雛形（周辺店舗・入口・通路など）を管理します。日報の同期は、会場名（または別名）と会期で照合します</small></h2>
       <Grid
         rows={data.venues} cols={cols} rowKey={(v) => v.id} deletable selectedKey={editing ?? undefined}
         onChange={(rows) => { if (confirmRemoval(data.venues, rows, used, '会場')) setMaster('venues', rows); }}

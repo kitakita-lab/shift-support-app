@@ -44,9 +44,17 @@ async function loadSample(page) {
 }
 /** ラソラ札幌 11/13〜17 の案件を開く。無ければ（V1 など）先頭の案件を開く */
 async function openTarget(page) {
+  // スマホ幅では、案件一覧はカード（カード全体を押して開く。Version 4）。それ以外は表の「開く」
+  if (await page.locator('[data-testid="project-cards"]').count()) {
+    const card = page.locator('[data-testid="project-card"]', { hasText: '11/13' });
+    const found = (await card.count()) > 0;
+    await (found ? card.first() : page.locator('[data-testid="project-card"]').first()).locator('.pcard__open').click();
+    await page.waitForSelector('.sheettabs');
+    return found;
+  }
   const lasora = page.locator('.grid tbody tr', { hasText: '11/13' });
   const isLasora = (await lasora.count()) > 0;
-  await (isLasora ? lasora.first() : page.locator('.grid tbody tr').first()).getByRole('button', { name: '開く' }).click();
+  await (isLasora ? lasora.first() : page.locator('.grid tbody tr').first()).getByRole('button', { name: '開く', exact: true }).click();
   await page.waitForSelector('.sheettabs');
   return isLasora;
 }
@@ -240,8 +248,10 @@ add('B6', '日本語入力の変換確定の Enter ではセルが移動しな�
 add('B7', 'Tab で入った欄の中をクリックすると、その位置にカーソルが入って追記できる（全部が置き換わらない）', async ({ page }) => {
   await setup(page);
   await page.locator('table.kv tr', { hasText: '状態' }).locator('select').focus();
-  await page.keyboard.press('Tab');
   const fixed = page.locator('table.kv tr', { hasText: '固定売上' }).locator('input');
+  // Tab で固定売上の欄まで進む（Version 4 で、間に「収支の計算方法」の切り替えが入った）
+  for (let i = 0; i < 6 && !(await fixed.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press('Tab');
+  ok(await fixed.evaluate((el) => el === document.activeElement), 'Tab で固定売上の欄に入れません');
   const before = await fixed.inputValue();
   const b = await fixed.boundingBox();
   await page.mouse.click(b.x + b.width - 6, b.y + b.height / 2);   // 数字の末尾あたり
@@ -294,8 +304,8 @@ add('C1', '配置表のクリックで配置／解除でき、人件費が連動
 add('C2', '掛け持ちになる配置は確認ダイアログで選べる（キャンセルなら配置されず、OK なら配置される＝禁止しない）', async ({ page, dialogs, setAnswer }) => {
   await loadSample(page);
   const row = page.locator('.grid tbody tr').last();
-  await row.getByRole('button', { name: '複製' }).click();          // 同じ期間の案件ができる（スタッフ配置は引き継がない）
-  await page.locator('.grid tbody tr').last().getByRole('button', { name: '開く' }).click();
+  await row.getByRole('button', { name: '複製', exact: true }).click();          // 同じ期間の案件ができる（スタッフ配置は引き継がない）
+  await page.locator('.grid tbody tr').last().getByRole('button', { name: '開く', exact: true }).click();
   await sheet(page, 'スタッフ配置');
   eq(await page.locator('.matrix__cell.is-on').count(), 0, '複製した直後は、誰も配置されていない');
   const cell = page.locator('.matrix__cell button').first();        // スタッフA × 11/13（元の案件で配置済みの枠）
@@ -550,11 +560,11 @@ add('D9', '制作席とその他の椅子を分けて数える。上限回転数
 });
 add('D10', '案件を複製すると、コンテンツ・費用・レイアウトは引き継ぎ、スタッフ配置は引き継がない', async ({ page }) => {
   await loadSample(page);
-  await page.locator('.grid tbody tr', { hasText: '11/13' }).first().getByRole('button', { name: '複製' }).click();
+  await page.locator('.grid tbody tr', { hasText: '11/13' }).first().getByRole('button', { name: '複製', exact: true }).click();
   const copy = page.locator('.grid tbody tr', { hasText: 'ikyu（コピー）' });
   await copy.waitFor();
   ok((await page.locator('[data-testid="notices"]').innerText()).includes('スタッフ配置 10 件は引き継いでいません'), '複製時の表示');
-  await copy.getByRole('button', { name: '開く' }).click();
+  await copy.getByRole('button', { name: '開く', exact: true }).click();
   await page.waitForSelector('.sheettabs');
   const e = await readEstimate(page);
   eq([e['人件費'], e['材料費'], e['会場費'], e['備品費'], e['その他費用']], ['¥0', '¥97,350', '¥100,000', '¥29,000', '¥22,000'], '複製した案件の試算（人件費だけ 0）');

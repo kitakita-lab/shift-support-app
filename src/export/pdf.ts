@@ -3,6 +3,8 @@
 // 日本語フォントを PDF に埋め込む必要がなく、追加ライブラリなしでダウンロードできる。
 // （文字は画像になるため PDF 上でテキスト選択はできない。docs/作業ログ.md 判断 D-06 参照）
 
+import { downloadBlob } from './download';
+
 const enc = new TextEncoder();
 
 /**
@@ -98,12 +100,5 @@ export async function downloadSvgAsPdf(svg: SVGSVGElement, fileName: string): Pr
   // 図が横長なら A4 横、縦長なら A4 縦
   const [pw, ph] = w >= h ? [841.89, 595.28] : [595.28, 841.89];
   const pdf = buildImagePdf(bytes, w, h, pw, ph);
-  const url = URL.createObjectURL(new Blob([pdf as BlobPart], { type: 'application/pdf' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadBlob(new Blob([pdf as BlobPart], { type: 'application/pdf' }), fileName);
 }

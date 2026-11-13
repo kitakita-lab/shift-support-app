@@ -1,6 +1,7 @@
 # KitaKita Lab ワークショップ運営プランナー
 
 ワークショップ案件（会場 × 期間 × 実施コンテンツ）の **スタッフ配置・収支試算・ブースレイアウト** を1か所で計画・管理する Web アプリ。
+JCOS 案件では、請求と実費を分けた粗利（日別・会期）を、日報（Google フォームの回答）の制作実績と合わせて確認できる（Version 4）。
 
 - 設計書: [docs/02_新アプリ設計書.md](docs/02_新アプリ設計書.md)
 - 旧アプリ調査: [docs/01_旧アプリ調査.md](docs/01_旧アプリ調査.md)
@@ -17,7 +18,8 @@ npm run dev      # 開発サーバー
 npm test         # 単体テスト（試算・警告・レイアウト・版数・図の指紋・PDF・サンプルデータ・同期の計算部分と、模擬環境での同期の本体）
 npm run build    # 型チェック + ビルド
 node e2e/verify.mjs      # 実ブラウザ（Chromium）での動作確認。playwright が必要（スクリプト先頭の説明を参照）
-node e2e/sync/run.mjs    # 共有データの同期・移行・権限の確認（Firebase エミュレータ上）。Java・firebase-tools・playwright が必要
+node e2e/v4.mjs          # 同（Version 4 で追加: スマホ幅の表示・数値入力・JCOS 案件の収支・元に戻す・保存）
+node e2e/sync/run.mjs    # 共有データの同期・移行・権限・日報の同期の確認（Firebase エミュレータ上）。Java・firebase-tools・playwright が必要
 ```
 
 Firebase の設定（`.env`。`.env.example` 参照）が無い場合は、ブラウザ内（localStorage）だけで動く。
@@ -31,20 +33,36 @@ Firebase の設定（`.env`。`.env.example` 参照）が無い場合は、ブ�
 共有データを誰が読み書きできるかは、Firestore のセキュリティルールで決まる。メンバー制のルール案は `firestore.v3.rules`（**未デプロイ**）。
 適用するまでは、ログインできる Google アカウントなら誰でも読み書きできる。適用の手順は設計書 2.6。
 
+## JCOS 案件の収支と、日報の同期（Version 4）
+
+- 案件の「基本情報」で、収支の計算方法を **JCOS 案件** にすると、JCOS への請求（人件費・材料費・追加の請求）と、こちらの支払い（アルバイト代・材料原価・その他実費）を分けて、粗利を日別・会期で計算する。
+  それ以外の案件は、これまでどおりの汎用の試算。計算式は設計書 6.1。
+- **日報を同期**（JCOS 案件の見出しの下）を押すと、日報の「キットの使用数」を、会場＋会期で照合して、日別の実績として取り込む。
+  読み取り専用で、必要な列だけを読む。何度押しても二重には数えない。失敗したときは、前回の実績を残す。
+  日報に読み取れない回答（個数が数字でない・空欄、開催日が日付でない、会場名が空欄）があるときは、一部だけを取り込まずに同期を止め、
+  日報の何行目の、どの項目かを表示する（日報を直してから、もう一度同期する）。仕組みは設計書 6.2。
+- 同期を使い始めるには、アプリの外での設定が要る: Firebase のプロジェクト（Google Cloud）で **Google Sheets API を有効にする**／最初の同期で **Google の確認画面を許可する**／
+  ログインするアカウントが **日報を閲覧できること**。日報の URL は、最初の 1 回だけアプリに貼る（リポジトリには入れない）。
+- 同期しなくても、試算の日別の表に実績個数を手入力できる。
+
 ## 構成
 
 ```
 src/
   types.ts            データモデル
-  domain/             純関数（calc=試算, layout=レイアウト操作・番号・版, figure=図の内容と指紋, warnings=入力警告, seed=初期値・サンプル）
+  domain/             純関数（calc=試算, jcos=JCOS 案件の収支, report=日報の照合と集計, numtext=数値欄の文字の整形,
+                      layout=レイアウト操作・番号・版, figure=図の内容と指紋, warnings=入力警告, seed=初期値・サンプル）
+  report/             日報の同期（googleToken=読み取り専用の認証, sheets=Google Sheets API の読み取り, sync=同期の流れ）
   store/              データの置き場所（localData=この端末だけ, sharedSession=共有データの同期, remote=Firestore 入出力,
                       sharedLogic=同期の計算, outbox=未送信の控え, paths=Firestore 上の場所, notices=お知らせ, useAppData=画面との接続,
                       sessionTestkit=同期のテスト用の模擬環境）
-  export/pdf.ts       配置図の PDF 出力
-  components/         Grid（表計算風グリッド）, NumInput（数値欄）, LayoutEditor, LayoutSvg, ProjectView, Masters, Shared（置き場所の帯・案内・メンバー）
+  export/             pdf=配置図の PDF 出力, download=ファイルの保存
+  components/         Grid（表計算風グリッド）, NumInput（数値欄）, LayoutEditor, LayoutSvg, ProjectView, JcosView（JCOS 案件の試算）,
+                      ReportBar（日報の同期）, Masters, Shared（置き場所の帯・案内・メンバー）
   **/*.test.ts        単体テスト（domain/testkit.ts はテスト用の部品）
 e2e/verify.mjs        実ブラウザでの動作確認（npm test には含めない）
-e2e/sync/             共有データの同期・移行・ルールの確認（エミュレータ上。実際の Firebase にはつながない）
+e2e/v4.mjs            同（Version 4 で追加した確認）
+e2e/sync/             共有データの同期・移行・ルール・日報の同期の確認（エミュレータ上。実際の Firebase・Google にはつながない）
 firestore.rules       現在のルール（変更していない）
 firestore.v3.rules    メンバー制のルール案（未デプロイ）
 archive/shift-app-v1/ 旧アプリ一式

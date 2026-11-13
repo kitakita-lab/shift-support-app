@@ -20,6 +20,8 @@ export interface Col<R> {
   /** 警告メッセージ（あればセルを黄色表示） */
   warn?: (row: R) => string | undefined;
   placeholder?: (row: R) => string;
+  /** 指定すると、（編集できない）セルの文字がボタンになり、押すとその行を開く（一覧の案件名など） */
+  onOpen?: (row: R) => void;
 }
 
 interface Props<R> {
@@ -93,7 +95,9 @@ export default function Grid<R>({
                   return (
                     <td key={c.key} className={`${warn ? 'is-warn' : ''}${editable ? '' : ' is-ro'}`} title={warn}>
                       {!editable ? (
-                        <div className="grid__ro" style={{ textAlign: align }}>{val}</div>
+                        c.onOpen
+                          ? <button className="grid__link" style={{ textAlign: align }} onClick={(e) => { e.stopPropagation(); c.onOpen!(row); }}>{val}</button>
+                          : <div className="grid__ro" style={{ textAlign: align }}>{val}</div>
                       ) : c.type === 'select' ? (
                         <select {...common} value={val} onChange={(e) => setCell(ri, c, e.target.value)}>
                           <option value="">（選択）</option>

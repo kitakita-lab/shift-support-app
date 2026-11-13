@@ -9,6 +9,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useAuth } from '../contexts/AuthContext';
 import { emptyData } from '../domain/seed';
 import { genId } from '../domain/util';
+import { downloadBlob } from '../export/download';
 import { isFirebaseConfigured, onDbResetElsewhere } from '../firebase';
 import { AppData, Project } from '../types';
 import { loadLocal, saveLocal } from './localData';
@@ -53,12 +54,7 @@ function applyCopy(d: AppData, copy: ProjectCopy): AppData {
 }
 
 export function downloadJson(filename: string, json: unknown): void {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadBlob(new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' }), filename);
 }
 
 export interface AppStore {

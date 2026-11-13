@@ -4,8 +4,10 @@ import Grid, { Col } from './components/Grid';
 import { ContentMaster, PartMaster, StaffMaster, VenueMaster } from './components/Masters';
 import ProjectView from './components/ProjectView';
 import { MembersPanel, NoticeList, ReportTable, SharedPhasePanel, SpaceBar } from './components/Shared';
+import { PHONE, useMediaQuery } from './components/useMedia';
 import { useAuth } from './contexts/AuthContext';
 import { estimate } from './domain/calc';
+import { projectMoney } from './domain/jcos';
 import { duplicateProject, newProject, sampleData } from './domain/seed';
 import { genId, listDates, localDate, shortDate, yen } from './domain/util';
 import { projectWarnings } from './domain/warnings';
@@ -66,10 +68,16 @@ export default function App() {
   }, [open, openId, usable, onShared, store]);
   useEffect(() => { if (tab === 'members' && !canManageMembers) setTab('projects'); }, [tab, canManageMembers]);
 
+  // 一覧の金額: JCOS 案件は 請求・実費・粗利、それ以外は従来の 売上・費用・利益
   const rows = useMemo(
-    () => data.projects.map((p) => ({ p, est: estimate(p, data), warn: projectWarnings(p, data).filter((w) => w.severity === 'warn').length })),
+    () => data.projects.map((p) => {
+      const est = estimate(p, data);
+      return { p, est, money: projectMoney(p, data, est), warn: projectWarnings(p, data).filter((w) => w.severity === 'warn').length };
+    }),
     [data],
   );
+  // スマホ幅では、表の代わりにカードで並べる（カード全体を押して開く。表は右端の「開く」まで横スクロールが要るため）
+  const phone = useMediaQuery(PHONE);
   type Row = (typeof rows)[number];
   const venueName = (id: string) => data.venues.find((v) => v.id === id)?.name ?? '';
   const period = (p: Project) => {
@@ -77,14 +85,14 @@ export default function App() {
     return d.length ? `${shortDate(d[0])}〜${shortDate(d[d.length - 1])}（${d.length}日）` : '';
   };
   const cols: Col<Row>[] = [
-    { key: 'name', title: '案件名', width: 200, get: (r) => r.p.name || '（名称未設定）' },
+    { key: 'name', title: '案件名', width: 200, get: (r) => r.p.name || '（名称未設定）', onOpen: (r) => setOpenId(r.p.id) },
     { key: 'venue', title: '会場', width: 140, get: (r) => venueName(r.p.venueId) },
     { key: 'period', title: '期間', width: 200, get: (r) => period(r.p) },
     { key: 'contents', title: 'コンテンツ', width: 150, get: (r) => r.est.contentLines.map((l) => l.name).join('、') },
     { key: 'status', title: '状態', width: 70, get: (r) => r.p.status },
-    { key: 'rev', title: '売上', width: 100, align: 'right', get: (r) => yen(r.est.revenue) },
-    { key: 'cost', title: '費用', width: 100, align: 'right', get: (r) => yen(r.est.totalCost) },
-    { key: 'profit', title: '利益', width: 100, align: 'right', get: (r) => yen(r.est.profit), warn: (r) => (r.est.profit < 0 ? '赤字の試算です' : undefined) },
+    { key: 'rev', title: '売上', width: 100, align: 'right', get: (r) => yen(r.money.revenue) },
+    { key: 'cost', title: '費用', width: 100, align: 'right', get: (r) => yen(r.money.cost) },
+    { key: 'profit', title: '利益', width: 110, align: 'right', get: (r) => `${yen(r.money.profit)}${r.money.jcos ? '（粗利）' : ''}`, warn: (r) => (r.money.profit < 0 ? '赤字の試算です' : undefined) },
     { key: 'warn', title: '警告', width: 60, align: 'right', get: (r) => (r.warn ? `⚠ ${r.warn}` : '') },
   ];
 
@@ -195,11 +203,43 @@ export default function App() {
             onSaveVenueTemplate={(venueId, p) => setMaster('venues', data.venues.map((v) => (v.id === venueId
               ? { ...v, template: { ...v.template, width: p.layout.width, height: p.layout.height, env: p.layout.env.map((e) => ({ ...e, id: genId() })) } }
               : v)))}
+            onAddVenueAlias={(venueId, name) => setMaster('venues', data.venues.map((v) => (v.id === venueId
+              ? { ...v, reportNames: [...new Set([...(v.reportNames ?? []), name.trim()])].filter(Boolean) }
+              : v)))}
           />
         )}
         {tab === 'projects' && !open && (
           <section>
             <h2>案件一覧<small>案件 ＝ 会場 × 期間 × 実施コンテンツ</small></h2>
+            {phone ? (
+              <div className="plist" data-testid="project-cards">
+                {rows.length === 0 && <p className="hint">案件がありません。「＋ 新しい案件」か、データタブの「サンプルデータを読み込む」から始められます</p>}
+                {rows.map((r) => (
+                  <div key={r.p.id} className="pcard" data-testid="project-card">
+                    {/* カード全体が「開く」ボタン。複製・コピー・削除は、下の小さいボタン（押し間違えにくいように分ける） */}
+                    <button className="pcard__open" onClick={() => setOpenId(r.p.id)} aria-label={`案件「${r.p.name || '名称未設定'}」を開く`}>
+                      {/* 並びは内側の要素で組む（ボタンそのものを格子の入れ物にすると、効かないブラウザがある） */}
+                      <span className="pcard__body">
+                        <span className="pcard__name">{r.p.name || '（名称未設定）'}<span className="pcard__status">{r.p.status}</span>{r.warn > 0 && <span className="pcard__warn">⚠ {r.warn}</span>}</span>
+                        <span className="pcard__sub">{venueName(r.p.venueId) || '会場未選択'}{period(r.p) ? `・${period(r.p)}` : ''}</span>
+                        <span className="pcard__money">
+                          <span>{r.money.jcos ? '請求' : '売上'} {yen(r.money.revenue)}</span>
+                          <span>{r.money.jcos ? '実費' : '費用'} {yen(r.money.cost)}</span>
+                          <b className={r.money.profit < 0 ? 'neg' : ''}>{r.money.jcos ? '粗利' : '利益'} {yen(r.money.profit)}</b>
+                        </span>
+                        <span className="pcard__go" aria-hidden="true">›</span>
+                      </span>
+                    </button>
+                    <div className="pcard__actions">
+                      <button onClick={() => duplicate(r.p)}>複製</button>
+                      {signedIn && <button data-testid="copy-project" onClick={() => copyTo(r.p)}>{onShared ? '端末へコピー' : '共有へコピー'}</button>}
+                      <button onClick={() => remove(r.p)} aria-label={`案件「${r.p.name || '名称未設定'}」を削除`}>削除</button>
+                    </div>
+                  </div>
+                ))}
+                <button className="grid__add" onClick={create}>＋ 新しい案件</button>
+              </div>
+            ) : (
             <Grid
               rows={rows} cols={cols} rowKey={(r) => r.p.id} onAdd={create} addLabel="＋ 新しい案件"
               rowActions={(r) => (
@@ -216,6 +256,7 @@ export default function App() {
               )}
               emptyText="案件がありません。「＋ 新しい案件」か、データタブの「サンプルデータを読み込む」から始められます"
             />
+            )}
           </section>
         )}
         {tab === 'staff' && <StaffMaster data={data} setMaster={setMaster} />}
