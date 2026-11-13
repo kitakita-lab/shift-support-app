@@ -78,6 +78,11 @@ export interface AppStore {
   setMaster: <K extends MasterKey>(key: K, items: AppData[K]) => void;
   addProject: (p: Project) => void;
   updateProject: (id: string, fn: (p: Project) => Project) => void;
+  /**
+   * 表示している置き場所の、いまの案件（画面の描画を待たずに読む。無ければ undefined）。
+   * あとから届く処理（日報の同期など）の結果を書く前に、案件が変わっていないかを確かめるために使う
+   */
+  getProject: (id: string) => Project | undefined;
   removeProject: (id: string) => void;
   /** 「この端末だけのデータ」を丸ごと置き換える（サンプル読込・バックアップ復元）。共有データには触れない */
   replaceLocal: (d: AppData) => void;
@@ -197,6 +202,18 @@ export function useAppData(): AppStore {
     else setLocal((d) => ({ ...d, projects: d.projects.map((p) => (p.id === id ? { ...fn(p), updatedAt: Date.now() } : p)) }));
   }, [space, session]);
 
+  // 置き場所にある、いまの案件（画面の描画を待たずに読む）。あとから届いた処理（日報の同期など）の結果を書く前に、
+  // 案件が、処理を始めたときから変わっていないかを確かめるために使う。古い画面が持っている関数から呼んでも、いまの内容が返る
+  const localNow = useRef(local);
+  localNow.current = local;
+  const getProject = useCallback((id: string): Project | undefined => {
+    if (space === 'shared') {
+      const v = session?.getView();
+      return v && v.phase === 'ready' ? v.data.projects.find((p) => p.id === id) : undefined;
+    }
+    return localNow.current.projects.find((p) => p.id === id);
+  }, [space, session]);
+
   const removeProject = useCallback((id: string) => {
     if (space === 'shared') session?.removeProject(id);
     else setLocal((d) => ({ ...d, projects: d.projects.filter((p) => p.id !== id) }));
@@ -246,7 +263,7 @@ export function useAppData(): AppStore {
 
   return useMemo(() => ({
     space, setSpace, canShare, data, usable, local, shared, session, notices, notify, dismissNotice,
-    setMaster, addProject, updateProject, removeProject, replaceLocal, copyProject, beforeSignOut, discardUnsent: discard,
+    setMaster, addProject, updateProject, getProject, removeProject, replaceLocal, copyProject, beforeSignOut, discardUnsent: discard,
   }), [space, setSpace, canShare, data, usable, local, shared, session, notices, notify, dismissNotice,
-    setMaster, addProject, updateProject, removeProject, replaceLocal, copyProject, beforeSignOut, discard]);
+    setMaster, addProject, updateProject, getProject, removeProject, replaceLocal, copyProject, beforeSignOut, discard]);
 }

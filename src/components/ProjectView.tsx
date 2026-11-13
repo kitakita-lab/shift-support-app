@@ -26,6 +26,10 @@ const STATUSES: ProjectStatus[] = ['計画中', '確定', '実施済', '中止']
 interface Props {
   project: Project;
   data: AppData;
+  /** 案件の置き場所（共有データか、この端末だけのデータか） */
+  space: 'shared' | 'local';
+  /** この案件の、いまの内容（画面の描画を待たずに読む。あとから届く処理の結果を書く前に、変わっていないかを確かめるため） */
+  current: () => Project | undefined;
   onChange: (fn: (p: Project) => Project) => void;
   onSaveVenueTemplate: (venueId: string, project: Project) => void;
   /** 会場に「日報での会場名（別名）」を足す */
@@ -42,7 +46,7 @@ function Field({ label, warn, children }: { label: string; warn?: string; childr
   );
 }
 
-export default function ProjectView({ project: p, data, onChange, onSaveVenueTemplate, onAddVenueAlias, onBack }: Props) {
+export default function ProjectView({ project: p, data, space, current, onChange, onSaveVenueTemplate, onAddVenueAlias, onBack }: Props) {
   const [sheet, setSheet] = useState<Sheet>('basic');
   const [showWarn, setShowWarn] = useState(false);
   const warnings = useMemo(() => projectWarnings(p, data), [p, data]);
@@ -183,7 +187,7 @@ export default function ProjectView({ project: p, data, onChange, onSaveVenueTem
           {warnings.map((w: Warning, i) => <li key={i} className={`warnlist__${w.severity}`}>{w.severity === 'warn' ? '⚠' : 'ℹ'} {w.message}</li>)}
         </ul>
       )}
-      {jcosOn && <ReportBar project={p} data={data} onChange={onChange} onAddVenueAlias={onAddVenueAlias} />}
+      {jcosOn && <ReportBar project={p} data={data} scope={space} current={current} onChange={onChange} onAddVenueAlias={onAddVenueAlias} />}
 
       <div className="pv__body">
         {sheet === 'basic' && (
