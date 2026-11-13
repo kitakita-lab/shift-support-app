@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { Project, ReportSync, Venue } from '../types';
 import { emptyLayout } from './layout';
 import {
-  RawReportRow, columnLetter, contestedReportDays, findReportColumns, findReportSource, hydrateReportSync, isBlankRow, isTestRow, parseReportCount,
-  parseReportDate, parseSheetUrl, planReportSync, reportVenue, syncStaleness, unmatchedGaps, usableReportDays, venueKey, venueKeys,
+  MAX_REPORT_COUNT, RawReportRow, ReportIssue, columnLetter, contestedReportDays, countProblem, dateProblem, findReportColumns, findReportSource, hydrateReportSync,
+  isBlankRow, isTestRow, parseReportCount, parseReportDate, parseSheetUrl, planReportSync, reportVenue, rivalClaimedDates, syncStaleness,
+  unmatchedGaps, usableReportDays, venueKey, venueKeys, venueProblem,
 } from './report';
 import { rng } from './testkit';
 import { mkProject } from './testkit';
@@ -95,19 +96,37 @@ describe('開催日の読み取り', () => {
 });
 
 describe('キットの使用数の読み取り', () => {
-  it('0 以上の整数（数値・文字列・全角・桁区切り）', () => {
+  it('0 以上の整数（数値・文字列・全角・3 桁ごとの桁区切り・前後の空白）', () => {
     expect(parseReportCount(98)).toBe(98);
     expect(parseReportCount(0)).toBe(0);
     expect(parseReportCount('98')).toBe(98);
     expect(parseReportCount(' 98 ')).toBe(98);
+    expect(parseReportCount('　９８　')).toBe(98);
     expect(parseReportCount('９８')).toBe(98);
     expect(parseReportCount('1,234')).toBe(1234);
+    expect(parseReportCount('１，２３４')).toBe(1234);
     expect(parseReportCount('0')).toBe(0);
+    expect(parseReportCount('007')).toBe(7);
+    expect([parseReportCount(MAX_REPORT_COUNT), parseReportCount('9,999'), parseReportCount('9999')]).toEqual([9999, 9999, 9999]);
   });
   it('空欄・数字でない・小数・マイナスは null（0 個として数えない）', () => {
     for (const v of ['', ' ', '約50', '50個', '12.5', 12.5, -1, '-1', '５０くらい', Number.NaN, Infinity, null, undefined, true]) {
       expect(parseReportCount(v), String(v)).toBeNull();
     }
+  });
+  it('途中の空白・改行・区切り方の合わないカンマは null（2 つの数をつなげて読まない。「62 58」を 6258 個にしない）', () => {
+    for (const v of ['62 58', '６２　５８', '40\n25', '62,58', '12,5', '1,2,3', ',123', '123,', '1,,234', '1 234', '12,34,567']) {
+      expect(parseReportCount(v), JSON.stringify(v)).toBeNull();
+    }
+  });
+  it('1 件の回答で 9,999 個を超える値は null（個数のセルが日付として保存されていると、日付の通し番号が数として届く。それを個数にしない）', () => {
+    expect(MAX_REPORT_COUNT).toBe(9999);
+    for (const v of [10000, '10000', '10,000', 46315, 46341, 32874, '46315', 9999999, '１２３４５６７８９', '9'.repeat(400)]) {
+      expect(parseReportCount(v), String(v).slice(0, 20)).toBeNull();
+    }
+    // 1990 年以降の日付の通し番号は、すべて上限より大きい（「10-20」「11/15」と入力された個数は、今年の日付＝4 万台になる）
+    expect(parseReportDate(32874)).toBe('1990-01-01');
+    expect(32874).toBeGreaterThan(MAX_REPORT_COUNT);
   });
 });
 
@@ -119,6 +138,13 @@ describe('会場名', () => {
     expect(reportVenue(row('', '', '', 'みなと市場'))?.name).toBe('みなと市場');
     expect(reportVenue(row('', 'その他', '', ''))).toBeNull();
     expect(reportVenue(row('', '', ''))).toBeNull();
+  });
+  it('スプレッドシートのエラーの値（#N/A・#REF! など）は、会場名として扱わない', () => {
+    for (const e of ['#N/A', '#REF!', '#VALUE!', '#DIV/0!', '#NAME?', '#NUM!', '#NULL!', '#ERROR!', ' #n/a ']) {
+      expect(reportVenue(row('', e, '')), e).toBeNull();
+      expect(reportVenue(row('', 'その他', '', e)), e).toBeNull();
+    }
+    expect(reportVenue(row('', '#1 ホール', ''))?.name).toBe('#1 ホール');     // # で始まるだけの名前は、会場名
   });
   it('会場に名前があるときは、「会場（その他の場合）」に何か書かれていても会場を使う', () => {
     expect(reportVenue(row('', CENTER, '', 'みなと市場'))?.name).toBe(CENTER);
@@ -147,6 +173,18 @@ describe('テスト回答の判定', () => {
     expect(isTestRow(row('2026/11/13', CENTER, '5', '', '秋の花まつり'))).toBe(false);
     expect(isTestRow(row('2026/11/13', CENTER, '5'))).toBe(false);
     expect(isTestRow(row('2026/11/13', 'その他', '5', 'Contest Hall', 'Latest Flowers'))).toBe(false);   // 単語の一部の test は数えない
+  });
+  it('「コンテスト」は、テスト回答の目印にしない（コンテストという催しの本物の回答を、黙って捨てない）', () => {
+    for (const event of ['ハロウィン仮装コンテスト', 'フォトコンテスト', 'ﾌｫﾄｺﾝﾃｽﾄ', '花のコンテスト 表彰式']) {
+      expect(isTestRow(row('2026/11/13', CENTER, '62', '', event)), event).toBe(false);
+    }
+    expect(isTestRow(row('2026/11/13', 'その他', '62', 'コンテスト広場', ''))).toBe(false);
+    // 「コンテスト」のほかに「テスト」があれば、テスト回答
+    expect(isTestRow(row('2026/11/13', CENTER, '5', '', '【テスト】フォトコンテスト'))).toBe(true);
+    expect(isTestRow(row('2026/11/13', CENTER, '5', '', 'フォトコンテストのテスト送信'))).toBe(true);
+    // 取り込まれることも確かめる（以前は、テスト回答として除かれていた）
+    const s = plan([row('2026/11/13', CENTER, '62', '', 'ハロウィン仮装コンテスト')]);
+    expect([dayList(s), s.tests]).toEqual([[['2026-11-13', 62, 1]], 0]);
   });
 });
 
@@ -294,21 +332,278 @@ describe('テスト回答を実績に混ぜない', () => {
   });
 });
 
-describe('読み取れない回答は、取り込まずに理由を示す', () => {
-  it('会場と開催日は合うが、キットの使用数を読み取れない（空欄を含む）', () => {
-    const s = plan([row('2026/11/13', CENTER, ''), row('2026/11/13', CENTER, '約50'), row('2026/11/14', CENTER, '12.5'), row('2026/11/15', CENTER, '30')]);
-    expect(dayList(s)).toEqual([['2026-11-15', 30, 1]]);
-    expect(s.skipped).toEqual([{ reason: 'bad-count', rows: 3, dates: ['2026-11-13', '2026-11-14'] }]);
-    expect(s.rowsUsed).toBe(1);
+// ── 読み取れない回答 ──────────────────────────────────────────
+// 方針（Issue #88）: 不正値は同期停止。この案件の回答、または、この案件のものかどうかを決められない回答に、
+// 読み取れない項目があれば、同期の全体を止める（一部だけ取り込んだ実績を作らない）。確実にこの案件のものでない回答は、外すだけ。
+/** 照合が止まること（ok: false）を確かめて、止めた理由を返す */
+function stopped(rows: RawReportRow[], opts: { project?: Project; projects?: Project[]; venues?: Venue[] } = {}): { message: string; issues: ReportIssue[] } {
+  const project = opts.project ?? P;
+  const r = planReportSync({ project, projects: opts.projects ?? [project], venues: opts.venues ?? venues, rows, now: NOW });
+  if (r.ok) throw new Error(`同期が止まっていません（取り込まれました: ${JSON.stringify(r.sync.days)}）`);
+  expect('sync' in r).toBe(false);                              // 止めたときは、結果を作らない
+  return { message: r.message, issues: r.issues ?? [] };
+}
+/** 読み取れる回答 2 件（日報の 2 行目・3 行目） */
+const GOOD = [row('2026/11/13', CENTER, '62'), row('2026/11/14', CENTER, '58')];
+const DATE = '開催日', VENUE_H = '会場', OTHER_H = '会場（その他の場合）', COUNT = 'キットの使用数';
+
+describe('読み取れない回答があるときは、同期の全体を止める（一部だけ取り込まない）', () => {
+  // [説明, セルの値, 理由に含まれる文]
+  const badCounts: [string, unknown, string][] = [
+    ['空欄', '', 'が空欄です'],
+    ['空白だけ', ' 　 ', 'が空欄です'],
+    ['文字列（約50）', '約50', '数字以外の文字'],
+    ['単位つき（80個）', '80個', '数字以外の文字'],
+    ['漢数字', '八十', '数字以外の文字'],
+    ['スプレッドシートのエラー値', '#N/A', '数字以外の文字'],
+    ['2 つの数（途中に空白）', '62 58', '数字以外の文字（空白・区切りを含む）'],
+    ['2 つの数（全角の空白）', '６２　５８', '数字以外の文字（空白・区切りを含む）'],
+    ['2 つの数（改行）', '40\n25', '数字以外の文字（空白・区切りを含む）'],
+    ['区切り方の合わないカンマ', '62,58', '数字以外の文字（空白・区切りを含む）'],
+    ['小数点の代わりのカンマ', '12,5', '数字以外の文字（空白・区切りを含む）'],
+    ['小数（文字）', '12.5', '整数ではありません'],
+    ['小数（数値）', 12.5, '整数ではありません'],
+    ['マイナス（文字）', '-3', 'マイナスの値'],
+    ['マイナス（全角）', '－３', 'マイナスの値'],
+    ['マイナス（数値）', -3, 'マイナスの値'],
+    ['大きすぎる（数値）', 10000, '大きすぎます（1 件の回答で 9,999 個まで'],
+    ['大きすぎる（文字）', '123456789', '大きすぎます'],
+    ['大きすぎる（桁区切りつき）', '10,000', '大きすぎます'],
+    ['日付として保存された個数（「10-20」と入力 → 通し番号 46315）', 46315, 'セルが日付の形式になっている場合も'],
+    ['日付と時刻として保存された個数', 46315.5, '整数ではありません'],
+    ['数でない値（真偽値）', true, '数として読み取れません'],
+    ['無限大', Infinity, '数として読み取れません'],
+  ];
+  for (const [name, value, reason] of badCounts) {
+    it(`キットの使用数が ${name}: 止めて、開催日・項目・理由・日報の行番号を示す`, () => {
+      const { message, issues } = stopped([...GOOD, row('2026/11/15', CENTER, value)]);
+      expect(issues).toEqual([{ row: 4, date: '2026-11-15', items: [{ field: COUNT, reason: expect.stringContaining(reason) }] }]);
+      expect(issues[0].items[0].reason).toContain(`「${COUNT}」`);
+      expect(message).toContain('読み取れない回答が 1 件');
+      expect(message).toContain('取り込みを中止');
+    });
+  }
+  it('読み取れる書き方（0・全角・桁区切り・前後の空白・数値のセル）では止めない', () => {
+    const s = plan([row('2026/11/13', CENTER, '0'), row('2026/11/14', CENTER, '１，２３４'), row('2026/11/15', CENTER, ' 12 '), row('2026/11/16', CENTER, 9999), row('2026/11/17', CENTER, 0)]);
+    expect(s.days.map((d) => d.count)).toEqual([0, 1234, 12, 9999, 0]);
   });
-  it('会場は合うが、開催日を読み取れない', () => {
-    const s = plan([row('11/13', CENTER, '62'), row('', CENTER, '10'), row('きのう', EAST, '10')]);
-    expect(s.skipped).toEqual([{ reason: 'bad-date', rows: 2, dates: [] }]);   // 別の会場の回答は、この案件の問題として数えない
-    expect(s.days).toEqual([]);
+
+  const badDates: [string, unknown, string][] = [
+    ['空欄', '', 'が空欄です'],
+    ['年が無い（11/15）', '11/15', '日付として読み取れません'],
+    ['存在しない日（2026/02/30）', '2026/02/30', '日付として読み取れません'],
+    ['月日があり得ない（2026/13/40）', '2026/13/40', '日付として読み取れません'],
+    ['文字列（きのう）', 'きのう', '日付として読み取れません'],
+    ['通し番号として小さすぎる数', 12, '日付として読み取れません'],
+    ['通し番号として大きすぎる数', 20261115, '日付として読み取れません'],
+    ['数でも文字でもない値', true, '日付として読み取れません'],
+  ];
+  for (const [name, value, reason] of badDates) {
+    it(`会場は一致するが、開催日が ${name}: 会期内かどうかを決められないので、止める`, () => {
+      const { issues } = stopped([...GOOD, row(value, CENTER, '30')]);
+      expect(issues).toEqual([{ row: 4, date: null, items: [{ field: DATE, reason: expect.stringContaining(reason) }] }]);
+    });
+  }
+
+  it('開催日は会期内だが、会場名が空欄: この案件の回答かどうかを決められないので、止める（「その他」で会場名が未入力の場合を含む）', () => {
+    expect(stopped([...GOOD, row('2026/11/15', '', '30')]).issues)
+      .toEqual([{ row: 4, date: '2026-11-15', items: [{ field: VENUE_H, reason: `「${VENUE_H}」が空欄です` }] }]);
+    expect(stopped([...GOOD, row('2026/11/15', ' 　', '30')]).issues[0].items).toEqual([{ field: VENUE_H, reason: `「${VENUE_H}」が空欄です` }]);
+    expect(stopped([...GOOD, row('2026/11/15', 'その他', '30', '')]).issues)
+      .toEqual([{ row: 4, date: '2026-11-15', items: [{ field: OTHER_H, reason: `「${VENUE_H}」が「その他」ですが、会場名（「${OTHER_H}」の列）が入っていません` }] }]);
   });
-  it('開催日は会期内だが、会場名が空欄', () => {
-    const s = plan([row('2026/11/13', 'その他', '62', ''), row('2026/11/14', '', '10'), row('2026/12/01', '', '10')]);
-    expect(s.skipped).toEqual([{ reason: 'no-venue', rows: 2, dates: ['2026-11-13', '2026-11-14'] }]);
+  it('会場名がエラーの値（#N/A など）: 会場名として読み取れないので、空欄と同じに扱って止める（「会場名が一致しない回答」として別名の候補に出さない）', () => {
+    expect(stopped([...GOOD, row('2026/11/15', '#N/A', '30')]).issues)
+      .toEqual([{ row: 4, date: '2026-11-15', items: [{ field: VENUE_H, reason: `「${VENUE_H}」がエラーの値です（会場名として読み取れません）` }] }]);
+    expect(stopped([...GOOD, row('きのう', 'その他', '30', '#REF!')]).issues[0].items.map((x) => x.field)).toEqual([DATE, OTHER_H]);
+    expect(plan([...GOOD, row('2026/12/01', '#N/A', '30')]).unmatched).toEqual([]);      // 会期の外なら、外すだけ
+  });
+  it('開催日も会場名も読み取れない回答: 止める。読み取れない項目を、すべて挙げる', () => {
+    expect(stopped([...GOOD, row('', '', '30')]).issues[0].items.map((x) => x.field)).toEqual([DATE, VENUE_H]);
+    expect(stopped([...GOOD, row('きのう', 'その他', 'たくさん', '')]).issues[0].items.map((x) => x.field)).toEqual([DATE, OTHER_H, COUNT]);
+    expect(stopped([...GOOD, row('', '', '', '', 'イベント名だけ')]).issues[0].items.map((x) => x.field)).toEqual([DATE, VENUE_H, COUNT]);
+    expect(stopped([...GOOD, row('', CENTER, '')]).issues[0].items.map((x) => x.field)).toEqual([DATE, COUNT]);
+    expect(stopped([...GOOD, row('2026/11/15', '', 'x')]).issues[0].items.map((x) => x.field)).toEqual([VENUE_H, COUNT]);
+  });
+
+  it('止めたときは、読み取れる回答も取り込まない（一部だけの実績を作らない）。日報を直せば、すべて取り込む', () => {
+    const rows = [row('2026/11/13', CENTER, '62'), row('2026/11/14', CENTER, '58'), row('2026/11/14', CENTER, '約20'), row('2026/11/15', CENTER, '70')];
+    const r = planReportSync({ project: P, projects: [P], venues, rows, now: NOW });
+    expect(r.ok).toBe(false);                                     // 11/14 は 58 個だけ、という実績を作らない
+    expect(Object.keys(r).sort()).toEqual(['issues', 'message', 'ok']);
+    const fixed = rows.map((x) => (x.count === '約20' ? { ...x, count: '20' } : x));
+    expect(dayList(plan(fixed))).toEqual([['2026-11-13', 62, 1], ['2026-11-14', 78, 2], ['2026-11-15', 70, 1]]);
+  });
+  it('読み取れない回答が複数あれば、すべてを日報の行番号の順に挙げる（行番号は、見出しを 1 行目として数える。空行も 1 行）', () => {
+    const { message, issues } = stopped([
+      row('2026/11/13', CENTER, '62'),          // 2 行目
+      row('', '', ''),                          // 3 行目（空行）
+      row('2026/11/14', CENTER, ''),            // 4 行目: 個数が空欄
+      row('2026/11/12', CENTER, 'x'),           // 5 行目: 会期の外（止める理由にしない）
+      row('きのう', CENTER, '10'),              // 6 行目: 開催日
+      row('2026/11/16', 'その他', '5', ''),     // 7 行目: 会場名
+    ]);
+    expect(issues.map((x) => [x.row, x.date, x.items.map((i) => i.field)])).toEqual([
+      [4, '2026-11-14', [COUNT]], [6, null, [DATE]], [7, '2026-11-16', [OTHER_H]],
+    ]);
+    expect(message).toContain('読み取れない回答が 3 件');
+  });
+  it('止める理由には、回答に書かれていた文字そのものを入れない', () => {
+    const { message, issues } = stopped([row('ないしょの日付', CENTER, 'ないしょの個数'), row('2026/11/14', 'その他', 'ないしょ2', '')]);
+    expect(JSON.stringify([message, issues])).not.toContain('ないしょ');
+  });
+
+  it('別名で一致する回答の読み取れない項目でも、止める。別名に登録していない書き方の回答では、止めない（この案件の回答ではない）', () => {
+    const rows = [...GOOD, row('2026/11/15', '北街モール1F 中央広場', '')];
+    const s = plan(rows);                                          // 登録していない書き方 ＝ 別の会場名
+    expect(dayList(s)).toEqual([['2026-11-13', 62, 1], ['2026-11-14', 58, 1]]);
+    expect(s.unmatched).toEqual([{ venue: '北街モール1F 中央広場', rows: 1, count: 0, dates: ['2026-11-15'] }]);
+    const vs = [mkVenue('v-center', CENTER, ['北街モール1F 中央広場']), venues[1], venues[2]];
+    expect(stopped(rows, { venues: vs }).issues.map((x) => [x.row, x.items[0].field])).toEqual([[4, COUNT]]);
+  });
+  it('会期が重なる案件があって、どちらのものか決まっていない日の読み取れない回答では、どちらの案件の同期も止める（両方が決めている場合も同じ）', () => {
+    const Q = mkProject({ id: 'p2', name: '週末フェア', venueId: 'v-center', startDate: '2026-11-15', endDate: '2026-11-20' });
+    const rows = [...GOOD, row('2026/11/15', CENTER, '30'), row('2026/11/15', CENTER, '')];
+    expect(stopped(rows, { projects: [P, Q] }).issues.map((x) => x.row)).toEqual([5]);
+    expect(stopped(rows, { project: Q, projects: [P, Q] }).issues.map((x) => x.row)).toEqual([5]);
+    const mine = { ...P, reportClaims: ['2026-11-15'] };
+    const theirs = { ...Q, reportClaims: ['2026-11-15'] };
+    expect(stopped(rows, { project: mine, projects: [mine, theirs] }).issues.map((x) => x.row)).toEqual([5]);
+    expect(stopped(rows, { project: theirs, projects: [mine, theirs] }).issues.map((x) => x.row)).toEqual([5]);
+  });
+  it('一方の案件だけが「自分の実績にする」と決めている日の読み取れない回答では、決めた案件の同期だけを止める（相手の案件にとっては、確実に自分のものでない回答）', () => {
+    const Q = mkProject({ id: 'p2', name: '週末フェア', venueId: 'v-center', startDate: '2026-11-15', endDate: '2026-11-20' });
+    const rows = [...GOOD, row('2026/11/15', CENTER, '30'), row('2026/11/15', CENTER, ''), row('2026/11/19', CENTER, '50')];
+    const mine = { ...P, reportClaims: ['2026-11-15'] };
+    // 決めた案件: 自分の回答に読み取れない項目がある → 止める
+    expect(stopped(rows, { project: mine, projects: [mine, Q] }).issues.map((x) => [x.row, x.items[0].field])).toEqual([[5, COUNT]]);
+    // 相手の案件: その日の回答は「別の案件に割り当て済み」として外すだけ。ほかの日は取り込む
+    const t = plan(rows, { project: Q, projects: [mine, Q] });
+    expect(dayList(t)).toEqual([['2026-11-19', 50, 1]]);
+    expect(t.skipped).toEqual([{ reason: 'other-project', rows: 2, dates: ['2026-11-15'] }]);
+    // 相手の案件の日でも、開催日を読み取れない回答は、どの日のものか決められないので、止める
+    expect(stopped([...rows, row('きのう', CENTER, '5')], { project: Q, projects: [mine, Q] }).issues.map((x) => [x.row, x.items[0].field])).toEqual([[7, DATE]]);
+    // 中止の案件は、決めていても自分のものにできない: 相手（進行中の案件）が決めていれば外すだけ、決めていなければ止める
+    const cancelled = { ...P, status: '中止' as const, reportClaims: ['2026-11-15'] };
+    expect(dayList(plan(rows, { project: cancelled, projects: [cancelled, { ...Q, reportClaims: ['2026-11-15'] }] }))).toEqual([['2026-11-13', 62, 1], ['2026-11-14', 58, 1]]);
+    expect(stopped(rows, { project: cancelled, projects: [cancelled, Q] }).issues.map((x) => x.row)).toEqual([5]);
+  });
+});
+
+describe('この案件のものでないと確実に言える回答は、読み取れない項目があっても外すだけ（同期を止めない）', () => {
+  const base = plan(GOOD);
+  const same = (rows: RawReportRow[]) => {
+    const s = plan([...GOOD, ...rows]);
+    expect(s.days).toEqual(base.days);
+    expect([s.held, s.skipped, s.rowsUsed]).toEqual([base.held, base.skipped, base.rowsUsed]);
+    return s;
+  };
+  it('会期の外の回答（会場が一致・空欄のどちらでも。個数が読み取れなくても）', () => {
+    const s = same([row('2026/11/20', CENTER, '多数'), row('2026/11/12', CENTER, ''), row('2026/12/01', '', '10'), row('2026/12/01', 'その他', '', '')]);
+    expect(s.unmatched).toEqual([]);
+  });
+  it('別の会場名の回答（開催日・個数が読み取れなくても）。会期内なら、「会場名が一致しない回答」として示す', () => {
+    const s = same([row('きのう', EAST, '10'), row('', EAST, 'x'), row('2026/11/14', EAST, ''), row('2026/11/15', 'その他', '約3', 'みなと市場')]);
+    expect(s.unmatched).toEqual([
+      { venue: 'みなと市場', rows: 1, count: 0, dates: ['2026-11-15'] },
+      { venue: EAST, rows: 1, count: 0, dates: ['2026-11-14'] },
+    ]);
+  });
+  it('テスト回答・空行', () => {
+    const s = same([row('', 'その他', 'x', 'テスト会場'), row('きのう', CENTER, '', '', '【テスト】送信確認'), row('', '', ''), row(' ', '　', '')]);
+    expect([s.tests, s.rowsRead]).toEqual([2, 4]);
+  });
+});
+
+describe('回答 1 件の扱い（会場 × 開催日 × 個数のすべての組み合わせ）', () => {
+  // 期待する扱いを、実装とは別に、表として書く
+  type Outcome = '取り込む' | '止める' | '会場名が一致しない回答' | '外す';
+  const venueCases: [string, unknown, unknown, 'mine' | 'other' | 'unknown'][] = [
+    ['会場名が一致', CENTER, '', 'mine'],
+    ['「その他」＋会場名が一致', 'その他', CENTER, 'mine'],
+    ['会場が空欄＋「その他の場合」の会場名が一致', '', CENTER, 'mine'],
+    ['別の会場名', EAST, '', 'other'],
+    ['「その他」＋別の会場名', 'その他', 'みなと市場', 'other'],
+    ['会場名が空欄', '', '', 'unknown'],
+    ['「その他」＋会場名が空欄', 'その他', '', 'unknown'],
+  ];
+  const dateCases: [string, unknown, 'in' | 'out' | 'bad'][] = [
+    ['会期内', '2026/11/14', 'in'], ['会期内（通し番号）', 46340, 'in'], ['会期の外', '2026/11/20', 'out'], ['読み取れない', 'きのう', 'bad'], ['空欄', '', 'bad'],
+  ];
+  const countCases: [string, unknown, boolean][] = [['読み取れる', '10', true], ['読み取れる（数値の 0）', 0, true], ['空欄', '', false], ['文字', 'x', false], ['小数', 1.5, false]];
+  const expected = (venue: 'mine' | 'other' | 'unknown', date: 'in' | 'out' | 'bad', countOk: boolean): Outcome => {
+    if (date === 'out') return '外す';                                        // 会期の外は、何であっても対象外
+    if (venue === 'other') return date === 'in' ? '会場名が一致しない回答' : '外す';   // 別の会場名は、この案件の回答ではない
+    if (venue === 'unknown') return '止める';                                  // この案件のものかどうかを決められない
+    if (date === 'bad') return '止める';                                       // 会場は一致。会期内かどうかを決められない
+    return countOk ? '取り込む' : '止める';                                    // この案件の回答
+  };
+  for (const [vName, venue, other, vKind] of venueCases) {
+    for (const [dName, date, dKind] of dateCases) {
+      for (const [cName, count, cOk] of countCases) {
+        const blank = [venue, other, date, count].every((x) => x === '');
+        const want: Outcome = blank ? '外す' : expected(vKind, dKind, cOk);
+        it(`${vName}・開催日が${dName}・個数が${cName} → ${want}`, () => {
+          const r = planReportSync({ project: P, projects: [P], venues, rows: [row(date, venue, count, other)], now: NOW });
+          const got: Outcome = !r.ok ? '止める' : r.sync.days.length > 0 ? '取り込む' : r.sync.unmatched.length > 0 ? '会場名が一致しない回答' : '外す';
+          expect(got).toBe(want);
+          if (!r.ok) expect(r.issues).toHaveLength(1);
+          if (r.ok && want === '取り込む') expect(dayList(r.sync)).toEqual([['2026-11-14', Number(count), 1]]);
+        });
+      }
+    }
+  }
+
+  it('無作為に並べた回答でも、表のとおりになる（止める回答が 1 件でもあれば全体を止め、無ければ、取り込む回答だけを日別に合算する）', () => {
+    const rand = rng(20261113);
+    const pick = <T,>(xs: T[]): T => xs[Math.floor(rand() * xs.length)];
+    const inDates: [unknown, string][] = [['2026/11/13', '2026-11-13'], ['2026/11/14', '2026-11-14'], [46341, '2026-11-15'], ['2026年11月17日', '2026-11-17']];
+    for (let n = 0; n < 400; n++) {
+      const rows: RawReportRow[] = [];
+      const stops: number[] = [];
+      const sums = new Map<string, number>();
+      const size = Math.floor(rand() * 12);
+      const clean = rand() < 0.5;                                           // 半分は、止める回答を作らない
+      for (let i = 0; i < size; i++) {
+        const [, venue, other, vKind] = pick(clean ? venueCases.filter((c) => c[3] !== 'unknown') : venueCases);
+        const dKind = pick<'in' | 'out' | 'bad'>(clean && vKind === 'mine' ? ['in', 'in', 'out'] : ['in', 'in', 'out', 'bad']);
+        const [dateCell, ymd] = dKind === 'in' ? pick(inDates) : dKind === 'out' ? ['2026/11/18', ''] : [pick<unknown>(['', '11/14', 'x']), ''];
+        const cOk = clean && vKind === 'mine' && dKind === 'in' ? true : rand() < 0.7;
+        const count = cOk ? Math.floor(rand() * 90) : pick<unknown>(['', '約10', -1, 2.5]);
+        const blank = [venue, other, dateCell, count].every((x) => x === '');
+        rows.push(row(dateCell, venue, count, other));
+        const want = blank ? '外す' : expected(vKind, dKind, cOk);
+        if (want === '止める') stops.push(i + 2);
+        if (want === '取り込む') sums.set(ymd, (sums.get(ymd) ?? 0) + (count as number));
+      }
+      const r = planReportSync({ project: P, projects: [P], venues, rows, now: NOW });
+      if (stops.length > 0) {
+        expect(r.ok).toBe(false);
+        if (!r.ok) expect((r.issues ?? []).map((x) => x.row)).toEqual(stops);
+      } else {
+        expect(r.ok).toBe(true);
+        if (r.ok) expect(r.sync.days.map((d) => [d.date, d.count])).toEqual([...sums.entries()].sort((a, b) => a[0].localeCompare(b[0])));
+      }
+    }
+  });
+});
+
+describe('読み取れない理由の文（利用者にそのまま見せる）', () => {
+  it('読み取れる値には、理由を返さない', () => {
+    expect([dateProblem('2026/11/14'), dateProblem(46340), countProblem('0'), countProblem(12), venueProblem(row('', CENTER, '')), venueProblem(row('', 'その他', '', CENTER))])
+      .toEqual([null, null, null, null, null, null]);
+  });
+  it('理由には、直す項目の見出し名が入る', () => {
+    expect(dateProblem('')).toBe('「開催日」が空欄です');
+    expect(dateProblem('きのう')).toContain('「開催日」を日付として読み取れません');
+    expect(countProblem('')).toBe('「キットの使用数」が空欄です');
+    expect(countProblem('80個')).toContain('「キットの使用数」に数字以外の文字（空白・区切りを含む）が入っています');
+    expect(venueProblem(row('', '', ''))).toEqual({ field: '会場', reason: '「会場」が空欄です' });
+    expect(venueProblem(row('', 'その他', '', ''))).toEqual({ field: '会場（その他の場合）', reason: '「会場」が「その他」ですが、会場名（「会場（その他の場合）」の列）が入っていません' });
+    expect(venueProblem(row('', '#N/A', ''))).toEqual({ field: '会場', reason: '「会場」がエラーの値です（会場名として読み取れません）' });
+    expect(venueProblem(row('', '', '', '#REF!'))).toEqual({ field: '会場（その他の場合）', reason: '「会場（その他の場合）」がエラーの値です（会場名として読み取れません）' });
+    expect(countProblem('62 58')).toContain('数字以外の文字（空白・区切りを含む）');
+    expect(countProblem(46315)).toContain('1 件の回答で 9,999 個まで');
   });
 });
 
@@ -371,6 +666,22 @@ describe('どの案件の実績か決められないときは、取り込まず�
     const R = mkProject({ id: 'p3', name: '', venueId: 'v-center', startDate: '2026-11-17', endDate: '2026-11-17' });
     const s = plan(rows, { projects: [P, Q, R] });
     expect(s.held.find((h) => h.date === '2026-11-17')!.others).toEqual(['週末フェア', '（名称未設定）']);
+  });
+  it('相手の案件が決めている日（保留の日の説明に使う）: 重なる日のうち、相手が「自分の実績にする」と決めた日だけ。中止の相手・重ならない日・別の会場の決定は数えない', () => {
+    const ctx = (projects: Project[]) => ({ projects, venues });
+    expect(rivalClaimedDates(P, ctx([P, Q]))).toEqual(new Set());
+    // 相手の 11/15 は重なる日。11/19 は相手の会期内だが、この案件の会期の外
+    expect(rivalClaimedDates(P, ctx([P, { ...Q, reportClaims: ['2026-11-15', '2026-11-19'] }]))).toEqual(new Set(['2026-11-15']));
+    // この案件だけが決めている日は、入らない（＝この案件の決定は、次の同期で反映される）
+    const mine = { ...P, reportClaims: ['2026-11-15'] };
+    expect(rivalClaimedDates(mine, ctx([mine, Q]))).toEqual(new Set());
+    expect(rivalClaimedDates(mine, ctx([mine, { ...Q, reportClaims: ['2026-11-15'] }]))).toEqual(new Set(['2026-11-15']));
+    // 中止の相手の決定・別の会場の案件の決定は数えない
+    expect(rivalClaimedDates(P, ctx([P, { ...Q, status: '中止', reportClaims: ['2026-11-15'] }]))).toEqual(new Set());
+    expect(rivalClaimedDates(P, ctx([P, { ...Q, venueId: 'v-east', reportClaims: ['2026-11-15'] }]))).toEqual(new Set());
+    // 会場・会期が決まっていない案件では、空
+    expect(rivalClaimedDates({ ...P, venueId: '' }, ctx([P, { ...Q, reportClaims: ['2026-11-15'] }]))).toEqual(new Set());
+    expect(rivalClaimedDates({ ...P, startDate: '' }, ctx([P, { ...Q, reportClaims: ['2026-11-15'] }]))).toEqual(new Set());
   });
 });
 

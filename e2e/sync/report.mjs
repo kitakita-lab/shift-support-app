@@ -206,7 +206,7 @@ add('R4', '日報が修正・削除・追加されたら、次の同期で実績
   eq(await jcos(a), { billing: 120000, cost: 45000, gross: gross(0), actual: 0, basis: 'planned' }, '回答がすべて消えたあと');
 });
 
-add('R5', '同期に失敗したときは、前回の実績を消さずに残し、失敗の内容を表示する（通信エラー・権限なし・API が無効・認証切れ・見出しの不一致）', async ({ device: mk }) => {
+add('R5', '同期に失敗したときは、前回の実績を消さずに残し、失敗の内容を表示する（通信エラー・権限なし・API が無効・認証切れ・見出しの不一致・見出しの重複）', async ({ device: mk }) => {
   const { a, sheets } = await prepare(mk);
   await syncNow(a, SHEET_URL);
   const good = await jcos(a);
@@ -218,7 +218,8 @@ add('R5', '同期に失敗したときは、前回の実績を消さずに残し
     ['API が無効', { fail: 403, failBody: { error: { code: 403, message: 'Google Sheets API has not been used in project 123 before or it is disabled.', status: 'PERMISSION_DENIED', details: [{ reason: 'SERVICE_DISABLED' }] } } }, 'Google Sheets API が、このアプリの Google Cloud プロジェクトで有効になっていません'],
     ['認証切れ', { fail: 401, failBody: { error: { code: 401, message: 'Invalid Credentials', status: 'UNAUTHENTICATED' } } }, '認証の有効期限が切れました'],
     ['混雑', { fail: 429, failBody: { error: { code: 429, message: 'Quota exceeded', status: 'RESOURCE_EXHAUSTED' } } }, '混み合っています'],
-    ['見出しの不一致', { header: HEADER.map((h) => (h === 'キットの使用数' ? 'キット数' : h)) }, '「キットの使用数」'],
+    ['見出しの不一致', { header: HEADER.map((h) => (h === 'キットの使用数' ? 'キット数' : h)) }, '見つからない見出し: 「キットの使用数」'],
+    ['見出しの重複', { header: [...HEADER, 'キットの使用数'] }, '2 つ以上ある見出し: 「キットの使用数」'],
   ];
   for (const [name, patch, expect] of cases) {
     Object.assign(sheets, { fail: null, failBody: null, header: HEADER }, patch);
@@ -229,9 +230,9 @@ add('R5', '同期に失敗したときは、前回の実績を消さずに残し
     ok(err.includes('そのまま残しています'), `${name}: 前回の実績を残していることの表示がありません: ${err}`);
     ok((await status(a)).includes('2 日分 120 個'), `${name}: 最終同期の表示が変わっています: ${await status(a)}`);
     eq(await jcos(a), good, `${name}: 収支`);
-    await sleep(400);
+    await sleep(1000);                                              // 共有データへの送信は、変更の約 0.7 秒後。それより長く待ってから確かめる
     eq(await saved(), before, `${name}: 共有データの同期結果`);
-    if (name === '見出しの不一致') eq(sheets.calls.length - n, 2, '見出しを確かめられないときは、データの列を読まない（問い合わせは 2 回で止まる）');
+    if (name.startsWith('見出し')) eq(sheets.calls.length - n, 2, `${name}: 見出しを確かめられないときは、データの列を読まない（問い合わせは 2 回で止まる）`);
   }
   // 再読み込みしても、失敗の内容は表示される（この端末に記録）
   await a.reload();
@@ -284,11 +285,19 @@ add('R7', '同じ会場で会期が重なる案件があると、重なる日は
   await openProject(a, '週末フェア');
   await syncNow(a);
   eq((await jcos(a)).actual, 40, '相手の案件: 重なっていない日（11/16）だけ');
-  // この案件の実績にすると決める
+  // この案件の実績にすると決める。直後の同期が失敗しても（通信エラー）、決定は残る。
+  // 表示は「次に同期が成功したときに取り込む」（相手の案件は決めていないので、「相手も決めている」とは表示しない）
   await openProject(a, '秋の花まつり');
   await detail(a);
+  sheets.fail = 'network';
   await a.locator('[data-testid="report-claim"]').click();
   await until(() => busy(a), (b) => b === '0', 10000);
+  const pending = (await a.locator('[data-testid="report-held"]').innerText()).replace(/\s+/g, ' ');
+  ok(pending.includes('次に同期が成功したときに、取り込みます') && !pending.includes('相手の案件も'), `決めた直後の同期が失敗したときの表示: ${pending}`);
+  eq(await a.locator('[data-testid="report-claim"]').count(), 0, '決めた日には、もう一度決めるボタンを出さない');
+  eq((await jcos(a)).actual, 10, '同期が失敗している間の実績（前回のまま）');
+  sheets.fail = null;
+  await syncNow(a);
   eq((await until(() => jcos(a), (j) => j.actual === 60)).actual, 60, '決めたあとの実績（10 ＋ 20 ＋ 30）');
   eq(await a.locator('[data-testid="report-held"]').count(), 0, '保留の表示');
   eq((await until(() => projectDoc('秋の花まつり'), (p) => (p?.reportClaims ?? []).length === 2)).reportClaims, ['2026-11-14', '2026-11-15'], '共有データに記録した決定');
@@ -300,7 +309,7 @@ add('R7', '同じ会場で会期が重なる案件があると、重なる日は
 });
 
 add('R8', '同期の結果は、ほかのメンバーの端末にも届く。別の案件・別の端末では、日報の場所を入れ直さずに同期できる', async ({ device: mk }) => {
-  const { a } = await prepare(mk);
+  const { a, sheets: aSheets } = await prepare(mk);
   await syncNow(a, SHEET_URL);
   await until(() => projectDoc('秋の花まつり'), (p) => !!p?.reportSync);
   // 別のメンバー（B）の端末
@@ -316,6 +325,17 @@ add('R8', '同期の結果は、ほかのメンバーの端末にも届く。別
   eq(bSheets.calls.length, 3, 'B の端末からの問い合わせ');
   eq((await jcos(b)).actual, 161, 'B が同期したあとの実績');
   eq((await until(() => jcos(a), (j) => j.actual === 161, 8000)).actual, 161, 'A の端末にも、B の同期の結果が届く');
+  // A の同期が失敗したあとで、B の端末の同期が成功すると、A に残った「同期できませんでした」は消える（古い失敗を出し続けない）
+  aSheets.fail = 'network';
+  await syncNow(a);
+  ok((await a.locator('[data-testid="report-toggle"]').innerText()).includes('同期できませんでした'), `A の失敗の表示: ${await a.locator('[data-testid="report-toggle"]').innerText()}`);
+  eq((await jcos(a)).actual, 161, 'A の同期が失敗しても、実績は変わらない');
+  bSheets.rows = [answer(serial('2026-11-13'), CENTER, 62), answer(serial('2026-11-14'), CENTER, 58), answer(serial('2026-11-15'), CENTER, 45)];
+  await syncNow(b);
+  eq((await until(() => jcos(a), (j) => j.actual === 165, 8000)).actual, 165, 'A の端末に、B の 2 回目の同期の結果が届く');
+  await until(() => a.locator('[data-testid="report-toggle"]').innerText(), (t) => !t.includes('同期できませんでした'), 5000);
+  eq(await a.locator('[data-testid="report-error"]').count(), 0, 'B の同期が成功したあとの、A の失敗の表示');
+  aSheets.fail = null;
   // A が別の案件を作る → 場所を入れ直さずに同期できる
   await jcosProject(a, { name: '冬の花まつり', venue: CENTER, start: '2026-12-01', end: '2026-12-02' });
   eq(await a.locator('[data-testid="report-url"]').count(), 0, '2 件目の案件では、日報の場所の入力欄を出さない');
@@ -408,6 +428,128 @@ add('R11', '「この案件の実績にする」を取り消したあとの同�
   const rowText = async (name) => (await a.locator('.grid tbody tr', { has: a.locator('td', { hasText: new RegExp(`^${name}$`) }) }).innerText()).replace(/\s+/g, ' ');
   ok((await rowText('秋の花まつり')).includes(`¥${(40000 * 3 - 15000 * 3 - 10 * 220).toLocaleString('ja-JP')}（粗利）`), `元の案件の一覧の粗利: ${await rowText('秋の花まつり')}`);
   ok((await rowText('週末フェア')).includes(`¥${(40000 * 2 - 15000 * 2 - 140 * 220).toLocaleString('ja-JP')}（粗利）`), `相手の案件の一覧の粗利: ${await rowText('週末フェア')}`);
+});
+
+add('R12', '日報に読み取れない回答があるときは、取り込みを中止して前回の実績を残し、どの回答（開催日・日報の行）のどの項目が、なぜ読み取れないかを表示する。この案件のものでない回答では止まらない。日報を直すと取り込める', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  const good = await jcos(a);                                       // 実績 62 ＋ 58 個
+  const saved = async () => { const p = await syncedDoc('秋の花まつり'); return JSON.stringify([p.reportSync, p.reportSource]); };
+  const base = baseRows();                                          // 日報の 2〜7 行目
+  const ROW = base.length + 2;                                      // このあと足す回答の、日報での行番号
+  // 止まる同期では、読み取れる回答の個数も変えておく（11/13: 62 → 99）。止まったのに一部だけ取り込んでいれば、実績が 120 個でなくなる
+  const changed = () => baseRows().map((r) => (r[3] === serial('2026-11-13') && r[5] === CENTER ? r.map((c, i) => (i === 11 ? 99 : c)) : r));
+
+  // この案件のものでないと確実に言える回答（会期の外・別の会場名・テスト回答）は、読み取れない項目があっても、同期を止めない
+  sheets.rows = [...base, answer(serial('2026-11-20'), CENTER, 'たくさん'), answer('きのう', EAST, 5), answer(serial('2026-11-14'), EAST, ''), answer('', 'その他', 'x', 'テスト会場')];
+  await syncNow(a);
+  eq(await a.locator('[data-testid="report-error"]').count(), 0, '対象外の回答だけが読み取れないとき: 失敗の表示');
+  ok((await status(a)).includes('2 日分 120 個'), `対象外の回答だけが読み取れないとき: 同期の表示: ${await status(a)}`);
+  eq(await jcos(a), good, '対象外の回答だけが読み取れないとき: 収支');
+  await until(() => projectDoc('秋の花まつり'), (p) => p?.reportSync?.unmatched?.[0]?.rows === 2, 10000);   // この同期の結果が、共有データに届くまで待つ
+  const before = await saved();
+
+  // この案件の回答（会場名が一致）か、この案件のものかどうかを決められない回答（会場名が空欄）に、読み取れない項目がある
+  const cases = [
+    // [説明, 足す回答, 表示に含まれるはずの文]
+    ['個数が文字列', answer(serial('2026-11-15'), CENTER, '80個'), ['開催日：11/15(日)', '「キットの使用数」に数字以外の文字（空白・区切りを含む）が入っています']],
+    ['個数に 2 つの数', answer(serial('2026-11-15'), CENTER, '62 58'), ['開催日：11/15(日)', '「キットの使用数」に数字以外の文字（空白・区切りを含む）が入っています']],
+    ['個数のセルが日付になっている', answer(serial('2026-11-15'), CENTER, serial('2026-10-20')), ['開催日：11/15(日)', '「キットの使用数」が大きすぎます', 'セルが日付の形式になっている場合も']],
+    ['個数が空欄', answer(serial('2026-11-15'), CENTER, ''), ['開催日：11/15(日)', '「キットの使用数」が空欄です']],
+    ['個数がマイナス', answer(serial('2026-11-15'), CENTER, -5), ['開催日：11/15(日)', '「キットの使用数」がマイナスの値です']],
+    ['個数が小数', answer(serial('2026-11-15'), CENTER, 12.5), ['開催日：11/15(日)', '「キットの使用数」が整数ではありません']],
+    ['個数が大きすぎる', answer(serial('2026-11-15'), CENTER, 100000000), ['開催日：11/15(日)', '「キットの使用数」が大きすぎます']],
+    ['開催日が日付でない', answer('きのう', CENTER, 30), ['開催日：読み取れません', '「開催日」を日付として読み取れません']],
+    ['開催日が空欄', answer('', CENTER, 30), ['開催日：読み取れません', '「開催日」が空欄です']],
+    ['会場名が空欄', answer(serial('2026-11-15'), '', 30), ['開催日：11/15(日)', '「会場」が空欄です']],
+    ['「その他」で会場名が未入力', answer(serial('2026-11-15'), 'その他', 30, ''), ['開催日：11/15(日)', '会場名（「会場（その他の場合）」の列）が入っていません']],
+  ];
+  for (const [name, bad, expects] of cases) {
+    sheets.rows = [...changed(), bad];
+    await syncNow(a);
+    const err = (await a.locator('[data-testid="report-error"]').innerText()).replace(/\s+/g, ' ');
+    ok(err.includes('読み取れない回答が 1 件') && err.includes('取り込みを中止'), `${name}: 失敗の表示: ${err}`);
+    ok(err.includes('そのまま残しています'), `${name}: 前回の実績を残していることの表示がありません: ${err}`);
+    const list = (await a.locator('[data-testid="report-issues"]').innerText()).replace(/\s+/g, ' ');
+    ok(list.includes(`日報の ${ROW} 行目`), `${name}: 日報の行番号がありません: ${list}`);
+    for (const e of expects) ok(list.includes(e), `${name}: 表示「${list}」に「${e}」がありません`);
+    ok((await status(a)).includes('2 日分 120 個'), `${name}: 最終同期の表示が変わっています: ${await status(a)}`);
+    eq(await jcos(a), good, `${name}: 収支（前回の実績のまま。読み取れた回答＝11/13 の 99 個も、取り込んでいないこと）`);
+    await sleep(1000);                                              // 共有データへの送信は、変更の約 0.7 秒後。それより長く待ってから確かめる
+    eq(await saved(), before, `${name}: 共有データの同期結果（何も書いていないこと）`);
+  }
+
+  // 読み取れない回答が多いときは、先頭の 20 件と、残りの件数を出す
+  sheets.rows = [...changed(), ...Array.from({ length: 23 }, () => answer(serial('2026-11-15'), CENTER, ''))];
+  await syncNow(a);
+  ok((await a.locator('[data-testid="report-error"]').innerText()).includes('読み取れない回答が 23 件'), `多いとき: ${await a.locator('[data-testid="report-error"]').innerText()}`);
+  const many = (await a.locator('[data-testid="report-issues"] li').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+  eq([many.length, many[0].includes(`日報の ${ROW} 行目`), many[19].includes(`日報の ${ROW + 19} 行目`), many[20]], [21, true, true, 'ほか 3 件'], `多いときの一覧: ${JSON.stringify(many.slice(18))}`);
+  // 読み取れない回答が複数あれば、すべて挙げる
+  sheets.rows = [...changed(), answer(serial('2026-11-15'), CENTER, ''), answer('きのう', CENTER, 5)];
+  await syncNow(a);
+  ok((await a.locator('[data-testid="report-error"]').innerText()).includes('読み取れない回答が 2 件'), `複数のとき: ${await a.locator('[data-testid="report-error"]').innerText()}`);
+  const items = (await a.locator('[data-testid="report-issues"] li').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+  eq(items.length, 2, `複数のときの一覧: ${JSON.stringify(items)}`);
+  ok(items[0].includes(`日報の ${ROW} 行目`) && items[0].includes('「キットの使用数」が空欄です') && items[1].includes(`日報の ${ROW + 1} 行目`) && items[1].includes('「開催日」を日付として読み取れません'), `複数のときの一覧: ${JSON.stringify(items)}`);
+  // 回答に書かれていた文字そのもの・取り込んではいけない列は、端末にも画面にも残さない
+  const local = await a.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }));
+  for (const secret of ['きのう', 'SECRET', TOKEN]) {
+    ok(!local.includes(secret), `端末の保存領域に「${secret}」が入っています`);
+    ok(!(await a.content()).includes(secret), `画面に「${secret}」が出ています`);
+  }
+  // 再読み込みしても、どの回答かの表示は残る（この端末に記録）
+  await a.reload();
+  await a.waitForSelector('[data-testid="space"][data-space="shared"]');
+  await openProject(a, '秋の花まつり');
+  ok((await a.locator('[data-testid="report-toggle"]').innerText()).includes('同期できませんでした'), '再読み込み後に、失敗が表示されていません');
+  await detail(a);
+  eq(await a.locator('[data-testid="report-issues"] li').count(), 2, '再読み込み後の、読み取れない回答の一覧');
+  eq(await jcos(a), good, '再読み込み後の収支');
+  eq(await saved(), before, '止まった同期を繰り返したあとの、共有データの同期結果（何も書いていないこと）');
+
+  // 日報を直して同期すると、取り込める（失敗の表示は消える）
+  sheets.rows = [...base, answer(serial('2026-11-15'), CENTER, 80)];
+  await a.evaluate((t) => { window.__kkl.sheetsToken = () => t; }, TOKEN);
+  await syncNow(a);
+  eq([await a.locator('[data-testid="report-error"]').count(), await a.locator('[data-testid="report-issues"]').count()], [0, 0], '直したあとの、失敗の表示');
+  eq(await jcos(a), { billing: 120000, cost: 45000 + 200 * 220, gross: gross(200), actual: 200, basis: 'actual' }, '直したあとの収支（62 ＋ 58 ＋ 80 個）');
+  eq(days(await until(() => projectDoc('秋の花まつり'), (p) => p?.reportSync?.days?.length === 3, 10000)), [['2026-11-13', 62, 1], ['2026-11-14', 58, 1], ['2026-11-15', 80, 1]], '共有データの実績');
+});
+
+add('R13', '最初の同期が、読み取れない回答で止まったとき: 実績を作らない（2 つの数が書かれた個数を、つなげて取り込まない）。日報の場所は、この端末が覚えている。端末に置いた記録が壊れていても、同期の欄は表示できる。「コンテスト」という催しの回答は、テスト回答として捨てない', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  const contest = answer(serial('2026-11-13'), CENTER, 62, '', 'ハロウィン仮装コンテスト');
+  sheets.rows = [contest, answer(serial('2026-11-14'), CENTER, '62 58')];                 // 3 行目: 個数に、2 つの数が書かれている
+  await syncNow(a, SHEET_URL);
+  const err = (await a.locator('[data-testid="report-error"]').innerText()).replace(/\s+/g, ' ');
+  ok(err.includes('読み取れない回答が 1 件') && err.includes('取り込みを中止') && !err.includes('そのまま残しています'), `失敗の表示: ${err}`);
+  const list = (await a.locator('[data-testid="report-issues"]').innerText()).replace(/\s+/g, ' ');
+  ok(list.includes('日報の 3 行目') && list.includes('開催日：11/14(土)') && list.includes('数字以外の文字（空白・区切りを含む）'), `読み取れない回答の表示: ${list}`);
+  eq((await status(a)).trim(), 'まだ同期していません', '同期の表示');
+  eq(await jcos(a), { billing: 120000, cost: 45000, gross: gross(0), actual: 0, basis: 'planned' }, '止まったあとの収支（予定のまま。6258 個として取り込んでいないこと）');
+  await sleep(1000);
+  const stopped = await projectDoc('秋の花まつり');
+  eq([stopped?.reportSync ?? null, stopped?.reportSource ?? null], [null, null], '共有データ（同期の結果も、日報の場所も、書いていないこと）');
+  // 日報そのものは読めたので、場所は、この端末が覚えている（URL の欄を、もう出さない）
+  eq(await a.locator('[data-testid="report-url"]').count(), 0, '止まったあとの、日報の場所の入力欄');
+  // 端末に置いた失敗の記録が壊れていても、同期の欄は表示できる
+  for (const junk of ['null', '[1,2]', JSON.stringify({ [stopped.id]: 5 }), JSON.stringify({ [stopped.id]: { at: 't', message: 'm', issues: 'x', more: 'y' } }), '{壊れた']) {
+    await a.evaluate((v) => localStorage.setItem('kkl_report_error_v1', v), junk);
+    await a.reload();
+    await a.waitForSelector('[data-testid="space"][data-space="shared"]');
+    await openProject(a, '秋の花まつり');
+    ok(await a.locator('[data-testid="report-sync"]').isVisible(), `壊れた記録（${junk}）のとき、同期の欄が表示されません`);
+  }
+  eq(await a.locator('[data-testid="report-url"]').count(), 0, '再読み込み後の、日報の場所の入力欄');
+  // 日報を直して同期する（URL は貼らない）
+  sheets.rows = [contest, answer(serial('2026-11-14'), CENTER, 58)];
+  await a.evaluate((t) => { window.__kkl.sheetsToken = () => t; }, TOKEN);
+  await syncNow(a);
+  eq(await a.locator('[data-testid="report-error"]').count(), 0, '直したあとの、失敗の表示');
+  eq((await jcos(a)).actual, 120, '直したあとの実績（コンテストの回答 62 個を含む）');
+  const done = await until(() => projectDoc('秋の花まつり'), (p) => !!p?.reportSync, 10000);
+  eq([days(done), done.reportSync.tests, done.reportSource], [[['2026-11-13', 62, 1], ['2026-11-14', 58, 1]], 0, { spreadsheetId: SHEET_ID, gid: 1622532141 }], '共有データ（実績・テスト回答の数・日報の場所）');
 });
 
 await runFile('日報の同期（Version 4）');

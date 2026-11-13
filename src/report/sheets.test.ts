@@ -1,5 +1,8 @@
 // 日報の取得（sheets.ts）のテスト。Google への通信は、応答を差し替えて確かめる（実際の Google にはつながない）。
 import { describe, expect, it } from 'vitest';
+import { emptyLayout } from '../domain/layout';
+import { planReportSync } from '../domain/report';
+import { mkProject } from '../domain/testkit';
 import { HttpGet, ReportError, SHEETS_API, fetchReportRows, pickSheet, toReportError } from './sheets';
 
 const ID = 'sheet-id-0123456789abcdefghij';
@@ -84,6 +87,16 @@ describe('日報の取得: 必要な列だけを読む', () => {
     expect(calls.length).toBe(2);                       // 3 回目（データの列）は呼んでいない
   });
 
+  it('同じ見出しが 2 つ以上あれば（必要な列でも、無くてもよい列でも）、データの列を読まずにエラーにする', async () => {
+    for (const dup of ['キットの使用数', '開催日', '会場', 'イベント名', '会場（その他の場合）']) {
+      const { http, calls } = sheet({ D: [46339], F: ['北街モール'], L: [62] }, { header: [...HEADER, dup] });
+      const e = await err(fetchReportRows({ spreadsheetId: ID }, 'tok', http));
+      expect(e.code).toBe('bad-header');
+      expect(e.message).toContain(`2 つ以上ある見出し: 「${dup}」`);
+      expect(calls.length).toBe(2);                     // どちらの列か決められないので、データは読まない
+    }
+  });
+
   it('回答が 1 件も無い日報は、空の一覧を返す', async () => {
     const { http } = sheet({});
     expect(await fetchReportRows({ spreadsheetId: ID }, 'tok', http)).toEqual([]);
@@ -93,6 +106,24 @@ describe('日報の取得: 必要な列だけを読む', () => {
     const { http } = sheet({ D: [46339, '', 46341], F: ['A', '', 'C'], L: [1, '', 3] });
     const rows = await fetchReportRows({ spreadsheetId: ID }, 'tok', http);
     expect(rows.map((r) => [r.date, r.venue, r.count])).toEqual([[46339, 'A', 1], ['', '', ''], [46341, 'C', 3]]);
+  });
+
+  it('読み取れない回答を知らせるときの行番号は、スプレッドシートの行番号と同じになる（見出しが 1 行目。途中の空行・末尾が省かれた列があっても、ずれない）', async () => {
+    // 2 行目: 正常／3 行目: 空行／4 行目: 個数が文字／5 行目: 別の会場／6 行目: 開催日が文字（個数の列は、末尾が省かれて届く）
+    const { http } = sheet({
+      D: [46339, '', 46340, 46340, 'きのう'], F: ['北街モール', '', '北街モール', 'みなと市場', '北街モール'], L: [62, '', '58個', 5],
+    });
+    const rows = await fetchReportRows({ spreadsheetId: ID }, 'tok', http);
+    const venue = { id: 'v1', name: '北街モール', feeFixed: 0, feePerDay: 0, feeRatePct: 0, memo: '', template: emptyLayout() };
+    const project = mkProject({ id: 'p1', venueId: 'v1', startDate: '2026-11-13', endDate: '2026-11-15' });
+    const plan = planReportSync({ project, projects: [project], venues: [venue], rows, now: '2026-11-14T09:00:00.000Z' });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) {
+      expect((plan.issues ?? []).map((x) => [x.row, x.date, x.items.map((i) => i.field)])).toEqual([
+        [4, '2026-11-14', ['キットの使用数']],
+        [6, null, ['開催日', 'キットの使用数']],
+      ]);
+    }
   });
 });
 

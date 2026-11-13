@@ -264,11 +264,16 @@ export interface ReportDay {
   keys?: string[];
 }
 
-/** 取り込まなかった回答の理由 */
+/**
+ * 取り込まなかった回答の理由。
+ * いまの同期が記録するのは 'other-project' だけ。読み取れない回答（開催日・キットの使用数・会場名）があるときは、
+ * 一部だけを取り込まずに同期の全体を止めるので、同期の結果には残らない（report.ts の planReportSync）。
+ * 'bad-date'・'bad-count'・'no-venue' は、止める方式にする前の版が保存した結果を読むために残している。
+ */
 export type ReportSkipReason =
-  | 'bad-date'        // 会場は一致するが、開催日を読み取れない
-  | 'bad-count'       // 会場と開催日は一致するが、キットの使用数を読み取れない（空欄を含む）
-  | 'no-venue'        // 開催日は会期内だが、会場名が空欄
+  | 'bad-date'        // （以前の版）会場は一致するが、開催日を読み取れない
+  | 'bad-count'       // （以前の版）会場と開催日は一致するが、キットの使用数を読み取れない（空欄を含む）
+  | 'no-venue'        // （以前の版）開催日は会期内だが、会場名が空欄
   | 'other-project';  // 会場と開催日は一致するが、会期が重なる別の案件の実績として割り当て済み
 
 export interface ReportSkip {

@@ -8,6 +8,8 @@
 //     日報の修正・削除もそのまま反映される。
 //   - どの案件の実績か決められない回答（同じ会場で会期が重なる案件がある日）は、取り込まずに保留して利用者に確認を求める。
 //   - テスト回答は取り込まない。
+//   - 読み取れない項目（開催日・会場名・キットの使用数）がある回答が、この案件の回答か、この案件のものかどうかを決められない回答なら、
+//     同期の全体を止める（一部だけ取り込んだ実績を作らない。前回の結果を残す）。この案件のものでないと確実に言える回答は、外すだけ。
 import {
   Project, ReportDay, ReportHeld, ReportSkip, ReportSkipReason, ReportSource, ReportSync, ReportUnmatched, Venue,
 } from '../types';
@@ -110,12 +112,27 @@ export function parseReportDate(v: unknown): string | null {
   return m ? ymd(Number(m[1]), Number(m[2]), Number(m[3])) : null;
 }
 
-/** キットの使用数を、0 以上の整数として読む。空欄・数字でない・小数・マイナスは null（＝読み取れない） */
+/**
+ * 1 件の回答の個数として受け付ける上限。これを超える値は、入力の誤りとして「読み取れない」とする。
+ * 個数のセルが日付として保存されていると（「10-20」「11/15」のように入力すると、スプレッドシートが日付に変える）、
+ * 日付の通し番号（今年の日付なら 4 万台。1990 年以降は 32,874 以上）が数として届く。それを個数として取り込まないための上限でもある。
+ */
+export const MAX_REPORT_COUNT = 9999;
+/** 個数として受け付ける文字列の形: 数字だけ、または 3 桁ごとの桁区切り（1,234） */
+const COUNT_FORM = /^(\d+|\d{1,3}(,\d{3})+)$/;
+
+/**
+ * キットの使用数を、0 以上 MAX_REPORT_COUNT 以下の整数として読む。空欄・数字でない・小数・マイナス・上限超えは null（＝読み取れない。0 個とはみなさない）。
+ * 文字列は、前後の空白を除いて、数字だけ（全角可）か、3 桁ごとの桁区切りだけを受け付ける。
+ * 途中の空白・改行や、区切り方の合わないカンマ（「62 58」「62,58」）は、2 つの数をつなげて読んでしまうので、受け付けない。
+ */
 export function parseReportCount(v: unknown): number | null {
-  if (typeof v === 'number') return Number.isInteger(v) && v >= 0 && v <= 9999999 ? v : null;
+  if (typeof v === 'number') return Number.isInteger(v) && v >= 0 && v <= MAX_REPORT_COUNT ? v : null;
   if (typeof v !== 'string') return null;
-  const s = v.normalize('NFKC').replace(/[\s,]/g, '');
-  return /^\d{1,7}$/.test(s) ? Number(s) : null;
+  const s = v.normalize('NFKC').trim();
+  if (!COUNT_FORM.test(s)) return null;
+  const n = Number(s.replace(/,/g, ''));
+  return n <= MAX_REPORT_COUNT ? n : null;
 }
 
 const text = (v: unknown): string => (v == null ? '' : String(v)).trim();
@@ -124,19 +141,94 @@ export function isBlankRow(r: RawReportRow): boolean {
   return [r.date, r.venue, r.venueOther, r.event, r.count].every((v) => text(v) === '');
 }
 
-/** 回答の会場名。会場が「その他」のときは「会場（その他の場合）」を見る。どちらも空なら null */
+/** スプレッドシートのエラーの値（数式の失敗など）。会場名としては扱わない */
+const SHEET_ERROR = /^#(NULL!|DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|ERROR!)$/i;
+
+/**
+ * 回答の会場名。会場が「その他」（または空欄）のときは「会場（その他の場合）」を見る。
+ * 会場名として読み取れないとき（どちらも空欄・エラーの値）は null。
+ */
 export function reportVenue(r: RawReportRow): { name: string; key: string } | null {
   const main = text(r.venue);
   const other = text(r.venueOther);
   const name = main === '' || venueKey(main) === venueKey(OTHER_VENUE) ? other : main;
   const key = venueKey(name);
-  return key ? { name, key } : null;
+  return key && !SHEET_ERROR.test(name) ? { name, key } : null;
 }
 
-/** テスト回答か（会場名かイベント名に「テスト」「test」が入っている）。イベント名は、この判定にだけ使う */
+/**
+ * テスト回答か（会場名かイベント名に「テスト」「test」が入っている）。イベント名は、この判定にだけ使う。
+ * 「コンテスト」は、テスト（試し）の意味ではないので、判定から除く（「フォトコンテスト」という催しの本物の回答を、テスト回答として捨てないため）。
+ * 英字の test も、単語の一部（contest・latest）なら数えない。
+ */
 export function isTestRow(r: RawReportRow): boolean {
-  const s = [r.venue, r.venueOther, r.event].map((v) => text(v).normalize('NFKC')).join('\n');
+  const s = [r.venue, r.venueOther, r.event].map((v) => text(v).normalize('NFKC')).join('\n').replace(/コンテスト/g, '');
   return s.includes('テスト') || /(^|[^a-z])test([^a-z]|$)/i.test(s);
+}
+
+// ── 読み取れない回答 ──────────────────────────────────────────
+/** 最初の回答がある、日報（スプレッドシート）の行番号。見出しが 1 行目なので 2 */
+export const FIRST_ANSWER_ROW = 2;
+
+/**
+ * 同期を止める理由になった回答 1 件（どの回答の、どの項目が、なぜ読み取れないか）。
+ * 利用者が日報を直すための情報だけを持つ。回答の中身（書かれていた文字）は持たない。
+ */
+export interface ReportIssue {
+  /** 日報（スプレッドシート）での行番号 */
+  row: number;
+  /** 開催日（読み取れたときだけ） */
+  date: string | null;
+  /** 読み取れない項目（日報の見出し名）と、その理由 */
+  items: { field: string; reason: string }[];
+}
+
+/** 開催日を読み取れない理由（読み取れるなら null）。利用者にそのまま見せる文 */
+export function dateProblem(v: unknown): string | null {
+  if (parseReportDate(v) != null) return null;
+  const h = `「${REPORT_HEADERS.date}」`;
+  return text(v) === '' ? `${h}が空欄です` : `${h}を日付として読み取れません（年・月・日のそろった日付にしてください）`;
+}
+
+/**
+ * キットの使用数を読み取れない理由（読み取れるなら null）。利用者にそのまま見せる文。
+ * 受け付ける範囲と形は parseReportCount のとおり（空欄・文字・小数・マイナス・上限超えは、0 個とみなさず「読み取れない」とする）。
+ */
+export function countProblem(v: unknown): string | null {
+  if (parseReportCount(v) != null) return null;
+  const h = `「${REPORT_HEADERS.count}」`;
+  if (text(v) === '') return `${h}が空欄です`;
+  const negative = `${h}がマイナスの値です`;
+  const fraction = `${h}が整数ではありません（小数です）`;
+  const tooLarge = `${h}が大きすぎます（1 件の回答で ${MAX_REPORT_COUNT.toLocaleString('ja-JP')} 個までです。セルが日付の形式になっている場合も、こうなります）`;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return `${h}を数として読み取れません`;
+    return v < 0 ? negative : !Number.isInteger(v) ? fraction : tooLarge;
+  }
+  if (typeof v !== 'string') return `${h}を数として読み取れません`;
+  const s = v.normalize('NFKC').trim();
+  if (COUNT_FORM.test(s)) return tooLarge;                        // 形は合っているが、上限を超えている
+  if (/^[-−]\d[\d,]*(\.\d+)?$/.test(s)) return negative;
+  if (/^\d[\d,]*\.\d+$/.test(s)) return fraction;
+  return `${h}に数字以外の文字（空白・区切りを含む）が入っています（数字だけにしてください）`;
+}
+
+/** 会場名を読み取れない理由と、直す場所の見出し名（読み取れるなら null） */
+export function venueProblem(r: RawReportRow): { field: string; reason: string } | null {
+  if (reportVenue(r)) return null;
+  const main = text(r.venue);
+  const other = text(r.venueOther);
+  const viaOther = main === '' || venueKey(main) === venueKey(OTHER_VENUE);   // 「会場（その他の場合）」を見る回答か
+  if (main === '' && other === '') return { field: REPORT_HEADERS.venue, reason: `「${REPORT_HEADERS.venue}」が空欄です` };
+  if (viaOther && other === '') {
+    // 「会場（その他の場合）」の列そのものが無い日報でも、ここに来る（列が無ければ、必ず空欄として届く）
+    return {
+      field: REPORT_HEADERS.venueOther,
+      reason: `「${REPORT_HEADERS.venue}」が「${OTHER_VENUE}」ですが、会場名（「${REPORT_HEADERS.venueOther}」の列）が入っていません`,
+    };
+  }
+  const field = viaOther ? REPORT_HEADERS.venueOther : REPORT_HEADERS.venue;   // 残りは、エラーの値（#N/A など）
+  return { field, reason: `「${field}」がエラーの値です（会場名として読み取れません）` };
 }
 
 // ── 案件との照合 ──────────────────────────────────────────────
@@ -162,7 +254,11 @@ export interface SyncInput {
   /** 同期した日時（ISO 8601） */
   now: string;
 }
-export type SyncPlan = { ok: true; sync: ReportSync } | { ok: false; message: string };
+/**
+ * 照合の結果。ok でないときは、何も取り込まない（呼び出し側は、前回の結果をそのまま残す）。
+ * issues があるのは、読み取れない回答があって同期を止めたとき（どの回答の、どの項目かを利用者に示す）。
+ */
+export type SyncPlan = { ok: true; sync: ReportSync } | { ok: false; message: string; issues?: ReportIssue[] };
 
 /** いまの案件と会場の一覧（会期が重なる案件・会場の別名を見るため） */
 export interface ReportContext { projects: Project[]; venues: Venue[] }
@@ -210,6 +306,18 @@ function ownerOf(
 /**
  * 日報の回答から、案件の「同期の結果」を作る。案件や日報は書き換えない。
  * 会場または会期が決まっていない案件は、照合できないのでエラーにする。
+ *
+ * 回答 1 件ごとの扱い（rows は、見出しを除いて上から順。rows[0] が日報の 2 行目）:
+ *   1. 空行・テスト回答 … 外す
+ *   2. この案件のものでないと確実に言える回答 … 外す（読み取れない項目があっても、この案件の同期は止めない）
+ *        - 開催日が読み取れて、会期の外（会場が何であっても）
+ *        - 会場名が読み取れて、この案件の会場名・別名ではない（開催日が会期内なら「会場名が一致しない回答」として示す）
+ *        - 会場名が一致して開催日が会期内だが、会期が重なる相手の案件が「自分の実績にする」と決めていて、この案件は決めていない日の回答
+ *   3. それ以外＝この案件の回答（会場名が一致し、開催日が会期内か、開催日を読み取れない）、または、
+ *      この案件のものかどうかを決められない回答（会場名が空欄で、開催日が会期内か、開催日を読み取れない）
+ *        - 開催日・会場名・キットの使用数のどれかを読み取れない … **同期の全体を止める**（issues に入れて、ok: false を返す）
+ *        - すべて読み取れる … 取り込む（会期が重なる案件がある日は、保留または相手の案件のもの）
+ * 止めるのは、一部の回答だけを取り込んだ実績（＝実際より少ない個数）を、確定した実績として扱わないため（Issue #88 のオーナー方針「不正値は同期停止」）。
  */
 export function planReportSync({ project: p, projects, venues, rows, now }: SyncInput): SyncPlan {
   const venue = venues.find((v) => v.id === p.venueId);
@@ -234,37 +342,58 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
   };
   let rowsRead = 0, rowsUsed = 0, tests = 0;
 
-  for (const r of rows) {
-    if (isBlankRow(r)) continue;
+  const issues: ReportIssue[] = [];
+  rows.forEach((r, index) => {
+    if (isBlankRow(r)) return;
     rowsRead += 1;
-    if (isTestRow(r)) { tests += 1; continue; }
+    if (isTestRow(r)) { tests += 1; return; }
     const v = reportVenue(r);
     const date = parseReportDate(r.date);
     const mine = !!v && keys.has(v.key);
-    if (!date) { if (mine) skip('bad-date', null); continue; }
-    if (!dates.has(date)) continue;                               // 会期の外（ほかの会期の回答）
-    if (!v) { skip('no-venue', date); continue; }
-    const count = parseReportCount(r.count);
-    if (!mine) {
+
+    // この案件のものでないと確実に言える回答は、ここで外す（読み取れない項目があっても、この案件の同期は止めない）
+    if (date && !dates.has(date)) return;                         // 会期の外（会場が何であっても）
+    if (v && !mine) {                                             // 別の会場名（この案件の会場名・別名ではない）
+      if (!date) return;                                          // 開催日を読み取れなくても、この案件の回答ではない
       const u = unmatched.get(v.key) ?? { venue: v.name, rows: 0, count: 0, dates: [] };
       u.rows += 1;
-      u.count += count ?? 0;
+      u.count += parseReportCount(r.count) ?? 0;
       if (!u.dates.includes(date)) u.dates.push(date);
       unmatched.set(v.key, u);
-      continue;
+      return;
     }
-    if (count == null) { skip('bad-count', date); continue; }
 
-    // 同じ会場名・同じ日を会期に含む案件がほかにあるか
-    const { owner, others } = ownerOf(date, [v.key], claims, rivals, !isCancelled(p));
-    if (owner === 'theirs') { skip('other-project', date); continue; }
+    // 会場名が一致して、開催日が会期内の回答は、会期が重なる案件があるかを見る。
+    // 相手の案件が「自分の実績にする」と決めていて、この案件は決めていない日の回答は、相手の案件のもの
+    // （＝この案件のものでないと確実に言える）。個数を読み取れなくても、この案件の同期は止めない（止まるのは、相手の案件の同期）
+    const owned = date && v ? ownerOf(date, [v.key], claims, rivals, !isCancelled(p)) : null;
+    if (date && owned?.owner === 'theirs') { skip('other-project', date); return; }
+
+    // ここから先は、この案件の回答（会場名が一致）か、この案件のものかどうかを決められない回答
+    // （会場名が空欄／開催日を読み取れない／会期が重なる案件があって、どちらのものか決まっていない日）。
+    // 読み取れない項目が 1 つでもあれば、取り込まずに記録する（1 件でもあれば、あとで同期の全体を止める）
+    const count = parseReportCount(r.count);
+    if (!date || !v || !owned || count == null) {
+      const items: ReportIssue['items'] = [];
+      const badDate = dateProblem(r.date);
+      if (badDate) items.push({ field: REPORT_HEADERS.date, reason: badDate });
+      const badVenue = venueProblem(r);
+      if (badVenue) items.push(badVenue);
+      const badCount = countProblem(r.count);
+      if (badCount) items.push({ field: REPORT_HEADERS.count, reason: badCount });
+      issues.push({ row: index + FIRST_ANSWER_ROW, date, items });
+      return;
+    }
+
+    // 同じ会場名・同じ日を会期に含む案件がほかにあって、どちらのものか決まっていない日は、保留
+    const { owner, others } = owned;
     if (owner === 'held') {
       const h = held.get(date) ?? { date, count: 0, rows: 0, others: [] };
       h.count += count;
       h.rows += 1;
       for (const q of others) if (!h.others.includes(q.name)) h.others.push(q.name);
       held.set(date, h);
-      continue;
+      return;
     }
     const d = days.get(date) ?? { date, count: 0, rows: 0, keys: [] };
     d.count += count;
@@ -272,10 +401,17 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
     if (!d.keys!.includes(v.key)) d.keys!.push(v.key);
     days.set(date, d);
     rowsUsed += 1;
+  });
+
+  if (issues.length > 0) {
+    return {
+      ok: false,
+      message: `日報に、読み取れない回答が ${issues.length} 件あるため、取り込みを中止しました。下の回答を日報で直してから、もう一度「日報を同期」を押してください。`,
+      issues,
+    };
   }
 
   const byDate = <T extends { date: string }>(a: T, b: T) => a.date.localeCompare(b.date);
-  const ORDER: ReportSkipReason[] = ['bad-date', 'bad-count', 'no-venue', 'other-project'];
   const sync: ReportSync = {
     at: now,
     venueId: p.venueId,
@@ -285,7 +421,7 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
     rowsRead,
     rowsUsed,
     tests,
-    skipped: ORDER.filter((k) => skipped.has(k)).map<ReportSkip>((k) => ({ reason: k, rows: skipped.get(k)!.rows, dates: [...skipped.get(k)!.dates].sort() })),
+    skipped: [...skipped.entries()].map<ReportSkip>(([reason, x]) => ({ reason, rows: x.rows, dates: [...x.dates].sort() })),
     held: [...held.values()].sort(byDate),
     unmatched: [...unmatched.values()]
       .map((u) => ({ ...u, dates: [...u.dates].sort() }))
@@ -351,6 +487,21 @@ export function contestedReportDays(p: Project, ctx: ReportContext): ContestedDa
   const out: ContestedDay[] = [];
   for (const s of storedOwners(p, ctx)) {
     if (s.owner === 'theirs' || s.owner === 'held') out.push({ date: s.day.date, count: s.day.count, rows: s.day.rows, others: s.others, state: s.owner });
+  }
+  return out;
+}
+
+/**
+ * 同じ会場名・重なる会期の、ほかの案件が「自分の実績にする」と決めている日（この案件の会期内）。
+ * 保留の日の説明に使う。この案件も決めている日が、ここにも入っていれば「両方の案件が決めている」（どちらかが取り消すまで、取り込めない）。
+ * 入っていなければ、この案件の決定は、次に成功した同期で反映される（決めた直後の同期が失敗した・相手が決定を取り消した）。
+ */
+export function rivalClaimedDates(p: Project, ctx: ReportContext): Set<string> {
+  const dates = new Set(listDates(p.startDate, p.endDate));
+  const keys = venueKeys(ctx.venues.find((v) => v.id === p.venueId));
+  const out = new Set<string>();
+  for (const q of rivalsOf(p, keys, dates, ctx)) {
+    for (const d of q.claims) if (dates.has(d) && q.dates.has(d)) out.add(d);
   }
   return out;
 }
