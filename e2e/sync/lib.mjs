@@ -314,16 +314,17 @@ export async function createProject(page, name) {
   await page.locator('table.kv tr', { hasText: '案件名' }).locator('input').fill(name);
   await page.getByRole('button', { name: '← 案件一覧' }).click();
 }
+// 行のボタンは、名前の完全一致で探す（Version 4 から、案件名そのものも「押すと開く」ボタンになった。案件名に「開く」などの文字が入っていても取り違えないため）
 export async function openProject(page, name) {
   await tab(page, '案件');
   if (await page.locator('.pv__head').count()) await page.getByRole('button', { name: '← 案件一覧' }).click();
-  await page.locator('.grid tbody tr', { has: page.locator('td', { hasText: new RegExp(`^${name}$`) }) }).first().getByRole('button', { name: '開く' }).click();
+  await page.locator('.grid tbody tr', { has: page.locator('td', { hasText: new RegExp(`^${name}$`) }) }).first().getByRole('button', { name: '開く', exact: true }).click();
   await page.waitForSelector('.sheettabs');
 }
 export async function deleteProject(page, name) {
   await tab(page, '案件');
   if (await page.locator('.pv__head').count()) await page.getByRole('button', { name: '← 案件一覧' }).click();
-  await page.locator('.grid tbody tr', { has: page.locator('td', { hasText: new RegExp(`^${name}$`) }) }).first().getByRole('button', { name: '×' }).click();
+  await page.locator('.grid tbody tr', { has: page.locator('td', { hasText: new RegExp(`^${name}$`) }) }).first().getByRole('button', { name: '×', exact: true }).click();
 }
 export const kv = (page, label) => page.locator('table.kv tr', { hasText: label }).locator('input');
 export async function addStaff(page, name, rate) {
