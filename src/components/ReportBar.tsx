@@ -12,7 +12,7 @@ import { isFirebaseConfigured } from '../firebase';
 import { forgetSheetsToken, requestSheetsToken } from '../report/googleToken';
 import { fetchReportRows } from '../report/sheets';
 import { SyncFailure, failureIsCurrent, hydrateFailure } from '../report/sync';
-import { abandonSync, isSyncRunning, startSyncJob, subscribeSyncJobs, syncJobsVersion, syncKey } from '../report/syncJob';
+import { abandonSync, isSyncRunning, startSyncJob, subscribeSyncJobs, syncJobsVersion, syncKey, syncRunningSince } from '../report/syncJob';
 import { AppData, Project, ReportSkipReason, ReportSource, ReportSync, Venue } from '../types';
 
 interface Props {
@@ -38,10 +38,14 @@ function loadMap(key: string): Record<string, unknown> {
   const v = load<unknown>(key, null);
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
+// このタブで記録した失敗。端末にも置くが、置けなかったとき（保存領域がいっぱい・保存できない設定）でも、
+// このタブでは表示できるように、メモリにも持つ（失敗したのに、何も表示されない、を防ぐ）
+const recent = new Map<string, SyncFailure | null>();
 /** この案件（key ＝ 置き場所 ＋ 案件の ID）の、最後の失敗の記録 */
-const lastFailure = (key: string): SyncFailure | null => hydrateFailure(loadMap(ERROR_KEY)[key]);
-/** 失敗の記録を、端末に置く（null … 消す） */
+const lastFailure = (key: string): SyncFailure | null => (recent.has(key) ? recent.get(key) ?? null : hydrateFailure(loadMap(ERROR_KEY)[key]));
+/** 失敗の記録を、このタブのメモリと、端末に置く（null … 消す） */
 function recordFailure(key: string, f: SyncFailure | null): void {
+  recent.set(key, f);
   const all = loadMap(ERROR_KEY);
   if (f) all[key] = f; else delete all[key];
   save(ERROR_KEY, all);
@@ -87,19 +91,24 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
   const sync = p.reportSync;
   // 失敗の記録は、そのあとで同期の結果が新しくなっていたら（ほかの端末で同期が成功した）、出さない
   const failure = recorded && failureIsCurrent(recorded, sync?.at) ? recorded : null;
-  // 同期が失敗で終わったら、内容を開いて見せる（この画面を開く前に始めた同期を含む）
-  const wasBusy = useRef(busy);
-  const failed = !!failure;
+  // 同期が失敗で終わったら、内容を開いて見せる（この画面を開く前に始めた同期を含む）。
+  // 同期の前から出ていた失敗のままなら、開かない（同期をやめたときに、前の失敗を、いまの同期の結果のように見せない）
+  const wasBusy = useRef(false);
+  const shownBefore = useRef<string | undefined>(undefined);
+  const failedAt = failure?.at;
   useEffect(() => {
-    if (wasBusy.current && !busy && failed) setOpen(true);
+    if (busy && !wasBusy.current) shownBefore.current = failedAt;
+    if (!busy && wasBusy.current && failedAt && failedAt !== shownBefore.current) setOpen(true);
     wasBusy.current = busy;
-  }, [busy, failed]);
-  // 同期が長引いているときだけ、「同期をやめる」を出す
+  }, [busy, failedAt]);
+  // 同期が長引いているときだけ、「同期をやめる」を出す。時間は、同期を始めたときから数える（画面を開き直しても、数え直さない）
   useEffect(() => {
     if (!busy) { setSlow(false); return undefined; }
-    const t = setTimeout(() => setSlow(true), SLOW_MS);
+    const wait = SLOW_MS - (Date.now() - (syncRunningSince(key) ?? Date.now()));
+    if (wait <= 0) { setSlow(true); return undefined; }
+    const t = setTimeout(() => setSlow(true), wait);
     return () => clearTimeout(t);
-  }, [busy]);
+  }, [busy, key]);
   const stale = syncStaleness(p, data);
   const venue = data.venues.find((v) => v.id === p.venueId);
   const known = findReportSource(p, data.projects) ?? load<ReportSource | null>(SOURCE_KEY, null);

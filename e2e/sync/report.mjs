@@ -120,12 +120,13 @@ async function startHeld(page, sheets) {
   sheets.hold = new Promise((r) => { release = r; });
   await page.locator('[data-testid="report-sync"]').click();
   const clickedAt = Date.now();
-  await until(() => fetches(sheets), (v) => v === n + 1, 5000);
+  eq(await until(() => fetches(sheets), (v) => v === n + 1, 5000), n + 1, '回答の取得の要求が届くこと（ここで応答を止める）');
+  eq(sheets.hold, null, '止める仕掛けが、この要求に使われたこと');
   eq(await busy(page), '1', '同期中の表示');
   const deliver = async () => {
     const answered = sheets.answered;
     release();
-    await until(() => sheets.answered, (v) => v === answered + 1, 5000);              // 応答が、ブラウザに渡った
+    eq(await until(() => sheets.answered, (v) => v === answered + 1, 5000), answered + 1, '止めていた応答が、ブラウザに渡ること');
   };
   deliver.clickedAt = clickedAt;
   return deliver;
@@ -133,7 +134,7 @@ async function startHeld(page, sheets) {
 /** 「同期をやめる」を押す（同期が長引くと出る） */
 async function stopSync(page) {
   await page.locator('[data-testid="report-stop"]').click({ timeout: 10000 });
-  await until(() => busy(page), (b) => b === '0', 3000);
+  eq(await until(() => busy(page), (b) => b === '0', 3000), '0', '「同期をやめる」のあとの、同期中の表示');
 }
 const toggleText = (page) => page.locator('[data-testid="report-toggle"]').innerText();
 /** 日報の内容（11/13 の個数だけを変える。11/14 は 58 個） */
@@ -609,9 +610,8 @@ add('R14', '同期の途中で案件を閉じて開き直しても、同期中�
   eq(await busy(a), '1', '開き直した画面でも、同期中');
   const button = a.locator('[data-testid="report-sync"]');
   eq([await button.isDisabled(), (await button.innerText()).trim()], [true, '同期中…'], '「日報を同期」のボタン');
-  // ボタンの「押せない」印を外してクリックしても、2 つ目の同期は始まらない
-  // （同期を始める処理そのものが、動いている同期があると始めないことは、単体テスト syncJob.test.ts で確かめている）
-  await button.evaluate((el) => { el.disabled = false; el.click(); });
+  // 開き直しただけでは、2 つ目の同期は始まらない（同期を始める処理そのものが、動いている同期があると始めないことは、
+  // 単体テスト syncJob.test.ts で確かめている。画面では、ボタンが押せないことを確かめる）
   await sleep(400);
   eq([fetches(sheets), await busy(a)], [2, '1'], '回答の取得の回数・同期中の表示');
   await release();
@@ -761,6 +761,61 @@ add('R18', '2 台の同期が、ほぼ同時に終わったとき（守れない
   await until(() => status(b), (t) => t.includes(expected), 8000);
   eq(await status(a), await status(b), '2 台の表示が、同じ結果にそろう');
   eq([(await jcos(a)).actual, (await jcos(b)).actual], got === fromA ? [128, 128] : [157, 157], '2 台の実績');
+});
+
+add('R21', '同じ端末の別のタブ（共有データ）の同期の結果が先に届いていたら、あとから届いた自分の同期の結果で上書きしない（同期中の状態は、タブごと）', async ({ device: mk }) => {
+  const { A, a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  await syncedDoc('秋の花まつり');
+  // 同じ端末の 2 つ目のタブ（ログインの状態は、引き継がれる）
+  const t2 = await openPage(A);
+  await t2.waitForSelector('[data-testid="space"][data-space="shared"]', { timeout: 20000 });
+  await openProject(t2, '秋の花まつり');
+  // タブ 1: 同期の途中（直される前の日報〔11/13 = 70〕を読んだ応答が、止まっている）
+  sheets.rows = twoDays(70);
+  const release = await startHeld(a, sheets);
+  eq(await busy(t2), '0', 'タブ 2 は、同期中ではない');
+  // タブ 2: 直されたあとの日報（11/13 = 99）で同期して、結果が共有データに保存される。タブ 1 にも届く
+  sheets.rows = twoDays(99);
+  await syncNow(t2);
+  const theirs = await syncedDoc('秋の花まつり', (p) => days(p)[0]?.[1] === 99);
+  eq(await until(() => status(a), (t) => t.includes('2 日分 157 個'), 8000).then((t) => t.includes('2 日分 157 個')), true, 'タブ 1 に、タブ 2 の結果が届くこと');
+  eq(await busy(a), '1', 'タブ 1 は、まだ同期中');
+  // タブ 1 の応答が、あとから届く
+  await release();
+  eq(await until(() => busy(a), (v) => v === '0', 10000), '0', 'タブ 1 の同期が終わること');
+  await sleep(SETTLE_MS);
+  ok((await status(a)).includes('2 日分 157 個'), `タブ 1 の表示（タブ 2 の結果のまま）: ${await status(a)}`);
+  eq(written(await projectDoc('秋の花まつり')), written(theirs), '共有データ（タブ 2 の結果のまま）');
+  ok((await toggleText(a)).includes('同期できませんでした'), `タブ 1 に、知らせが出る: ${await toggleText(a)}`);
+  ok(!(await toggleText(t2)).includes('同期できませんでした'), `タブ 2 には、出ない: ${await toggleText(t2)}`);
+});
+
+add('R22', '端末に失敗の記録を置けないとき（保存領域がいっぱい、など）でも、同期の失敗は画面に出る。案件を開き直しても出て、次に成功すると消える', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  // 失敗の記録の保存だけを、失敗させる
+  await a.evaluate(() => {
+    const set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function setItem(k, v) {
+      if (k === 'kkl_report_error_v1') throw new DOMException('quota exceeded', 'QuotaExceededError');
+      return set.call(this, k, v);
+    };
+  });
+  const stored = () => a.evaluate(() => localStorage.getItem('kkl_report_error_v1'));
+  const before = await stored();
+  sheets.fail = 'network';
+  await syncNow(a);
+  eq(await stored(), before, '端末の記録（保存できていないこと）');
+  ok((await toggleText(a)).includes('同期できませんでした'), `失敗が出る: ${await toggleText(a)}`);
+  ok((await a.locator('[data-testid="report-error"]').innerText()).includes('そのまま残しています'), '失敗の内容（前回の実績を残していること）');
+  await a.getByRole('button', { name: '← 案件一覧' }).click();
+  await openProject(a, '秋の花まつり');
+  ok((await toggleText(a)).includes('同期できませんでした'), `開き直しても、失敗が出る: ${await toggleText(a)}`);
+  sheets.fail = null;
+  await syncNow(a);
+  ok(!(await toggleText(a)).includes('同期できませんでした'), `成功すると消える: ${await toggleText(a)}`);
+  ok((await status(a)).includes('2 日分 120 個'), `同期の表示: ${await status(a)}`);
 });
 
 add('R20', '同期の途中でログアウトしたとき、あとから届いた結果は、共有データにも、送信待ちの控えにも書かれない（次のログインで「前回の残り」として扱われない）。保存できなかったことは、同期の欄に出る', async ({ device: mk }) => {

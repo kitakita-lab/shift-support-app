@@ -11,7 +11,7 @@ import { ReportError } from './sheets';
 import { SyncDeps, failureIsCurrent } from './sync';
 import {
   GONE_MESSAGE, SUPERSEDED_MESSAGE, SyncJobIo, SyncJobResult, abandonSync, isSyncRunning, resetSyncJobs, startSyncJob, subscribeSyncJobs,
-  syncJobsVersion, syncKey, syncStamp,
+  syncJobsVersion, syncKey, syncRunningSince, syncStamp,
 } from './syncJob';
 
 const VENUE: Venue = { id: 'v1', name: '北街モール（中央広場）', feeFixed: 0, feePerDay: 0, feeRatePct: 0, memo: '', template: emptyLayout() };
@@ -338,10 +338,34 @@ describe('失敗したときは、案件に触れない。同期中の印は、�
     expect(pl.s.p).toBe(stored);
     expect(isSyncRunning(KEY)).toBe(false);
   });
-  it('置き場所の読み書きが例外を投げても、同期中のまま残らない', async () => {
-    const io: SyncJobIo = { current: () => { throw new Error('boom'); }, update: () => { throw new Error('boom'); }, settled: () => { throw new Error('boom'); } };
-    const r = await startSyncJob(KEY, { project: P, projects: [P], venues: [VENUE], source: SOURCE }, deps(fast(sheet(62))), io)!;
-    expect(r).toMatchObject({ kind: 'failed', code: 'unknown' });
-    expect(isSyncRunning(KEY)).toBe(false);
+  it('置き場所の読み取り・書き込み・記録のどれが例外を投げても、同期中のまま残らない（失敗として返す）', async () => {
+    const boom = () => { throw new Error('boom'); };
+    const cases: [string, Partial<SyncJobIo>, SyncJobResult['kind']][] = [
+      ['読み取り', { current: boom }, 'failed'],
+      ['書き込み', { update: boom }, 'failed'],
+      ['記録', { settled: boom }, 'applied'],          // 結果は書けている。記録できなかっただけ
+    ];
+    for (const [name, broken, kind] of cases) {
+      const pl = place();
+      const r = await startSyncJob(KEY, { project: P, projects: [P], venues: [VENUE], source: SOURCE }, deps(fast(sheet(62))), { ...pl.io, ...broken })!;
+      expect(r.kind, name).toBe(kind);
+      if (r.kind === 'failed') expect(r.code, name).toBe('unknown');
+      expect(isSyncRunning(KEY), name).toBe(false);
+      if (name !== '記録') expect(pl.s.p, name).toBe(P);     // 書けなかったときは、案件は変わっていない
+    }
+  });
+  it('同期を始めた時刻が分かる（画面を開き直しても、「同期をやめる」を出すまでの時間を数え直さないため）', async () => {
+    const pl = place();
+    expect(syncRunningSince(KEY)).toBeNull();
+    const first = slow();
+    const before = Date.now();
+    const job = start(pl, first.rows);
+    const since = syncRunningSince(KEY);
+    expect(since).not.toBeNull();
+    expect(since!).toBeGreaterThanOrEqual(before);
+    expect(since!).toBeLessThanOrEqual(Date.now());
+    first.resolve(sheet(62));
+    await job;
+    expect(syncRunningSince(KEY)).toBeNull();
   });
 });

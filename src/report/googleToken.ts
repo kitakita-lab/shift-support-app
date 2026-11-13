@@ -16,7 +16,10 @@ const KEEP_MS = 50 * 60 * 1000;
 
 let cached: { uid: string; token: string; until: number } | null = null;
 
-export function forgetSheetsToken(): void { cached = null; }
+/** 覚えている認証を捨てる。token を渡したときは、覚えているものが、それと同じときだけ捨てる */
+export function forgetSheetsToken(token?: string): void {
+  if (token === undefined || cached?.token === token) cached = null;
+}
 
 /**
  * 認証を得る。覚えているものが無ければ、Google の画面（ポップアップ）を開く。

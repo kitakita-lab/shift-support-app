@@ -24,8 +24,8 @@ interface Ticket { key: string; seq: number }
 let counter = 0;
 /** 案件ごとの、最後に始めた（または、やめた）同期の番号。この番号の同期だけが、結果を書ける */
 const latest = new Map<string, number>();
-/** 案件ごとの、動いている同期の番号 */
-const running = new Map<string, number>();
+/** 案件ごとの、動いている同期（番号と、始めた時刻） */
+const running = new Map<string, { seq: number; since: number }>();
 const listeners = new Set<() => void>();
 /** 同期が始まった・終わった・やめたときに増える番号（画面が、状態を読み直すきっかけにする） */
 let version = 0;
@@ -34,13 +34,13 @@ const emit = (): void => { version += 1; for (const l of [...listeners]) l(); };
 function begin(key: string): Ticket {
   const seq = ++counter;
   latest.set(key, seq);
-  running.set(key, seq);
+  running.set(key, { seq, since: Date.now() });
   emit();
   return { key, seq };
 }
 const isLatest = (t: Ticket): boolean => latest.get(t.key) === t.seq;
 function end(t: Ticket): void {
-  if (running.get(t.key) !== t.seq) return;      // やめたあとで、次の同期が動いている … その印は消さない
+  if (running.get(t.key)?.seq !== t.seq) return; // やめたあとで、次の同期が動いている … その印は消さない
   running.delete(t.key);
   emit();
 }
@@ -50,6 +50,8 @@ export const syncKey = (scope: string, projectId: string): string => `${scope}:$
 
 /** この案件の同期が、このタブで動いているか */
 export const isSyncRunning = (key: string): boolean => running.has(key);
+/** 動いている同期を始めた時刻（ミリ秒）。動いていなければ null。案件の画面を開き直しても、始めたときからの時間が分かる */
+export const syncRunningSince = (key: string): number | null => running.get(key)?.since ?? null;
 
 /**
  * 動いている同期をやめる（結果があとから届いても、使わない）。次の同期を始められるようになる。
