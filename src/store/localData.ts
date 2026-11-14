@@ -20,7 +20,7 @@ export function hydrateProject(p: Project): Project {
   };
   // Version 4 の項目（どれも任意）。あるものだけ形をそろえ、扱えない形のものは外す。無い案件には足さない
   const raw = p as unknown as Record<string, unknown>;
-  const put = <K extends 'jcos' | 'reportSync' | 'actualsManual' | 'reportClaims' | 'reportSource'>(key: K, value: Project[K] | undefined) => {
+  const put = <K extends 'jcos' | 'reportSync' | 'actualsManual' | 'reportClaims' | 'reportSource' | 'reportPeriod'>(key: K, value: Project[K] | undefined) => {
     if (value === undefined) delete out[key]; else out[key] = value;
   };
   if (raw.jcos !== undefined) put('jcos', hydrateJcos(raw.jcos));
@@ -39,6 +39,11 @@ export function hydrateProject(p: Project): Project {
     put('reportSource', s && typeof s === 'object' && typeof s.spreadsheetId === 'string' && s.spreadsheetId
       ? { spreadsheetId: s.spreadsheetId, gid: typeof s.gid === 'number' && Number.isFinite(s.gid) ? s.gid : null }
       : undefined);
+  }
+  // Version 5 の項目: 日報から自動で決めた会期の控え（2 つの日付の文字列がそろっているときだけ残す）
+  if (raw.reportPeriod !== undefined) {
+    const r = raw.reportPeriod as { startDate?: unknown; endDate?: unknown } | null;
+    put('reportPeriod', r && typeof r === 'object' && typeof r.startDate === 'string' && typeof r.endDate === 'string' ? { startDate: r.startDate, endDate: r.endDate } : undefined);
   }
   return out;
 }

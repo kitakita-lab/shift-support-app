@@ -223,3 +223,114 @@ describe('同期できなかったときの記録（この端末に置いて、�
     expect(failureIsCurrent({ at: AT, message: 'm' }, undefined)).toBe(true);
   });
 });
+
+// ── Version 5: 会期の変更をともなう同期 ─────────────────────────────
+describe('日報の同期: 日報から決めた会期の案件は、連続する日が増えたら、会期を伸ばす', () => {
+  const AUTO: Project = { ...P, startDate: '2026-11-13', endDate: '2026-11-13', reportPeriod: { startDate: '2026-11-13', endDate: '2026-11-13' } };
+  it('伸ばした会期で照合し、結果を書くときに、会期と、会期の控えも書く', async () => {
+    const store = { p: AUTO };
+    const out = await syncInto(store, deps());
+    expect(out).toMatchObject({ ok: true, period: { from: { startDate: '2026-11-13', endDate: '2026-11-13' }, to: { startDate: '2026-11-13', endDate: '2026-11-14' }, notHeld: [] } });
+    expect([store.p.startDate, store.p.endDate, store.p.reportPeriod]).toEqual(['2026-11-13', '2026-11-14', { startDate: '2026-11-13', endDate: '2026-11-14' }]);
+    expect(store.p.reportSync!.days.map((d) => [d.date, d.count])).toEqual([['2026-11-13', 62], ['2026-11-14', 58]]);
+    expect(jcosEstimate(store.p).basis).toBe('actual');
+    // もう一度同期しても、同じ（会期も実績も、増えない）
+    const again = await syncInto(store, deps());
+    expect(again.ok && again.period).toBeUndefined();
+    expect([store.p.endDate, jcosEstimate(store.p).actualCount]).toEqual(['2026-11-14', 120]);
+  });
+  it('案件名の末尾が、前の会期の書き方（日報から作った案件の名前）のままなら、会期に合わせて書き換える。利用者が付けた名前は、変えない', async () => {
+    const auto = { p: { ...AUTO, name: `${VENUE.name}（11/13）` } };
+    await syncInto(auto, deps());
+    expect([auto.p.name, auto.p.endDate]).toEqual([`${VENUE.name}（11/13〜11/14）`, '2026-11-14']);
+    const named = { p: { ...AUTO, name: '冬の花あそび' } };
+    await syncInto(named, deps());
+    expect([named.p.name, named.p.endDate]).toEqual(['冬の花あそび', '2026-11-14']);
+    // 会期が変わらない同期では、名前も変えない
+    const again = { p: { ...auto.p } };
+    await syncInto(again, deps());
+    expect(again.p.name).toBe(`${VENUE.name}（11/13〜11/14）`);
+  });
+  it('会期の端の日の回答が、日報から無くなったら（消された・開催日が直された）、その分だけ会期を縮める。案件名も合わせる', async () => {
+    const store = { p: { ...AUTO, name: `${VENUE.name}（11/13〜11/15）`, endDate: '2026-11-15', reportPeriod: { startDate: '2026-11-13', endDate: '2026-11-15' } } };
+    const out = await syncInto(store, deps());                                          // 日報にあるのは、11/13・11/14 だけ
+    expect(out).toMatchObject({ ok: true, period: { to: { startDate: '2026-11-13', endDate: '2026-11-14' }, notHeld: [] } });
+    expect([store.p.endDate, store.p.reportPeriod, store.p.name, jcosEstimate(store.p).billDays]).toEqual(['2026-11-14', { startDate: '2026-11-13', endDate: '2026-11-14' }, `${VENUE.name}（11/13〜11/14）`, 2]);
+  });
+  it('会期を手で決めた案件は、伸ばさない（会期の外の回答は、取り込まずに示す）', async () => {
+    const store = { p: { ...AUTO, reportPeriod: undefined } };
+    const out = await syncInto(store, deps());
+    expect(out.ok && out.period).toBeUndefined();
+    expect([store.p.endDate, store.p.reportSync!.days.length, store.p.reportSync!.outside]).toEqual(['2026-11-13', 1, [{ date: '2026-11-14', rows: 1, count: 58 }]]);
+  });
+  it('同期の途中で、利用者が会期を変えていたら、会期は書き換えない（実績だけを書く）', async () => {
+    const out = await run(deps(), AUTO);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const edited = { ...AUTO, endDate: '2026-11-20' };                                  // 同期の途中で、終了日を手で変えた
+    const next = applySync(edited, out);
+    expect([next.startDate, next.endDate, next.reportPeriod]).toEqual(['2026-11-13', '2026-11-20', AUTO.reportPeriod]);
+    expect(next.reportSync).toBe(out.sync);
+  });
+  it('失敗した同期（読み取れない回答）は、会期も実績も変えない', async () => {
+    const store = { p: AUTO };
+    const out = await syncInto(store, deps({ rows: async () => [row('2026/11/13', 62), row('2026/11/14', '58個')] }));
+    expect(out).toMatchObject({ ok: false, code: 'bad-rows' });
+    expect(store.p).toBe(AUTO);
+  });
+});
+
+describe('日報の同期: 利用者が選んだ会期へ広げて取り込む', () => {
+  const MANUAL: Project = { ...P, startDate: '2026-11-13', endDate: '2026-11-13' };
+  const far = [row('2026/11/13', 62), row('2026/11/14', 58), row('2026/11/16', 40)];
+  const widen = (d: SyncDeps, project: Project, period: { startDate: string; endDate: string }) =>
+    runReportSync({ project, projects: [project], venues: [VENUE], source: SOURCE, period }, d);
+  it('広げた会期で取り込み、回答の無い日（間の日）は、請求しない・アルバイト 0 人にする', async () => {
+    const out = await widen(deps({ rows: async () => far }), MANUAL, { startDate: '2026-11-13', endDate: '2026-11-16' });
+    expect(out).toMatchObject({ ok: true, period: { to: { startDate: '2026-11-13', endDate: '2026-11-16' }, notHeld: ['2026-11-15'] } });
+    if (!out.ok) return;
+    const next = applySync(MANUAL, out);
+    // 会期を手で決めた案件は、広げたあとも、手で決めた会期の案件のまま（控えを付けない＝このあとも、自動では変えない）
+    expect([next.startDate, next.endDate, next.reportPeriod]).toEqual(['2026-11-13', '2026-11-16', undefined]);
+    expect(next.jcos!.days).toEqual({ '2026-11-15': { billed: false, partTimers: 0, notHeld: true } });
+    const j = jcosEstimate(next);
+    expect([j.periodDays, j.heldDays, j.billDays, j.partTimerDays, j.actualDays, j.actualCount, j.basis]).toEqual([4, 3, 3, 3, 3, 160, 'actual']);
+    // 次の日の回答が増えても、自動では伸びない（会期のすぐ外の回答として示す）
+    const store = { p: next };
+    const again = await syncInto(store, deps({ rows: async () => [...far, row('2026/11/17', 9)] }));
+    expect(again.ok && again.period).toBeUndefined();
+    expect([store.p.endDate, store.p.reportSync!.outside]).toEqual(['2026-11-16', [{ date: '2026-11-17', rows: 1, count: 9 }]]);
+  });
+  it('日報から決めた会期の案件を、利用者が選んで広げたときは、日報から決めた会期の案件のまま（控えも合わせる）', async () => {
+    const auto: Project = { ...MANUAL, reportPeriod: { startDate: '2026-11-13', endDate: '2026-11-13' } };
+    // 11/14 は連続しているので自動で伸びる。11/16 は、利用者が選んで広げる
+    const out = await widen(deps({ rows: async () => far }), auto, { startDate: '2026-11-13', endDate: '2026-11-16' });
+    expect(out.ok && applySync(auto, out).reportPeriod).toEqual({ startDate: '2026-11-13', endDate: '2026-11-16' });
+  });
+  it('「開催していない日」としてあった日に、あとから回答が入ったら、同期のときに印を外す（請求する・アルバイト 1 人に戻る）', async () => {
+    const out = await widen(deps({ rows: async () => far }), MANUAL, { startDate: '2026-11-13', endDate: '2026-11-16' });
+    if (!out.ok) throw new Error('unexpected');
+    const store = { p: applySync(MANUAL, out) };
+    expect(jcosEstimate(store.p).current.gross).toBe(3 * 40000 - 3 * 15000 - 160 * 220);
+    // 11/15 の回答が、あとから日報に入った
+    await syncInto(store, deps({ rows: async () => [...far, row('2026/11/15', 20)] }));
+    expect(store.p.jcos!.days).toEqual({});
+    const j = jcosEstimate(store.p);
+    expect([j.billDays, j.partTimerDays, j.actualCount, j.current.gross]).toEqual([4, 4, 180, 4 * 40000 - 4 * 15000 - 180 * 220]);
+    // 利用者が決めた「請求しない」の日（印の無い日）は、回答が入っても変えない
+    const manualDay: Project = { ...MANUAL, endDate: '2026-11-14', jcos: { ...defaultJcos(), days: { '2026-11-14': { billed: false } } } };
+    const kept = { p: manualDay };
+    await syncInto(kept, deps({ rows: async () => far }));
+    expect(kept.p.jcos!.days).toEqual({ '2026-11-14': { billed: false } });
+  });
+  it('利用者が、間の日をすでに設定していたら、その設定は変えない', async () => {
+    const set: Project = { ...MANUAL, jcos: { ...defaultJcos(), days: { '2026-11-15': { partTimers: 2 } } } };
+    const out = await widen(deps({ rows: async () => far }), set, { startDate: '2026-11-13', endDate: '2026-11-16' });
+    expect(out.ok && applySync(set, out).jcos!.days).toEqual({ '2026-11-15': { partTimers: 2 } });
+  });
+  it('JCOS 案件でない案件は、会期だけを広げる（日ごとの設定は作らない）', async () => {
+    const generic: Project = { ...MANUAL, jcos: undefined };
+    const out = await widen(deps({ rows: async () => far }), generic, { startDate: '2026-11-13', endDate: '2026-11-16' });
+    expect(out.ok && [applySync(generic, out).endDate, applySync(generic, out).jcos]).toEqual(['2026-11-16', undefined]);
+  });
+});

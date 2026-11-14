@@ -3,19 +3,22 @@ import AuthButton from './components/AuthButton';
 import Grid, { Col } from './components/Grid';
 import { ContentMaster, PartMaster, StaffMaster, VenueMaster } from './components/Masters';
 import ProjectView from './components/ProjectView';
+import ReportImport, { forgetReportImports } from './components/ReportImport';
 import { MembersPanel, NoticeList, ReportTable, SharedPhasePanel, SpaceBar } from './components/Shared';
 import { PHONE, useMediaQuery } from './components/useMedia';
 import { useAuth } from './contexts/AuthContext';
 import { estimate } from './domain/calc';
 import { projectMoney } from './domain/jcos';
-import { duplicateProject, newProject, sampleData } from './domain/seed';
+import { venueKey } from './domain/report';
+import { matchVenue } from './domain/reportImport';
+import { duplicateProject, newProject, newVenue, sampleData } from './domain/seed';
 import { genId, listDates, localDate, shortDate, yen } from './domain/util';
 import { projectWarnings } from './domain/warnings';
 import { isFirebaseConfigured } from './firebase';
 import { isEmptyData } from './store/localData';
 import { MigrationReport } from './store/sharedLogic';
 import { downloadJson, hydrateData, useAppData } from './store/useAppData';
-import { Project } from './types';
+import { Project, Venue } from './types';
 import './styles/app.css';
 
 type Tab = 'projects' | 'staff' | 'venues' | 'contents' | 'parts' | 'data' | 'members';
@@ -67,6 +70,10 @@ export default function App() {
     setOpenId(null);
   }, [open, openId, usable, onShared, store]);
   useEffect(() => { if (tab === 'members' && !canManageMembers) setTab('projects'); }, [tab, canManageMembers]);
+  // ログアウト・アカウントの切り替えのときに、「日報から案件を作成・更新」で読んだ日報を捨てる（前のアカウントの権限で読んだ内容を、残さない）。
+  // 案件一覧が画面に出ていないとき（ほかのタブ・案件の画面）のログアウトでも、捨てる
+  const uid = user?.uid ?? '';
+  useEffect(() => forgetReportImports, [uid]);
 
   // 一覧の金額: JCOS 案件は 請求・実費・粗利、それ以外は従来の 売上・費用・利益
   const rows = useMemo(
@@ -100,6 +107,24 @@ export default function App() {
     const p = newProject(data.venues.length === 1 ? data.venues[0] : undefined);
     store.addProject(p);
     setOpenId(p.id);
+  };
+  /**
+   * 案件の画面から、会場を足す（会場タブへ行かずに、その場で登録する）。使う会場を返す（やめたら null）。
+   * 同じ会場名（全角/半角・空白・英字の大小だけの違いを含む）が登録済みなら、新しく作らずに、その会場を返す（重複して登録しない）。
+   * 記号・括弧だけが違う会場があるときは、同じ会場かどうかを確かめる。
+   */
+  const addVenueByName = (raw: string): Venue | null => {
+    const name = raw.trim();
+    if (!venueKey(name)) return null;
+    const m = matchVenue(venueKey(name), data.venues);
+    if (m.state === 'known') return m.venue;
+    if (m.state === 'similar') {
+      const same = m.candidates[0];
+      if (window.confirm(`会場マスタに、記号・空白だけが違う会場「${same.name || '（名称未設定）'}」があります。\n\n［OK］同じ会場なので、「${same.name || '（名称未設定）'}」を使う\n［キャンセル］別の会場として「${name}」を新しく登録する`)) return same;
+    }
+    const v = { ...newVenue(), name };
+    setMaster('venues', [...data.venues, v]);
+    return v;
   };
   // 複製は新しい案件として V1 から始める。コンテンツ・費用・レイアウトを複製し、スタッフ配置は引き継がない（作業ログ D-19）
   const duplicate = (p: Project) => {
@@ -207,14 +232,20 @@ export default function App() {
             onAddVenueAlias={(venueId, name) => setMaster('venues', data.venues.map((v) => (v.id === venueId
               ? { ...v, reportNames: [...new Set([...(v.reportNames ?? []), name.trim()])].filter(Boolean) }
               : v)))}
+            onAddVenue={addVenueByName}
           />
         )}
         {tab === 'projects' && !open && (
           <section>
-            <h2>案件一覧<small>案件 ＝ 会場 × 期間 × 実施コンテンツ</small></h2>
+            <h2>案件一覧<small>開催済みの案件は「日報から案件を作成・更新」、開催予定の案件は「＋ 新しい案件」で作ります</small></h2>
+            <ReportImport
+              data={data} scope={space} live={space !== 'shared' || (shared.online && !shared.fromCache)}
+              getProject={store.getProject} updateProject={store.updateProject} addProject={store.addProject}
+              setVenues={(venues) => setMaster('venues', venues)} notify={store.notify} onOpen={setOpenId}
+            />
             {phone ? (
               <div className="plist" data-testid="project-cards">
-                {rows.length === 0 && <p className="hint">案件がありません。「＋ 新しい案件」か、データタブの「サンプルデータを読み込む」から始められます</p>}
+                {rows.length === 0 && <p className="hint">案件がありません。開催済みの案件は上の「日報から案件を作成・更新」、開催予定の案件は「＋ 新しい案件」で作れます（データタブの「サンプルデータを読み込む」からも始められます）</p>}
                 {rows.map((r) => (
                   <div key={r.p.id} className="pcard" data-testid="project-card">
                     {/* カード全体が「開く」ボタン。複製・コピー・削除は、下の小さいボタン（押し間違えにくいように分ける） */}
@@ -255,7 +286,7 @@ export default function App() {
                   <button className="cellbtn" title="削除" onClick={() => remove(r.p)}>×</button>
                 </>
               )}
-              emptyText="案件がありません。「＋ 新しい案件」か、データタブの「サンプルデータを読み込む」から始められます"
+              emptyText="案件がありません。開催済みの案件は上の「日報から案件を作成・更新」、開催予定の案件は「＋ 新しい案件」で作れます（データタブの「サンプルデータを読み込む」からも始められます）"
             />
             )}
           </section>

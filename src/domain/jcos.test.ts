@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { JcosTerms, Project, ReportSync } from '../types';
 import { estimate } from './calc';
-import { actualsByDate, defaultJcos, isJcos, jcosDay, jcosEstimate, jcosExcluded, projectMoney, splitEvenly, withJcosDay } from './jcos';
+import { actualsByDate, clearNotHeld, defaultJcos, hydrateJcos, isJcos, jcosDay, jcosEstimate, jcosExcluded, markNotHeld, projectMoney, splitEvenly, withJcosDay } from './jcos';
 import { addPart, removeLastPart } from './layout';
 import { defaultPartTypes, duplicateProject, newProject, sampleData } from './seed';
 import { mkAssign, mkContent, mkData, mkProject, rng, withParts } from './testkit';
@@ -245,7 +245,7 @@ describe('請求対象日数とアルバイト稼働日数は別々に数える'
     expect(t.days).toEqual({ [D5[0]]: { partTimers: 2 } });
     t = withJcosDay(t, D5[0], { partTimers: 1 });
     expect(t.days).toEqual({});
-    expect(jcosDay(t, D5[0])).toEqual({ billed: true, partTimers: 1 });
+    expect(jcosDay(t, D5[0])).toEqual({ billed: true, partTimers: 1, notHeld: false });
   });
   it('会期の外の日に残った設定は、計算に入らない（会期を変えたあとの残り）', () => {
     const t = withJcosDay(terms(), '2026-12-25', { billed: false, partTimers: 5 });
@@ -446,11 +446,14 @@ describe('案件の複製・サンプル', () => {
       startDate: D5[0], endDate: D5[2],
       jcos: withJcosDay(terms({ unitCost: 250, extraBillings: [{ id: 'x', name: '予備費', amount: 5000 }] }), D5[1], { billed: false, partTimers: 2 }),
       actualsManual: { [D5[0]]: 40 }, reportClaims: [D5[1]], reportSource: { spreadsheetId: 'sheet-1', gid: 7 },
+      reportPeriod: { startDate: D5[0], endDate: D5[2] },
     });
     const copy = duplicateProject({ ...src, reportSync: sync(src, [[D5[0], 44]]) });
     expect(copy.jcos).toEqual({ ...terms({ unitCost: 250, extraBillings: [{ id: 'x', name: '予備費', amount: 5000 }] }), days: {} });
     expect(copy.reportSource).toEqual({ spreadsheetId: 'sheet-1', gid: 7 });
     expect('reportSync' in copy || 'actualsManual' in copy || 'reportClaims' in copy).toBe(false);
+    // 日報から決めた会期の控えも引き継がない（複製した案件の会期は、日報に合わせて自動では伸ばさない）
+    expect('reportPeriod' in copy).toBe(false);
     expect(jcosEstimate(copy).basis).toBe('planned');
     // 汎用の案件の複製は、これまでどおり（JCOS の項目は増えない）
     expect('jcos' in duplicateProject(mkProject())).toBe(false);
@@ -524,5 +527,109 @@ describe('JCOS 案件の警告', () => {
     expect(all({ ...rival, status: '中止' })).toEqual([]);
     // その日にこの案件の実績があれば、別の会場の回答があっても知らせない
     expect(targets({ ...p, reportSync: { ...base, unmatched: [{ ...other, dates: [D5[0]] }] } })).toEqual([]);
+  });
+});
+
+// ── Version 5: 日報の参加組数・参加人数、手入力との競合、開催していない日 ────────────
+describe('日報の参加組数・参加人数（表示用。金額の計算には使わない）', () => {
+  const base = jp({ startDate: D5[0], endDate: D5[3], contents: [mkContent({ plannedCount: 0 })] });
+  const withDays = (days: ReportSync['days']): Project => ({ ...base, reportSync: { ...sync(base, []), days } });
+  it('日報の実績がある日の合計。未入力の回答がある日は、日数を数えておく（0 とはみなさない）', () => {
+    const e = jcosEstimate(withDays([
+      { date: D5[0], count: 62, rows: 1, groups: 30, people: 71 },
+      { date: D5[1], count: 58, rows: 2, groups: 28, groupsBlank: 1, people: 66 },      // 組数が 1 件だけ未入力
+      { date: D5[2], count: 40, rows: 1 },                                              // 組数・人数とも未入力
+    ]));
+    expect(e.participants).toEqual({ reportDays: 3, groups: { total: 58, missingDays: 2 }, people: { total: 137, missingDays: 1 } });
+    expect(e.days.map((d) => [d.actual?.groups, d.actual?.people])).toEqual([[30, 71], [28, 66], [undefined, undefined], [undefined, undefined]]);
+  });
+  it('どの日も未入力（以前の版で同期した実績を含む）なら、合計は「無し」', () => {
+    const e = jcosEstimate(withDays([{ date: D5[0], count: 62, rows: 1 }]));
+    expect(e.participants).toEqual({ reportDays: 1, groups: { total: null, missingDays: 1 }, people: { total: null, missingDays: 1 } });
+    expect(jcosEstimate(base).participants).toEqual({ reportDays: 0, groups: { total: null, missingDays: 0 }, people: { total: null, missingDays: 0 } });
+  });
+  it('参加組数・参加人数が変わっても、請求・実費・粗利は変わらない（金額は、個数だけで決まる）', () => {
+    const a = jcosEstimate(withDays([{ date: D5[0], count: 62, rows: 1, groups: 30, people: 71 }]));
+    const b = jcosEstimate(withDays([{ date: D5[0], count: 62, rows: 1, groups: 3, people: 999 }]));
+    expect(b.current).toEqual(a.current);
+  });
+});
+
+describe('手入力の実績と、日報の実績が違う日（競合）', () => {
+  const base = jp({ startDate: D5[0], endDate: D5[2], contents: [mkContent({ plannedCount: 0 })] });
+  it('違う日を、日付・手入力の値・日報の値で返す。計算には日報を使い、手入力の値は消さない', () => {
+    const p = { ...base, actualsManual: { [D5[0]]: 50, [D5[1]]: 58, [D5[2]]: 33 }, reportSync: sync(base, [[D5[0], 52], [D5[1], 58]]) };
+    const e = jcosEstimate(p);
+    expect(e.conflicts).toEqual([{ date: D5[0], manual: 50, report: 52 }]);         // 同じ値の日・日報の無い日は、競合ではない
+    expect(e.current.count).toBe(52 + 58 + 33);
+    expect(p.actualsManual).toEqual({ [D5[0]]: 50, [D5[1]]: 58, [D5[2]]: 33 });
+  });
+  it('手入力が無ければ、競合は無い', () => {
+    expect(jcosEstimate({ ...base, reportSync: sync(base, [[D5[0], 52]]) }).conflicts).toEqual([]);
+  });
+});
+
+describe('開催していない日（日報に合わせて会期を広げたとき、回答の無かった日）', () => {
+  it('請求しない・アルバイト 0 人にして、印を付ける。利用者がすでに設定している日は、変えない', () => {
+    const t = markNotHeld(terms({ days: { [D5[1]]: { partTimers: 2 } } }), [D5[1], D5[2]]);
+    expect(t.days).toEqual({ [D5[1]]: { partTimers: 2 }, [D5[2]]: { billed: false, partTimers: 0, notHeld: true } });
+    expect(jcosDay(t, D5[2])).toEqual({ billed: false, partTimers: 0, notHeld: true });
+    expect(jcosDay(t, D5[1])).toEqual({ billed: true, partTimers: 2, notHeld: false });
+  });
+  it('対象の日が無ければ、同じものを返す（余計な書き込みをしない）', () => {
+    const t = terms();
+    expect(markNotHeld(t, [])).toBe(t);
+    const set = markNotHeld(t, [D5[0]]);
+    expect(markNotHeld(set, [D5[0]])).toBe(set);
+  });
+  it('開催していない日は、請求にもアルバイト代にも入らない（すべての日を開催した日として扱わない）', () => {
+    const p = jp({ startDate: D5[0], endDate: D5[4], jcos: markNotHeld(terms(), [D5[2]]) });
+    const e = jcosEstimate({ ...p, reportSync: sync(p, [[D5[0], 10], [D5[1], 10], [D5[3], 10], [D5[4], 10]]) });
+    expect([e.periodDays, e.heldDays, e.billDays, e.partTimerDays]).toEqual([5, 4, 4, 4]);
+    expect([e.current.billing, e.current.partTimerCost, e.current.materialCost, e.current.gross]).toEqual([160000, 60000, 8800, 91200]);
+    // 開催する 4 日すべてに実績があるので、「全日が実績」（開催していない日は、実績が無くてよい）
+    expect(e.basis).toBe('actual');
+    expect(e.days.map((d) => d.notHeld)).toEqual([false, false, true, false, false]);
+  });
+  it('開催していない日には、予定個数を割り振らない（予定の材料原価が、その日に付かない）。予定個数の合計は変わらない', () => {
+    const p = jp({ startDate: D5[0], endDate: D5[3], contents: [mkContent({ plannedCount: 120 })], jcos: markNotHeld(terms(), [D5[2]]) });
+    const e = jcosEstimate(p);
+    expect(e.days.map((d) => [d.plannedCount, d.materialCost, d.billing, d.partTimerCost, d.gross])).toEqual([
+      [40, 8800, 40000, 15000, 16200], [40, 8800, 40000, 15000, 16200], [0, 0, 0, 0, 0], [40, 8800, 40000, 15000, 16200],
+    ]);
+    expect([e.plannedCount, e.planned.count, e.planned.materialCost]).toEqual([120, 120, 26400]);
+    // 印の無い「請求しない・アルバイト 0 人」の日（利用者が決めた日）は、これまでどおり、予定個数を割り振る
+    const manual = jcosEstimate({ ...p, jcos: withJcosDay(terms(), D5[2], { billed: false, partTimers: 0 }) });
+    expect(manual.days.map((d) => d.plannedCount)).toEqual([30, 30, 30, 30]);
+  });
+  it('開催する日が 1 日も残らなくても、計算は落ちない（予定個数は、どの日にも付かない）', () => {
+    const p = jp({ startDate: D5[0], endDate: D5[1], contents: [mkContent({ plannedCount: 50 })], jcos: markNotHeld(terms(), [D5[0], D5[1]]) });
+    const e = jcosEstimate(p);
+    expect([e.heldDays, e.current.billing, e.current.cost, e.current.count, e.basis]).toEqual([0, 0, 0, 0, 'planned']);
+  });
+  it('その日の回答が日報に入ったら、印を外す（請求する・アルバイト 1 人に戻る）。印の無い日・利用者が決めた日は、変えない', () => {
+    const t = markNotHeld(terms({ days: { [D5[0]]: { billed: false, partTimers: 0 } } }), [D5[2], D5[3]]);
+    const cleared = clearNotHeld(t, [D5[0], D5[2], D5[4]]);
+    expect(cleared.days).toEqual({ [D5[0]]: { billed: false, partTimers: 0 }, [D5[3]]: { billed: false, partTimers: 0, notHeld: true } });
+    expect(jcosDay(cleared, D5[2])).toEqual({ billed: true, partTimers: 1, notHeld: false });
+    expect(clearNotHeld(cleared, [D5[0], D5[2]])).toBe(cleared);                     // 外すものが無ければ、同じものを返す
+  });
+  it('利用者が、その日の請求・アルバイトの人数を変えたら、印は外れる（開催した日として扱う）', () => {
+    const t = markNotHeld(terms(), [D5[2]]);
+    const billed = withJcosDay(t, D5[2], { billed: true });
+    expect(billed.days).toEqual({ [D5[2]]: { partTimers: 0 } });
+    const staffed = withJcosDay(t, D5[2], { partTimers: 1 });
+    expect(staffed.days).toEqual({ [D5[2]]: { billed: false } });
+    expect(jcosDay(staffed, D5[2]).notHeld).toBe(false);
+  });
+  it('開催していない日に、実績（手入力）が入っているときは、その日も「実績が要る日」に数える（日数の表示が、実績のある日数より少なくならない）', () => {
+    const p = jp({ startDate: D5[0], endDate: D5[2], jcos: markNotHeld(terms(), [D5[2]]), actualsManual: { [D5[0]]: 10, [D5[2]]: 5 } });
+    const e = jcosEstimate(p);
+    expect([e.heldDays, e.actualDays, e.actualCount, e.basis]).toEqual([3, 2, 15, 'mixed']);
+  });
+  it('保存してあった印は、読み込んでも残る（形の違う値は、印にしない）', () => {
+    const t = hydrateJcos({ ...terms(), days: { [D5[2]]: { billed: false, partTimers: 0, notHeld: true }, [D5[3]]: { notHeld: 'yes' }, [D5[4]]: { notHeld: true } } })!;
+    expect(t.days).toEqual({ [D5[2]]: { billed: false, partTimers: 0, notHeld: true }, [D5[4]]: { notHeld: true } });
+    expect(jcosDay(t, D5[4])).toEqual({ billed: false, partTimers: 0, notHeld: true });
   });
 });

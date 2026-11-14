@@ -41,6 +41,7 @@ export function hydrateJcos(v: unknown): JcosTerms | undefined {
       const day: JcosDay = {};
       if (src.billed === false) day.billed = false;
       if (typeof src.partTimers === 'number' && Number.isFinite(src.partTimers)) day.partTimers = Math.max(0, src.partTimers);
+      if (src.notHeld === true) day.notHeld = true;
       if (Object.keys(day).length > 0) days[date] = day;
     }
   }
@@ -60,16 +61,21 @@ export function hydrateJcos(v: unknown): JcosTerms | undefined {
 /** JCOS の収支計算を使う案件か */
 export const isJcos = (p: Pick<Project, 'jcos'>): boolean => !!p.jcos?.enabled;
 
-/** その日の設定（無い日は、請求する・アルバイト 1 人） */
+/** その日の設定（無い日は、請求する・アルバイト 1 人）。開催していない日は、請求しない・アルバイト 0 人 */
 export function jcosDay(terms: JcosTerms | undefined, date: string): Required<JcosDay> {
   const d = terms?.days?.[date];
+  if (d?.notHeld === true) return { billed: false, partTimers: 0, notHeld: true };
   return {
     billed: d?.billed !== false,
     partTimers: d?.partTimers == null ? 1 : Math.max(0, num(d.partTimers)),
+    notHeld: false,
   };
 }
 
-/** 日ごとの設定を変える。既定と同じになった項目は持たない（データを増やさない） */
+/**
+ * 日ごとの設定を変える。既定と同じになった項目は持たない（データを増やさない）。
+ * 利用者が変えた日は、「開催していない日」の印を外す（請求する・アルバイトの人数を入れた＝開催した日として扱う）。
+ */
 export function withJcosDay(terms: JcosTerms, date: string, patch: JcosDay): JcosTerms {
   const cur = jcosDay(terms, date);
   const next = { ...cur, ...patch };
@@ -79,6 +85,35 @@ export function withJcosDay(terms: JcosTerms, date: string, patch: JcosDay): Jco
   const days = { ...(terms.days ?? {}) };
   if (Object.keys(out).length === 0) delete days[date];
   else days[date] = out;
+  return { ...terms, days };
+}
+
+/**
+ * 開催していない日（日報に合わせて会期を広げた・離れた開催をまとめたとき、回答の無かった日）の印を付ける。
+ * その日は、請求しない・アルバイト 0 人・予定個数を割り振らない。
+ * 利用者がすでに設定している日は、変えない（手で決めた内容を上書きしない）。
+ */
+export function markNotHeld(terms: JcosTerms, dates: string[]): JcosTerms {
+  const days = { ...(terms.days ?? {}) };
+  let changed = false;
+  for (const date of dates) {
+    if (days[date]) continue;
+    days[date] = { billed: false, partTimers: 0, notHeld: true };
+    changed = true;
+  }
+  return changed ? { ...terms, days } : terms;
+}
+
+/**
+ * 「開催していない日」の印を、その日の回答が日報に入ったときに外す（既定の「請求する・アルバイト 1 人」に戻る）。
+ * 印の無い日（利用者が決めた設定）は、変えない。
+ */
+export function clearNotHeld(terms: JcosTerms, dates: string[]): JcosTerms {
+  const cur = terms.days ?? {};
+  const hit = dates.filter((d) => cur[d]?.notHeld === true);
+  if (hit.length === 0) return terms;
+  const days = { ...cur };
+  for (const d of hit) delete days[d];
   return { ...terms, days };
 }
 
@@ -98,6 +133,11 @@ export interface Actual {
   source: 'report' | 'manual';
   /** 日報の回答の数（source が report のとき） */
   rows: number;
+  /** 日報の参加組数・参加人数（入力のあった回答の合計。どの回答も未入力なら undefined）と、未入力だった回答の数 */
+  groups?: number;
+  groupsBlank?: number;
+  people?: number;
+  peopleBlank?: number;
 }
 
 /** 手入力の実績（0 以上の数だけを有効とする） */
@@ -115,7 +155,14 @@ export function actualsByDate(p: Project, ctx?: ReportContext): Map<string, Actu
   const report = usableReportDays(p, ctx);
   for (const date of listDates(p.startDate, p.endDate)) {
     const r = report.get(date);
-    if (r) { out.set(date, { count: Math.max(0, num(r.count)), source: 'report', rows: num(r.rows) }); continue; }
+    if (r) {
+      out.set(date, {
+        count: Math.max(0, num(r.count)), source: 'report', rows: num(r.rows),
+        ...(r.groups !== undefined ? { groups: num(r.groups) } : {}), ...(r.groupsBlank ? { groupsBlank: num(r.groupsBlank) } : {}),
+        ...(r.people !== undefined ? { people: num(r.people) } : {}), ...(r.peopleBlank ? { peopleBlank: num(r.peopleBlank) } : {}),
+      });
+      continue;
+    }
     const m = manualActual(p, date);
     if (m != null) out.set(date, { count: m, source: 'manual', rows: 0 });
   }
@@ -124,6 +171,8 @@ export function actualsByDate(p: Project, ctx?: ReportContext): Map<string, Actu
 
 export interface JcosDayLine {
   date: string;
+  /** 開催していない日（請求しない・アルバイト 0 人・予定個数 0。実績が無くても「予定で計算した日」には数えない） */
+  notHeld: boolean;
   billed: boolean;
   billLabor: number;
   billMaterial: number;
@@ -131,7 +180,7 @@ export interface JcosDayLine {
   billing: number;
   partTimers: number;
   partTimerCost: number;
-  /** 予定個数（会期合計の均等割り） */
+  /** 予定個数（会期合計を、開催する日で均等に割ったもの。開催していない日は 0） */
   plannedCount: number;
   actual: Actual | null;
   /** 日報の実績があるために使っていない、手入力の値（無ければ null） */
@@ -168,6 +217,8 @@ export interface JcosEstimate {
   terms: JcosTerms;
   days: JcosDayLine[];
   periodDays: number;
+  /** 会期のうち、開催する日の数（「開催していない日」を除く。実績が要るのは、この日数） */
+  heldDays: number;
   /** 請求対象日数 */
   billDays: number;
   /** アルバイトの稼働（人日）。請求対象日数とは別に数える */
@@ -184,9 +235,29 @@ export interface JcosEstimate {
   planned: JcosTotals;
   /** 実績のある日だけの小計（請求・アルバイト代・材料原価。追加の請求・その他実費は入れない） */
   reported: { days: number; count: number; billing: number; cost: number; gross: number };
+  /**
+   * 日報の参加組数・参加人数（日報の実績がある日の合計）。
+   * total … 入力のあった分の合計（1 日も入力が無ければ null）／missingDays … 日報の実績はあるが、未入力の回答がある（または全部が未入力の）日数
+   */
+  participants: { reportDays: number; groups: Tally; people: Tally };
+  /**
+   * 手入力の実績個数と、日報の個数が違う日（競合）。計算には日報を使い、手入力の値は消さずに残している。
+   * どちらが正しいかは、利用者が確かめる（日報が違っていれば、日報を直して同期し直す）。
+   */
+  conflicts: { date: string; manual: number; report: number }[];
 }
+export interface Tally { total: number | null; missingDays: number }
 
 const sum = <T>(xs: T[], f: (x: T) => number): number => xs.reduce((s, x) => s + f(x), 0);
+
+/** 日報の実績がある日の、参加組数（または参加人数）の合計と、未入力のある日数 */
+function tally(actuals: Actual[], value: (a: Actual) => number | undefined, blank: (a: Actual) => number | undefined): Tally {
+  const have = actuals.filter((a) => value(a) !== undefined);
+  return {
+    total: have.length > 0 ? sum(have, (a) => value(a)!) : null,
+    missingDays: actuals.filter((a) => value(a) === undefined || num(blank(a)) > 0).length,
+  };
+}
 
 function totals(lines: JcosDayLine[], counts: number[], unitCost: number, extraBilling: number, otherCost: number): JcosTotals {
   const billLabor = sum(lines, (l) => l.billLabor);
@@ -214,11 +285,15 @@ export function jcosEstimate(p: Project, ctx?: ReportContext): JcosEstimate {
   const dates = listDates(p.startDate, p.endDate);
   const unit = Math.max(0, num(terms.unitCost));
   const plannedCount = sum(p.contents ?? [], (c) => Math.max(0, num(c.plannedCount)));
-  const plan = splitEvenly(plannedCount, dates.length);
+  // 予定個数は、開催する日だけで均等に割る（開催していない日には、割り振らない）
+  const settings = dates.map((date) => jcosDay(terms, date));
+  const share = splitEvenly(plannedCount, settings.filter((d) => !d.notHeld).length);
+  let held = 0;
+  const plan = settings.map((d) => (d.notHeld ? 0 : share[held++]));
   const actuals = actualsByDate(p, ctx);
 
   const days: JcosDayLine[] = dates.map((date, i) => {
-    const d = jcosDay(terms, date);
+    const d = settings[i];
     const billLabor = d.billed ? num(terms.billLaborPerDay) : 0;
     const billMaterial = d.billed ? num(terms.billMaterialPerDay) : 0;
     const partTimerCost = roundYen(d.partTimers * num(terms.partTimerPerDay));
@@ -229,7 +304,7 @@ export function jcosEstimate(p: Project, ctx?: ReportContext): JcosEstimate {
     const billing = billLabor + billMaterial;
     const cost = partTimerCost + materialCost;
     return {
-      date, billed: d.billed, billLabor, billMaterial, billing,
+      date, notHeld: d.notHeld, billed: d.billed, billLabor, billMaterial, billing,
       partTimers: d.partTimers, partTimerCost,
       plannedCount: plan[i], actual,
       manualIgnored: actual?.source === 'report' && manual != null && manual !== actual.count ? manual : null,
@@ -242,16 +317,20 @@ export function jcosEstimate(p: Project, ctx?: ReportContext): JcosEstimate {
   const extraBilling = sum(terms.extraBillings ?? [], (o) => num(o.amount));
   const otherCost = sum(p.otherCosts ?? [], (o) => num(o.amount));
   const withActual = days.filter((l) => l.actual);
+  // 実績が要る日（開催していない日は、実績が無くてよい。開催していない日に実績が入っているときは、その日も数える）
+  const need = days.filter((l) => !l.notHeld || l.actual);
+  const fromReport = days.flatMap((l) => (l.actual?.source === 'report' ? [l.actual] : []));
   return {
     terms,
     days,
     periodDays: dates.length,
+    heldDays: need.length,
     billDays: days.filter((l) => l.billed).length,
     partTimerDays: sum(days, (l) => l.partTimers),
     plannedCount,
     actualCount: sum(withActual, (l) => l.count),
     actualDays: withActual.length,
-    basis: withActual.length === 0 ? 'planned' : withActual.length === days.length ? 'actual' : 'mixed',
+    basis: withActual.length === 0 ? 'planned' : need.every((l) => l.actual) ? 'actual' : 'mixed',
     current: totals(days, days.map((l) => l.count), unit, extraBilling, otherCost),
     planned: totals(days, plan, unit, extraBilling, otherCost),
     reported: {
@@ -261,6 +340,12 @@ export function jcosEstimate(p: Project, ctx?: ReportContext): JcosEstimate {
       cost: sum(withActual, (l) => l.cost),
       gross: sum(withActual, (l) => l.gross),
     },
+    participants: {
+      reportDays: fromReport.length,
+      groups: tally(fromReport, (a) => a.groups, (a) => a.groupsBlank),
+      people: tally(fromReport, (a) => a.people, (a) => a.peopleBlank),
+    },
+    conflicts: days.flatMap((l) => (l.manualIgnored != null && l.actual ? [{ date: l.date, manual: l.manualIgnored, report: l.actual.count }] : [])),
   };
 }
 

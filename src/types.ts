@@ -220,6 +220,12 @@ export interface JcosDay {
   billed?: boolean;
   /** その日に稼働するアルバイトの人数（未設定は 1） */
   partTimers?: number;
+  /**
+   * 開催していない日（Version 5）。日報に合わせて会期を広げた・離れた開催を 1 つの案件にまとめたときに、回答の無かった日に付く。
+   * 請求しない・アルバイト 0 人・予定個数を割り振らない。あとから、その日の回答が日報に入ったら、同期のときに外す。
+   * 利用者が、その日の請求・アルバイトの人数を変えたときも、外す（開催した日として扱う）。
+   */
+  notHeld?: boolean;
 }
 
 /**
@@ -262,6 +268,31 @@ export interface ReportDay {
    * この項目が無い実績（以前の版で同期したもの）は、案件の会場名すべてを使って確かめる。
    */
   keys?: string[];
+  // ── 以下は Version 5 で追加（すべて任意。以前の版で同期した結果には無い） ──
+  /** 参加組数の合計（入力のあった回答だけを足したもの）。どの回答も未入力なら、この項目は無い（0 組とはみなさない） */
+  groups?: number;
+  /** 参加組数が未入力（空欄）だった回答の数（無ければ 0 件） */
+  groupsBlank?: number;
+  /** 参加人数の合計（入力のあった回答だけ）。どの回答も未入力なら、この項目は無い */
+  people?: number;
+  /** 参加人数が未入力（空欄）だった回答の数 */
+  peopleBlank?: number;
+}
+
+/** 取り込んだ回答の「イベント内容」ごとの件数と個数（いまの日報は 1 種類。内容ごとの単価・原価には使わない） */
+export interface ReportContentLine {
+  /** 日報に書かれていた内容（前後の空白を除いたもの） */
+  label: string;
+  rows: number;
+  count: number;
+}
+
+/** 会期のすぐ外にある、この会場の回答（取り込んでいない。会期を広げれば取り込める） */
+export interface ReportOutside {
+  date: string;
+  rows: number;
+  /** キットの使用数の合計（読み取れた回答だけ） */
+  count: number;
 }
 
 /**
@@ -322,6 +353,11 @@ export interface ReportSync {
   skipped: ReportSkip[];
   held: ReportHeld[];
   unmatched: ReportUnmatched[];
+  // ── 以下は Version 5 で追加（すべて任意） ──
+  /** 取り込んだ回答の「イベント内容」ごとの件数と個数 */
+  contents?: ReportContentLine[];
+  /** 会期のすぐ外にある、この会場の回答（取り込んでいない） */
+  outside?: ReportOutside[];
 }
 
 export interface Project {
@@ -358,6 +394,13 @@ export interface Project {
   reportSync?: ReportSync;
   /** 会期が重なる別の案件があるときに、「この案件の実績として取り込む」と利用者が決めた日付 */
   reportClaims?: string[];
+  // ── 以下は Version 5 で追加（任意） ──
+  /**
+   * 日報から自動で決めた会期の控え（日報から作った案件・日報に合わせて会期を広げた案件）。
+   * いまの会期がこれと同じ間は、日報に連続する日が増えたら、同期のときに会期を自動で伸ばす。
+   * 利用者が会期を手で変えると、これと違う値になるので、自動では変えなくなる。
+   */
+  reportPeriod?: { startDate: string; endDate: string };
 }
 
 // ── アプリ全体 ──────────────────────────────────────────────
