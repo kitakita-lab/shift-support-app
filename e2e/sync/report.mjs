@@ -196,7 +196,8 @@ add('R1', '最初の同期: URL を貼って「日報を同期」を 1 回押す
   ok(sheets.calls.every((c) => c.method === 'GET' && c.auth === `Bearer ${TOKEN}`), `問い合わせの方法と認証: ${JSON.stringify(sheets.calls.map((c) => [c.method, c.auth]))}`);
   eq(sheets.calls[0].fields, 'sheets.properties(sheetId,title)', 'タブの一覧は、名前と ID だけ');
   eq(sheets.calls[1].path, `/v4/spreadsheets/${SHEET_ID}/values/'${TAB}'!1:1`, '見出し行');
-  eq(sheets.calls[2].ranges, ['D', 'F', 'G', 'H', 'L'].map((c) => `'${TAB}'!${c}2:${c}`), '読む列（開催日・会場・会場（その他の場合）・イベント名・キットの使用数）');
+  eq([...sheets.calls[2].ranges].sort(), ['D', 'F', 'G', 'H', 'I', 'J', 'K', 'L'].map((c) => `'${TAB}'!${c}2:${c}`),
+    '読む列（開催日・会場・会場（その他の場合）・イベント名・イベント内容・参加組数・参加人数・キットの使用数。メールアドレス・入力者・天気・メモ・エピソードの列は読まない）');
 });
 
 add('R2', '取り込んではいけない情報（メールアドレス・入力者・内部メモ・参加者エピソード・イベント名・認証）は、共有データにも端末にも保存されない', async ({ device: mk }) => {
