@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// 確認用（e2e/sync/report.mjs の R23 だけが使う。デプロイしない）。
+// 「実環境のルールが、リポジトリの firestore.rules より緩かった場合」を作るためのもの:
+// ログインしていれば、どのチーム名の下でも読み書きできる。
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /teams/{teamId}/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
