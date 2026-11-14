@@ -849,13 +849,124 @@ add('R20', '同期の途中でログアウトしたとき、あとから届い�
 });
 
 // ── 実機での確認を、安全に行うための前提 ──────────────────────────
-add('R19', '実機確認の安全策: 現在のルールが許可していないチーム名（VITE_TEAM_ID）でビルドしたアプリは、ログインしても共有データを読めず、書けない。「この端末だけのデータ」では日報を同期でき、Firestore には 1 件も書かれない', async ({ device: mk }) => {
-  const OTHER = 'kkl-preview-check';
+// 検証用のビルド（VITE_TEAM_ID で、通常とは別のチーム名を指定）が、通常のチームの共有データ（＝本番相当のデータ）を
+// 読み書きしないことを、ブラウザから出た通信そのもので確かめる。
+// 注意: これは「アプリが、そこへ通信しない」ことの確認。権限の境界の確認ではない（現在のルールでは、ログインしたアカウントは、
+//       アプリを使わなければ、通常のチームのデータを読み書きできる。それを確かめているのは rules.mjs）。
+const OTHER = 'kkl-preview-check';
+const FS_PORT = '8085';      // firebase.emulator.json
+const AUTH_PORT = '9099';
+/** 端末（ブラウザ）から出た通信を、すべて記録する（送信先・方法・本文）。端末を作った直後に呼ぶ */
+function record(d) {
+  const log = [];
+  d.ctx.on('request', (req) => {
+    let body = '';
+    try { body = req.postData() ?? ''; } catch { /* 本文を読めない要求は、送信先だけを見る */ }
+    log.push({ url: req.url(), method: req.method(), body });
+  });
+  return log;
+}
+const plain = (t) => { try { return decodeURIComponent(t.replace(/\+/g, ' ')); } catch { return t; } };
+/**
+ * 記録した通信の要約。
+ *   teams … Firestore への通信に出てくるチーム名／fsKinds … Firestore への通信の種類／writes … そのうち、書き込みの通信の数
+ *   defaultTeam … 通常のチーム名（TEAM）を含む通信の数（送信先を問わない）／sheets … 日報への通信の方法／hosts … 送信先
+ */
+function net(log) {
+  const teams = new Set();
+  const fsKinds = new Set();
+  const sheets = new Set();
+  const hosts = new Set();
+  let fs = 0;
+  let writes = 0;
+  let defaultTeam = 0;
+  for (const r of log) {
+    const u = new URL(r.url);
+    const local = u.hostname === '127.0.0.1' || u.hostname === 'localhost';
+    const text = `${plain(r.url)}\n${plain(r.body)}`;
+    if (text.includes(TEAM)) defaultTeam += 1;
+    if (local && u.port === FS_PORT) {
+      fs += 1;
+      hosts.add('firestore');
+      for (const m of text.matchAll(/documents\/teams\/([^/"\\\s?&]+)/g)) teams.add(m[1]);
+      const kind = /\/(Listen|Write)\/channel$/.exec(u.pathname)?.[0].slice(1) ?? (/:[A-Za-z]+$/.exec(u.pathname)?.[0] ?? u.pathname);
+      fsKinds.add(kind);
+      // 読み取りは、購読（Listen）と、取得（batchGet・runQuery）。それ以外（Write・commit・batchWrite など）は、書き込みとして数える
+      if (!['Listen/channel', ':batchGet', ':runQuery', ':runAggregationQuery'].includes(kind)) writes += 1;
+    } else if (local && u.port === AUTH_PORT) {
+      hosts.add('auth');
+    } else if (local) {
+      hosts.add('app');
+    } else {
+      hosts.add(u.hostname);
+      if (u.hostname === 'sheets.googleapis.com') sheets.add(r.method);
+    }
+  }
+  return { fs, teams: [...teams].sort(), fsKinds: [...fsKinds].sort(), writes, defaultTeam, sheets: [...sheets].sort(), hosts: [...hosts].sort() };
+}
+/** チームの下の、アプリが知っている場所すべてのドキュメント（「1 件も変わっていない」の比較に使う） */
+const TEAM_COLLS = [...V3_COLLS, ...LEGACY_COLLS, 'members', 'wsRulesProbe', 'appData', 'presence', 'editingStates', 'activityLogs'];
+async function teamDocs(team) {
+  const out = {};
+  for (const c of TEAM_COLLS) {
+    const docs = await admin.docs(`teams/${team}/${c}`);
+    if (docs.length) out[c] = docs;
+  }
+  return out;
+}
+const docCount = (docs) => Object.values(docs).reduce((n, list) => n + list.length, 0);
+/**
+ * 通常のチーム（TEAM）の下に、本番相当のデータを用意する。
+ * 新しいアプリのデータは、通常のビルドを実際に操作して作る（その通信も記録して返す）。旧アプリ・以前の形式・名簿は、直接置く。
+ */
+async function seedProduction(mk) {
+  const A = await mk('A');
+  const log = record(A);
+  await fakeSheets(A);
+  const a = await openPage(A);
+  await signIn(a, 'a@example.com');
+  await addVenue(a, CENTER);
+  await jcosProject(a, { name: '秋の花まつり', venue: CENTER, start: '2026-11-13', end: '2026-11-15' });
+  await syncNow(a, SHEET_URL);
+  await syncedDoc('秋の花まつり');
+  await a.getByRole('button', { name: '← 案件一覧' }).click();
+  // 通常のビルドの変更が送り終わってから、残りを直接置いて、端末を閉じる（このあと、通常のチームの下を書くものは無い）
+  const unsent = () => a.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kkl_outbox')).length);
+  eq(await until(unsent, (n) => n === 0, 10000), 0, '（準備）通常のビルドの変更が、送り終わること');
+  await sleep(800);
+  for (const [path, body] of [
+    ['appData/staff', { items: [{ id: 's1', name: '旧アプリのスタッフ' }], updatedAt: 1 }],
+    ['appData/assignments', { items: [{ id: 'x1', staffId: 's1' }], updatedAt: 1 }],
+    ['presence/user-1', { name: '旧アプリの利用者', at: 1 }],
+    ['editingStates/staff_s1', { by: 'user-1', at: 1 }],
+    ['activityLogs/log-1', { text: '旧アプリの操作ログ', at: 1 }],
+    ['workshopData/main', { staff: [{ id: 'old-1', name: '以前の形式のスタッフ' }] }],
+    ['workshopProjects/old-p1', { id: 'old-p1', name: '以前の形式の案件' }],
+    ['members/owner@example.com', { role: 'owner', addedAt: 1, addedBy: 'test' }],
+    ['wsBackups/backup-1', { at: 1, note: 'バックアップ' }],
+  ]) await admin.set(`teams/${TEAM}/${path}`, body);
+  await A.close();
+  return { docs: await teamDocs(TEAM), log };
+}
+
+add('R19', '実機確認の安全策: 現在のルールのもとで、検証用のビルド（VITE_TEAM_ID）は、ログイン〜日報の同期〜ログアウトの間、通常のチーム（本番相当）の場所を 1 回も読み書きしない。Firestore への書き込みの通信は 0 件で、本番相当のデータは 1 件も変わらない', async ({ device: mk }) => {
+  // 本番相当のデータ（新しいアプリ・旧アプリ・以前の形式・名簿）。作るときの通信は、あとで「検出できること」の確認に使う
+  const production = await seedProduction(mk);
+  ok(docCount(production.docs) >= 12, `本番相当のデータの件数: ${docCount(production.docs)}`);
+  const control = net(production.log);
+  eq(control.teams, [TEAM], '（対照）通常のビルドの通信に出てくるチーム名');
+  ok(control.writes > 0 && control.defaultTeam > 0 && control.fsKinds.includes('Write/channel'), `（対照）通常のビルドの読み書きを、検出できること: ${JSON.stringify(control)}`);
+
   const app = await startApp({ env: { VITE_TEAM_ID: OTHER } });
   try {
     const P = await mk('P', app.url);
+    const log = record(P);
     const sheets = await fakeSheets(P, { rows: [answer(serial('2026-11-13'), 'ラソラ札幌', 81), answer(serial('2026-11-14'), 'ラソラ札幌', 64)] });
     const p = await openPage(P);
+    // ログインの前: 検証用のビルドであることが、画面に出ている。Firestore への通信は、まだ無い
+    eq([(await p.locator('[data-testid="env-team"]').innerText()).trim(), await p.locator('[data-testid="env-team"]').getAttribute('data-team')],
+      [`検証用ビルド（共有データの場所: ${OTHER}）`, OTHER], '検証用のビルドの表示');
+    eq(net(log).fs, 0, 'ログインの前の、Firestore への通信');
     // ログインすると、共有データは「表示できません」になる（使い始める・移行するためのボタンは出ない）
     await signIn(p, 'a@example.com', { expectPhase: 'unregistered' });
     const panel = (await p.locator('[data-testid="shared-phase"]').innerText()).replace(/\s+/g, ' ');
@@ -864,7 +975,7 @@ add('R19', '実機確認の安全策: 現在のルールが許可していない
     await p.getByRole('button', { name: '登録されたので、もう一度確認する' }).click();
     await sleep(1500);
     eq(await p.locator('[data-testid="space"]').getAttribute('data-phase'), 'unregistered', 'もう一度確認しても、共有データは使えないまま');
-    // 「この端末だけのデータ」で、案件を用意して、日報を同期する
+    // 「この端末だけのデータ」で、案件を用意して、日報を同期する（2 回）
     await p.getByRole('button', { name: '「この端末だけのデータ」を表示する' }).click();
     await p.waitForSelector('[data-testid="space"][data-space="local"]');
     await loadSample(p);
@@ -873,20 +984,108 @@ add('R19', '実機確認の安全策: 現在のルールが許可していない
     await syncNow(p, SHEET_URL);
     ok((await status(p)).includes('2 日分 145 個'), `同期後の表示: ${await status(p)}`);
     eq((await jcos(p)).actual, 145, '実績（81 ＋ 64）');
-    eq(sheets.calls.length, 3, '日報への問い合わせの数');
-    // 案件一覧の「共有へコピー」を押しても、共有データには書かれない（共有データを使える状態ではないため、何も起きない）
+    await syncNow(p);
+    eq((await jcos(p)).actual, 145, 'もう一度同期したあとの実績');
+    eq(sheets.calls.length, 6, '日報への問い合わせの数（同期 1 回につき 3 回）');
+    // 共有データに関わる操作を、ひととおり試す: 「共有へコピー」・共有データへの切り替え・ログアウトとログイン・再読み込み
     await p.getByRole('button', { name: '← 案件一覧' }).click();
     await p.getByRole('button', { name: '共有へコピー' }).first().click();
+    await sleep(1500);
+    await p.locator('[data-testid="space-shared"]').click();
+    await p.waitForSelector('[data-testid="shared-phase"][data-phase="unregistered"]');
+    await signOut(p);
+    await signIn(p, 'a@example.com', { expectPhase: 'unregistered' });
+    await p.reload();
+    await p.waitForFunction(() => !!window.__kkl);
+    await p.waitForSelector('[data-testid="shared-phase"][data-phase="unregistered"]');
     await sleep(2500);
-    // Firestore には、本番と同じチーム名の下にも、このチーム名の下にも、1 件も無い
-    const counts = {};
-    for (const team of [TEAM, OTHER]) {
-      for (const c of [...V3_COLLS, ...LEGACY_COLLS, 'members', 'wsRulesProbe']) {
-        const n = (await admin.list(`teams/${team}/${c}`)).length;
-        if (n > 0) counts[`teams/${team}/${c}`] = n;
-      }
-    }
-    eq(counts, {}, 'Firestore に書かれたドキュメント');
+
+    const seen = net(log);
+    eq(seen.teams, [OTHER], 'Firestore への通信に出てくるチーム名（検証用のチームだけ）');
+    eq(seen.defaultTeam, 0, `通常のチーム名（${TEAM}）を含む通信の数`);
+    eq(seen.fsKinds, ['Listen/channel'], 'Firestore への通信の種類（読み取りの購読だけ。どれもルールに拒否される）');
+    eq(seen.writes, 0, 'Firestore への書き込みの通信の数');
+    eq(seen.sheets.filter((m) => m !== 'OPTIONS'), ['GET'], '日報への通信の方法（読み取りだけ）');
+    eq(seen.hosts, ['app', 'auth', 'firestore', 'sheets.googleapis.com'], '通信の送信先（アプリ・認証・Firestore・日報だけ）');
+    eq(JSON.stringify(await teamDocs(TEAM)), JSON.stringify(production.docs), '本番相当のデータ（1 件も変わっていないこと）');
+    eq(await teamDocs(OTHER), {}, '検証用のチームの下に書かれたドキュメント');
+  } finally {
+    app.stop();
+  }
+});
+
+add('R23', '実環境のルールが想定より緩かった場合（ログインしていれば、どのチーム名でも読み書きできる）: 検証用のビルドには「共有データを使い始める」が出る（実機では、ここで中止する合図）。合図を無視して押しても、書かれるのは検証用のチームの下だけで、本番相当のデータは 1 件も変わらない', async ({ device: mk }) => {
+  const production = await seedProduction(mk);
+  const app = await startApp({ env: { VITE_TEAM_ID: OTHER } });
+  try {
+    const P = await mk('P', app.url);
+    const log = record(P);
+    const p = await openPage(P);
+    await signIn(p, 'a@example.com', { expectPhase: 'needs-init' });
+    ok(await p.locator('[data-testid="init-shared"]').isVisible(), '「共有データを使い始める」が出ること（現在のルールなら出ない＝R19。出たら、ルールが想定と違う）');
+    eq(await teamDocs(OTHER), {}, 'ログインしただけでは、検証用のチームの下にも書かれない');
+    // 合図を無視して、使い始めて、案件を作った場合
+    await p.locator('[data-testid="init-shared"]').click();
+    await p.waitForSelector('[data-testid="space"][data-space="shared"]', { timeout: 20000 });
+    await createProject(p, '誤って作った案件');
+    eq((await until(() => admin.list(`teams/${OTHER}/wsProjects`), (l) => l.some((x) => x.name === '誤って作った案件'), 10000)).map((x) => x.name), ['誤って作った案件'], '検証用のチームの下にできた案件');
+    await sleep(1500);
+    const seen = net(log);
+    eq(seen.teams, [OTHER], 'Firestore への通信に出てくるチーム名（検証用のチームだけ）');
+    eq(seen.defaultTeam, 0, `通常のチーム名（${TEAM}）を含む通信の数`);
+    ok(seen.writes > 0, `書き込みの通信は、出ている（検証用のチームの下へ）: ${JSON.stringify(seen)}`);
+    eq(JSON.stringify(await teamDocs(TEAM)), JSON.stringify(production.docs), '本番相当のデータ（1 件も変わっていないこと）');
+  } finally {
+    app.stop();
+  }
+}, { rules: 'e2e/sync/fixtures/any-team.rules' });
+
+add('R24', '環境変数が効いていないビルド（通常のチーム名のまま）にログインした場合: 検証用のビルドの表示が出ず、本番相当の共有データが、そのまま見える（実機では、ログインの前に表示で気づく。ログインしただけなら、書き込みの通信は 0 件）', async ({ device: mk }) => {
+  const production = await seedProduction(mk);
+  const B = await mk('B');
+  const log = record(B);
+  const b = await openPage(B);
+  eq(await b.locator('[data-testid="env-team"]').count(), 0, '検証用のビルドの表示（出ないこと）');
+  // 現在のルールでは、名簿に無いアカウントでも、ログインすれば共有データを読める
+  await signIn(b, 'someone-else@example.com');
+  await openProject(b, '秋の花まつり');
+  ok((await status(b)).includes('2 日分 120 個'), `本番相当の案件と実績が、そのまま見える: ${await status(b)}`);
+  await sleep(2000);
+  const seen = net(log);
+  eq(seen.teams, [TEAM], 'Firestore への通信に出てくるチーム名（通常のチーム）');
+  ok(seen.defaultTeam > 0, '通常のチーム名を含む通信が、出ている');
+  eq(seen.writes, 0, 'ログインして見ただけなら、書き込みの通信は無い');
+  eq(JSON.stringify(await teamDocs(TEAM)), JSON.stringify(production.docs), '本番相当のデータ（見ただけでは変わらない）');
+});
+
+add('R25', '検証用のビルドは、権限の境界ではない: 検証用のビルドにログインしたアカウントの認証を使い、アプリを通さずに直接たどると、現在のルールでは、通常のチーム（本番相当）のデータを読めて、書ける。メンバー制のルール案に切り替えると、同じ認証で、どちらも拒否される', async ({ device: mk }) => {
+  await seedProduction(mk);
+  const app = await startApp({ env: { VITE_TEAM_ID: OTHER } });
+  try {
+    const P = await mk('P', app.url);
+    const log = record(P);
+    const p = await openPage(P);
+    await signIn(p, 'outsider@example.com', { expectPhase: 'unregistered' });
+    await sleep(500);
+    // アプリが Firestore に送った認証（このアカウントのもの）を、記録した通信から取り出す
+    const token = log.map((r) => /Authorization:Bearer ([A-Za-z0-9._-]+)/.exec(plain(r.body))?.[1]).find(Boolean);
+    ok(!!token, '（準備）ログインしたアカウントの認証を、通信の記録から取り出せること');
+    const direct = (method, path, body) => fetch(`http://127.0.0.1:${FS_PORT}/v1/projects/demo-kkl/databases/(default)/documents/${path}`, {
+      method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined,
+    });
+    const scratch = `teams/${TEAM}/activityLogs/boundary-check`;
+    // 現在のルール: ログインしていれば、通常のチームの下を、誰でも読み書きできる（アプリが通信しないだけでは、守れない）
+    const read = await direct('GET', `teams/${TEAM}/wsProjects`);
+    eq(read.status, 200, '現在のルール: 通常のチームの案件を、直接読む');
+    ok(JSON.stringify(await read.json()).includes('秋の花まつり'), '読めた内容に、本番相当の案件が入っている');
+    eq((await direct('PATCH', scratch, { fields: { note: { stringValue: '境界の確認' } } })).status, 200, '現在のルール: 通常のチームの下に、直接書く');
+    ok(!!(await admin.get(scratch)), '書いたものが、通常のチームの下にできている');
+    await admin.delete(scratch);
+    // メンバー制のルール案: 名簿に無いアカウントは、同じ認証でも、読めず、書けない
+    await admin.loadRules('firestore.v3.rules');
+    eq((await direct('GET', `teams/${TEAM}/wsProjects`)).status, 403, 'ルール案: 通常のチームの案件を、直接読む');
+    eq((await direct('PATCH', scratch, { fields: { note: { stringValue: '境界の確認' } } })).status, 403, 'ルール案: 通常のチームの下に、直接書く');
+    eq(await admin.get(scratch), null, 'ルール案では、書かれていない');
   } finally {
     app.stop();
   }

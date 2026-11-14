@@ -12,7 +12,16 @@
 // 新しい形式は、古いアプリ（V1・V2）のコードが参照しない名前（ws…）に置く。古いアプリが何を書いても届かない。
 import colls from './collections.json';
 
-export const TEAM_ID: string = import.meta.env.VITE_TEAM_ID || 'intention-dev';
+/** 通常の（実際の運用で使っている）チームの名前 */
+export const DEFAULT_TEAM_ID = 'intention-dev';
+export const TEAM_ID: string = import.meta.env.VITE_TEAM_ID || DEFAULT_TEAM_ID;
+/**
+ * 検証用のビルドか（環境変数 VITE_TEAM_ID で、通常とは別のチーム名を指定してビルドした）。
+ * 共有データの場所は、すべて TEAM_ID から組み立てる（下の collPath・docPath）ので、検証用のビルドは、
+ * 通常のチームの共有データを読み書きする経路を持たない。画面には、検証用のビルドであることを常に表示する。
+ * これは、誤って通常の共有データを操作しないための分け方で、権限の境界ではない（誰が何を読み書きできるかは、Firestore のルールが決める）。
+ */
+export const IS_VERIFY_BUILD = TEAM_ID !== DEFAULT_TEAM_ID;
 
 export type MasterKey = 'staff' | 'venues' | 'contents' | 'partTypes' | 'composites';
 export const MASTER_KEYS: MasterKey[] = ['staff', 'venues', 'contents', 'partTypes', 'composites'];

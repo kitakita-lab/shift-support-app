@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AppStore, Notice, Space } from '../store/useAppData';
 import { Member, SharedSession, SharedView, effectiveOwners } from '../store/sharedSession';
 import { MigrationReport, isValidMemberEmail, normalizeEmail } from '../store/sharedLogic';
+import { DEFAULT_TEAM_ID, IS_VERIFY_BUILD, TEAM_ID } from '../store/paths';
 
 // ── 置き場所の帯（いまどちらのデータを見ているかを、常に表示する） ──────────────
 export function SpaceBar({ store, signedIn, configured }: { store: AppStore; signedIn: boolean; configured: boolean }) {
@@ -12,6 +13,12 @@ export function SpaceBar({ store, signedIn, configured }: { store: AppStore; sig
   const pick = (s: Space) => () => store.setSpace(s);
   return (
     <div className={`spacebar spacebar--${space}`} data-testid="space" data-space={shown} data-phase={shared.phase}>
+      {IS_VERIFY_BUILD && (
+        <span
+          className="spacebar__env" data-testid="env-team" data-team={TEAM_ID}
+          title={`検証用のビルドです。共有データの場所は「${TEAM_ID}」で、通常の共有データ（${DEFAULT_TEAM_ID}）は読み書きしません。`}
+        >検証用ビルド（共有データの場所: {TEAM_ID}）</span>
+      )}
       <span className="spacebar__label">表示中のデータ</span>
       {signedIn ? (
         <span className="seg">
