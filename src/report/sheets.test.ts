@@ -44,26 +44,29 @@ describe('日報の取得: 必要な列だけを読む', () => {
   it('3 回の問い合わせ（タブの一覧 → 見出し行 → 必要な列）で、回答を行にそろえて返す', async () => {
     const { http, calls } = sheet({
       D: [46339, 46340, 46340], F: ['北街モール', 'その他', '北街モール'], G: ['', 'みなと市場'], H: ['秋の花まつり'], L: [62, 21, 58],
+      I: ['花の小びんづくり', '花の小びんづくり', '花の小びんづくり'], J: [30, '', 28], K: [71, 40],
     });
     const rows = await fetchReportRows({ spreadsheetId: ID, gid: null }, 'tok-1', http);
     expect(rows).toEqual([
-      { date: 46339, venue: '北街モール', venueOther: '', event: '秋の花まつり', count: 62 },
-      { date: 46340, venue: 'その他', venueOther: 'みなと市場', event: '', count: 21 },
-      { date: 46340, venue: '北街モール', venueOther: '', event: '', count: 58 },
+      { date: 46339, venue: '北街モール', venueOther: '', event: '秋の花まつり', count: 62, content: '花の小びんづくり', groups: 30, people: 71 },
+      { date: 46340, venue: 'その他', venueOther: 'みなと市場', event: '', count: 21, content: '花の小びんづくり', groups: '', people: 40 },
+      { date: 46340, venue: '北街モール', venueOther: '', event: '', count: 58, content: '花の小びんづくり', groups: 28, people: '' },
     ]);
     expect(calls.length).toBe(3);
     expect(calls.every((c) => c.auth === 'Bearer tok-1')).toBe(true);
     expect(calls.every((c) => c.url.startsWith(`${SHEETS_API}/${ID}`))).toBe(true);
   });
 
-  it('要求するのは、見出し行（1 行目）と D・F・G・H・L の 2 行目以降だけ。メールアドレス・入力者・内部用メモの列は要求しない', async () => {
+  it('要求するのは、見出し行（1 行目）と D・F・G・H・I・J・K・L の 2 行目以降だけ。メールアドレス・入力者・天気・内部用メモの列は要求しない', async () => {
     const { http, calls } = sheet({ D: [46339], F: ['北街モール'], L: [1] });
     await fetchReportRows({ spreadsheetId: ID }, 'tok', http);
     const meta = new URL(calls[0].url);
     expect(meta.searchParams.get('fields')).toBe('sheets.properties(sheetId,title)');   // タブの名前と ID だけ（セルの中身は含まない）
     expect(decodeURIComponent(new URL(calls[1].url).pathname)).toBe(`/v4/spreadsheets/${ID}/values/'${TAB}'!1:1`);
     const data = new URL(calls[2].url);
-    expect(data.searchParams.getAll('ranges')).toEqual(['D', 'F', 'G', 'H', 'L'].map((c) => `'${TAB}'!${c}2:${c}`));
+    expect(data.searchParams.getAll('ranges').sort()).toEqual(['D', 'F', 'G', 'H', 'I', 'J', 'K', 'L'].map((c) => `'${TAB}'!${c}2:${c}`));
+    // 取り込んではいけない列（A タイムスタンプ・B メールアドレス・C 入力者・E 天気・M 内部用メモ）は、どの要求にも入っていない
+    expect(calls.some((c) => /![ABCEM]2:[ABCEM]/.test(decodeURIComponent(c.url)))).toBe(false);
     expect(data.searchParams.get('majorDimension')).toBe('COLUMNS');
     expect(data.searchParams.get('valueRenderOption')).toBe('UNFORMATTED_VALUE');
     expect(data.searchParams.get('dateTimeRenderOption')).toBe('SERIAL_NUMBER');
@@ -75,8 +78,8 @@ describe('日報の取得: 必要な列だけを読む', () => {
     const header = ['タイムスタンプ', 'メールアドレス', '入力者', '新しい質問', ...HEADER.slice(3)];
     const { http, calls } = sheet({ E: [46339], G: ['北街モール'], M: [62] }, { header });
     const rows = await fetchReportRows({ spreadsheetId: ID }, 'tok', http);
-    expect(new URL(calls[2].url).searchParams.getAll('ranges')).toEqual(['E', 'G', 'H', 'I', 'M'].map((c) => `'${TAB}'!${c}2:${c}`));
-    expect(rows).toEqual([{ date: 46339, venue: '北街モール', venueOther: '', event: '', count: 62 }]);
+    expect(new URL(calls[2].url).searchParams.getAll('ranges').sort()).toEqual(['E', 'G', 'H', 'I', 'J', 'K', 'L', 'M'].map((c) => `'${TAB}'!${c}2:${c}`));
+    expect(rows).toEqual([{ date: 46339, venue: '北街モール', venueOther: '', event: '', count: 62, content: '', groups: '', people: '' }]);
   });
 
   it('見出しに必要な列が無ければ、データの列を読まずにエラーにする', async () => {

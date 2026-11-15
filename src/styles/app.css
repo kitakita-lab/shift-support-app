@@ -258,6 +258,8 @@ ul.plain { margin: 4px 0; padding-left: 18px; }
 .tag--on { background: #d7f0df; color: #0b5c2e; }
 
 .daygrid th:nth-child(1) { width: 96px; }
+/* 日付の下に出す「開催なし」の印（日付の欄は狭いので、印は折り返さずに、次の行に出す） */
+.daygrid__date .tag { display: inline-block; white-space: nowrap; margin-left: 4px; font-weight: 400; }
 .daygrid th:nth-child(2) { width: 130px; }
 .daygrid th:nth-child(3) { width: 200px; }
 .daygrid th:nth-child(4) { width: 84px; }
@@ -272,6 +274,37 @@ ul.plain { margin: 4px 0; padding-left: 18px; }
 .stepper--inline small { margin-left: 6px; color: var(--sub); white-space: nowrap; }
 
 /* ── 日報の同期（案件の見出しの下の帯） ── */
+/* ── 日報から案件を作成・更新（案件一覧の上に出す） ── */
+.rimport { margin-bottom: 12px; border: 1px solid #c6dafc; border-radius: 6px; background: #f1f6ff; padding: 8px 10px; }
+.rimport--warn { background: #fffbe6; border-color: var(--warn-line); }
+.rimport--error { background: #fde8e7; border-color: #f2b8b5; }
+.rimport__main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rimport__status { flex: 1; min-width: 200px; color: var(--sub); font-size: 12px; }
+.rimport__more { font-size: 12px; }
+.rimport__hint { margin: 4px 0; color: var(--sub); font-size: 12px; }
+.rimport__detail { margin-top: 8px; border-top: 1px dashed #c6c9ce; padding-top: 6px; font-size: 13px; }
+.rimport__block { margin: 8px 0 12px; }
+.rimport__head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.rimport__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rimport__list > li { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+.rimport__pick { display: flex; align-items: center; gap: 8px; }
+.rimport__pick input { width: 18px; height: 18px; flex: none; }
+.rimport__name { font-weight: 700; overflow-wrap: anywhere; }
+.rimport__row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0; }
+.rimport__open { border: 0; background: none; padding: 0; color: var(--accent); font-weight: 700; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.rimport__open:hover { text-decoration: underline; }
+.rimport__quiet > summary { cursor: pointer; color: var(--sub); font-size: 12px; padding: 4px 0; }
+.rimport__quiet[open] > summary { margin-bottom: 4px; }
+.rimport__list + .rimport__quiet { margin-top: 6px; }
+.rimport__sub { margin: 2px 0; color: var(--sub); font-size: 12px; overflow-wrap: anywhere; }
+.rimport__sub .tag { margin-left: 6px; white-space: nowrap; }
+.rimport__btns { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+/* 長いボタン（会場名が入る）は、折り返す（スマホで、横にはみ出さない） */
+.rimport__detail button, .reportbar__detail button { max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+/* 折り返すボタンは、高さを固定しない（2 行になった文字が、ボタンからはみ出さない） */
+.rimport__detail .cellbtn, .reportbar__detail .cellbtn { height: auto; min-height: 22px; }
+.rimport ul.plain { font-size: 12px; }
+
 .reportbar { margin-bottom: 10px; border: 1px solid #c6dafc; border-radius: 6px; background: #f1f6ff; padding: 6px 10px; }
 .reportbar--warn { background: #fffbe6; border-color: var(--warn-line); }
 .reportbar--error { background: #fde8e7; border-color: #f2b8b5; }
@@ -316,7 +349,11 @@ ul.plain { margin: 4px 0; padding-left: 18px; }
   .stepper--inline { height: auto; }
   .cellbtn { height: 32px; padding: 2px 10px; }
   .toolbar select { height: 36px; }
-  .toolbar button, .panel__btns button, .grid__add, .reportbar button, .pv__head button { min-height: 36px; }
+  .toolbar button, .panel__btns button, .grid__add, .reportbar button, .rimport button, .pv__head button { min-height: 36px; }
+  .rimport__pick input { width: 22px; height: 22px; }
+  .rimport__pick { min-height: 36px; }
+  .rimport__quiet > summary { padding: 8px 0; }
+  .rimport__detail .cellbtn, .reportbar__detail .cellbtn { min-height: 32px; }
   .panel__row input { height: 38px; }
   .panel .full { padding: 6px 8px; }
   .seg--fill button { min-height: 39px; }

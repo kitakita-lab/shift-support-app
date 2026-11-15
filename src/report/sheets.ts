@@ -1,8 +1,9 @@
 // 日報（Google スプレッドシート）の読み取り。Google Sheets API を、読み取り専用の権限（spreadsheets.readonly）で呼ぶ。
 //
 // 守ること:
-//   - 読むのは「見出し行」と、見出し名で特定した必要な列（開催日・会場・会場（その他の場合）・イベント名・キットの使用数）だけ。
-//     メールアドレス・入力者・内部メモ・自由記述の列は、要求に含めない（＝取得しない）。
+//   - 読むのは「見出し行」と、見出し名で特定した必要な列だけ
+//     （開催日・会場・会場（その他の場合）・イベント名・イベント内容・参加組数・参加人数・キットの使用数）。
+//     メールアドレス・入力者・内部メモ・自由記述・参加者エピソードの列は、要求に含めない（＝取得しない）。
 //   - 書き込みの API は呼ばない（権限も読み取り専用）。日報の原本は変更しない。
 //   - 見出しを確かめられないときは、データの列を読まずにエラーにする（列がずれた日報から、別の列の数字を取り込まないため）。
 //   - 公開リンクは使わない（API キーだけの読み取りはしない。必ず、利用者本人の認証で読む）。
@@ -148,7 +149,7 @@ export async function fetchReportRows(source: ReportSource, token: string, http:
   const length = columns.reduce((m, c) => Math.max(m, c.length), 0);
   const rows: RawReportRow[] = [];
   for (let r = 0; r < length; r += 1) {
-    const row: RawReportRow = { date: '', venue: '', venueOther: '', event: '', count: '' };
+    const row: RawReportRow = { date: '', venue: '', venueOther: '', event: '', count: '', content: '', groups: '', people: '' };
     fields.forEach((k, i) => { row[k] = columns[i][r] ?? ''; });
     rows.push(row);
   }

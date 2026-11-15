@@ -34,8 +34,13 @@ interface Props {
   onSaveVenueTemplate: (venueId: string, project: Project) => void;
   /** 会場に「日報での会場名（別名）」を足す */
   onAddVenueAlias: (venueId: string, name: string) => void;
+  /** 会場を、名前で足す（同じ名前が登録済みなら、その会場）。使う会場を返す（やめたら null） */
+  onAddVenue: (name: string) => Venue | null;
   onBack: () => void;
 }
+
+/** 会場の選択肢のうち、「新しい会場を追加」を表す値（会場の ID と重ならない） */
+const ADD_VENUE = '__add-venue__';
 
 function Field({ label, warn, children }: { label: string; warn?: string; children: ReactNode }) {
   return (
@@ -46,7 +51,7 @@ function Field({ label, warn, children }: { label: string; warn?: string; childr
   );
 }
 
-export default function ProjectView({ project: p, data, space, current, onChange, onSaveVenueTemplate, onAddVenueAlias, onBack }: Props) {
+export default function ProjectView({ project: p, data, space, current, onChange, onSaveVenueTemplate, onAddVenueAlias, onAddVenue, onBack }: Props) {
   const [sheet, setSheet] = useState<Sheet>('basic');
   const [showWarn, setShowWarn] = useState(false);
   const warnings = useMemo(() => projectWarnings(p, data), [p, data]);
@@ -64,10 +69,23 @@ export default function ProjectView({ project: p, data, space, current, onChange
   const nWarn = warnings.filter((w) => w.severity === 'warn').length;
   const nInfo = warnings.length - nWarn;
 
+  // ── 会場を、その場で足す（会場タブへ行かなくてよいように） ──
+  const addVenue = () => {
+    const name = window.prompt('新しい会場の名前を入力してください（日報を同期する案件は、日報の「会場」と同じ書き方にしてください）');
+    if (name == null) return;
+    const v = onAddVenue(name);
+    // 足したばかりの会場は、まだ画面のデータ（data.venues）に入っていないので、返ってきた会場そのものを使う
+    if (v && v.id !== p.venueId) applyVenue(v);
+  };
+
   // ── 会場変更: 置き換えるかどうかは利用者が選ぶ ──
   const changeVenue = (venueId: string) => {
     const v = data.venues.find((x) => x.id === venueId);
     if (!v) { set({ venueId }); return; }
+    applyVenue(v);
+  };
+  const applyVenue = (v: Venue) => {
+    const venueId = v.id;
     const hasEnv = p.layout.env.length > 0;
     const replace = !hasEnv || window.confirm(
       `会場を「${v.name}」に変更します。\nレイアウトの周辺環境と会場費を、この会場の雛形・既定値に置き換えますか？\n\n` +
@@ -187,7 +205,7 @@ export default function ProjectView({ project: p, data, space, current, onChange
           {warnings.map((w: Warning, i) => <li key={i} className={`warnlist__${w.severity}`}>{w.severity === 'warn' ? '⚠' : 'ℹ'} {w.message}</li>)}
         </ul>
       )}
-      {jcosOn && <ReportBar project={p} data={data} scope={space} current={current} onChange={onChange} onAddVenueAlias={onAddVenueAlias} />}
+      {jcosOn && <ReportBar project={p} data={data} scope={space} current={current} onChange={onChange} onAddVenueAlias={onAddVenueAlias} conflicts={j?.conflicts} />}
 
       <div className="pv__body">
         {sheet === 'basic' && (
@@ -196,9 +214,13 @@ export default function ProjectView({ project: p, data, space, current, onChange
               <tbody>
                 <Field label="案件名（図面タイトルの先頭）" warn={wOf('project:name')}><input value={p.name} onChange={(e) => set({ name: e.target.value })} /></Field>
                 <Field label="会場" warn={wOf('project:venueId')}>
-                  <select value={p.venueId} onChange={(e) => changeVenue(e.target.value)}>
-                    <option value="">（選択）</option>
-                    {data.venues.map((v: Venue) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                  <select value={p.venueId} onChange={(e) => (e.target.value === ADD_VENUE ? addVenue() : changeVenue(e.target.value))} data-testid="venue-select">
+                    {/* 選ぶ前の表示に、登録済みの件数を出す（「（選択）」だけだと、登録済みの会場があることが分からない） */}
+                    <option value="">{data.venues.length > 0 ? `（選択してください：登録済み ${data.venues.length} 件）` : '（会場が未登録です。下の「＋ 新しい会場を追加」から登録できます）'}</option>
+                    {/* 会場マスタから消えた会場も、消さずに見せる */}
+                    {p.venueId && !venue && <option value={p.venueId}>（削除済みの会場）</option>}
+                    {data.venues.map((v: Venue) => <option key={v.id} value={v.id}>{v.name.trim() || '（名称未設定の会場）'}</option>)}
+                    <option value={ADD_VENUE}>＋ 新しい会場を追加…</option>
                   </select>
                 </Field>
                 <Field label="開始日"><input type="date" value={p.startDate} onChange={(e) => set({ startDate: e.target.value })} /></Field>

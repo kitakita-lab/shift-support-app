@@ -2,6 +2,7 @@
 
 ワークショップ案件（会場 × 期間 × 実施コンテンツ）の **スタッフ配置・収支試算・ブースレイアウト** を1か所で計画・管理する Web アプリ。
 JCOS 案件では、請求と実費を分けた粗利（日別・会期）を、日報（Google フォームの回答）の制作実績と合わせて確認できる（Version 4）。
+開催済みの案件は、日報から、会場・開催日・実績つきで作成・更新できる（Version 5）。
 
 - 設計書: [docs/02_新アプリ設計書.md](docs/02_新アプリ設計書.md)
 - 旧アプリ調査: [docs/01_旧アプリ調査.md](docs/01_旧アプリ調査.md)
@@ -19,7 +20,7 @@ npm test         # 単体テスト（試算・警告・レイアウト・版数�
 npm run build    # 型チェック + ビルド
 node e2e/verify.mjs      # 実ブラウザ（Chromium）での動作確認。playwright が必要（スクリプト先頭の説明を参照）
 node e2e/v4.mjs          # 同（Version 4 で追加: スマホ幅の表示・数値入力・JCOS 案件の収支・元に戻す・保存）
-node e2e/sync/run.mjs    # 共有データの同期・移行・権限・日報の同期の確認（Firebase エミュレータ上）。Java・firebase-tools・playwright が必要
+node e2e/sync/run.mjs    # 共有データの同期・移行・権限・日報の同期・日報からの案件作成の確認（Firebase エミュレータ上）。Java・firebase-tools・playwright が必要
 ```
 
 Firebase の設定（`.env`。`.env.example` 参照）が無い場合は、ブラウザ内（localStorage）だけで動く。
@@ -32,6 +33,20 @@ Firebase の設定（`.env`。`.env.example` 参照）が無い場合は、ブ�
 
 共有データを誰が読み書きできるかは、Firestore のセキュリティルールで決まる。メンバー制のルール案は `firestore.v3.rules`（**未デプロイ**）。
 適用するまでは、ログインできる Google アカウントなら誰でも読み書きできる。適用の手順は設計書 2.6。
+
+## 日報から案件を作成・更新（Version 5）
+
+- 案件一覧の **「日報から案件を作成・更新」** を押すと、日報を読んで、(1) 既存の案件の実績を更新し、(2) まだ案件の無い開催を「新しい案件の候補」として見せる。
+  「作成」を押すと、会場・開催日・実績（キットの使用数・参加組数・参加人数）の入った案件になる。会場と開催日を入力し直さない。会場マスタに無い会場は、一緒に登録される。
+- 照合は **会場＋開催日**（イベント名は使わない）。開催の単位は「会場 × 連続した開催日」。同じ会場の別の期間の開催は、別の案件になる。
+  数日しか離れていない開催は、利用者が選んだときだけ 1 つの案件にまとめる（間の日は「開催していない日」）。
+- アプリが決められないものだけ、確認を求める（その日を会期に含む案件が 2 件以上・記号だけが違う会場名・既存の案件の会期のすぐ近くの開催・読み取れない回答・手で決めた会期の外の回答・手入力の実績との違い）。
+- 何度押しても、実績は二重に入らない。失敗したとき（権限不足・通信・読み取れない回答など）は、案件にも会場にも何も書かない。
+  日報の修正・削除は、次の取得で案件に入る。ただし、案件の回答が日報から 1 件も無くなったときは、前の実績を自動では外さず、確認を求める（「前回の実績を外す」を押したときだけ外す）。
+  読んだ内容で書く（作成・反映）のは、取得から 10 分以内だけ。取得のあとで、案件の画面・ほかの端末で同期された案件は、読んだ内容では上書きしない。
+- 日報から作った案件の会期は、日報の回答のある日に合わせて、自動で伸び縮みする。手で作った案件の会期は、自動では変えない（「会期を広げて取り込む」を押したときだけ）。
+- 日報から作る案件は JCOS 案件（請求・支払いは標準の初期値）。日報に無い値（アルバイトの人数・追加の請求・その他実費・予定個数など）は、案件ごとに入力する。
+- 開催予定の案件は、これまでどおり「＋ 新しい案件」で作る（会場と会期が合えば、あとから日報の実績が入る）。仕組みは設計書 7 章。
 
 ## JCOS 案件の収支と、日報の同期（Version 4）
 
@@ -56,19 +71,20 @@ Firebase の設定（`.env`。`.env.example` 参照）が無い場合は、ブ�
 ```
 src/
   types.ts            データモデル
-  domain/             純関数（calc=試算, jcos=JCOS 案件の収支, report=日報の照合と集計, numtext=数値欄の文字の整形,
-                      layout=レイアウト操作・番号・版, figure=図の内容と指紋, warnings=入力警告, seed=初期値・サンプル）
-  report/             日報の同期（googleToken=読み取り専用の認証, sheets=Google Sheets API の読み取り, sync=同期の流れ）
+  domain/             純関数（calc=試算, jcos=JCOS 案件の収支, report=日報の照合と集計, reportImport=日報から案件の候補を作る,
+                      numtext=数値欄の文字の整形, layout=レイアウト操作・番号・版, figure=図の内容と指紋, warnings=入力警告, seed=初期値・サンプル）
+  report/             日報の同期（googleToken=読み取り専用の認証, sheets=Google Sheets API の読み取り, sync=同期の流れ, syncJob=案件ごとの同期の重なりの制御,
+                      importJob=案件一覧からの取得, records=端末に置く記録）
   store/              データの置き場所（localData=この端末だけ, sharedSession=共有データの同期, remote=Firestore 入出力,
                       sharedLogic=同期の計算, outbox=未送信の控え, paths=Firestore 上の場所, notices=お知らせ, useAppData=画面との接続,
                       sessionTestkit=同期のテスト用の模擬環境）
   export/             pdf=配置図の PDF 出力, download=ファイルの保存
   components/         Grid（表計算風グリッド）, NumInput（数値欄）, LayoutEditor, LayoutSvg, ProjectView, JcosView（JCOS 案件の試算）,
-                      ReportBar（日報の同期）, Masters, Shared（置き場所の帯・案内・メンバー）
+                      ReportBar（案件の「日報を同期」）, ReportImport（案件一覧の「日報から案件を作成・更新」）, Masters, Shared（置き場所の帯・案内・メンバー）
   **/*.test.ts        単体テスト（domain/testkit.ts はテスト用の部品）
 e2e/verify.mjs        実ブラウザでの動作確認（npm test には含めない）
 e2e/v4.mjs            同（Version 4 で追加した確認）
-e2e/sync/             共有データの同期・移行・ルール・日報の同期の確認（エミュレータ上。実際の Firebase・Google にはつながない）
+e2e/sync/             共有データの同期・移行・ルール・日報の同期・日報からの案件作成の確認（エミュレータ上。実際の Firebase・Google にはつながない）
 firestore.rules       現在のルール（変更していない）
 firestore.v3.rules    メンバー制のルール案（未デプロイ）
 archive/shift-app-v1/ 旧アプリ一式

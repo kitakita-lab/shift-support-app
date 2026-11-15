@@ -10,10 +10,12 @@
 //   - テスト回答は取り込まない。
 //   - 読み取れない項目（開催日・会場名・キットの使用数）がある回答が、この案件の回答か、この案件のものかどうかを決められない回答なら、
 //     同期の全体を止める（一部だけ取り込んだ実績を作らない。前回の結果を残す）。この案件のものでないと確実に言える回答は、外すだけ。
+//   - 参加組数・参加人数は、空欄なら「未入力」（合計に入れず、未入力の件数を持つ。同期は止めない）。空欄でない不正な値は、個数と同じく同期を止める。
+//   - 日報から自動で決めた会期の案件（Project.reportPeriod）は、日報に連続する日が増えたら、会期を伸ばしてから照合する（planProjectSync）。
 import {
-  Project, ReportDay, ReportHeld, ReportSkip, ReportSkipReason, ReportSource, ReportSync, ReportUnmatched, Venue,
+  Project, ReportContentLine, ReportDay, ReportHeld, ReportOutside, ReportSkip, ReportSkipReason, ReportSource, ReportSync, ReportUnmatched, Venue,
 } from '../types';
-import { listDates } from './util';
+import { MAX_DAYS, dateOfDay, dayNumber, listDates } from './util';
 
 // ── 見出し ───────────────────────────────────────────────────
 /** 取得する列の見出し名。メールアドレス・入力者・自由記述の列は、ここに無いので取得しない */
@@ -23,9 +25,13 @@ export const REPORT_HEADERS = {
   venueOther: '会場（その他の場合）',
   event: 'イベント名',
   count: 'キットの使用数',
+  // Version 5 で追加（無くても取り込める）
+  content: 'イベント内容',
+  groups: '参加組数',
+  people: '参加人数',
 } as const;
 export type ReportField = keyof typeof REPORT_HEADERS;
-/** 無いと取り込めない列。会場（その他の場合）・イベント名は、無くても取り込める */
+/** 無いと取り込めない列。会場（その他の場合）・イベント名・イベント内容・参加組数・参加人数は、無くても取り込める */
 export const REQUIRED_FIELDS: ReportField[] = ['date', 'venue', 'count'];
 /** 日報のタブ名の既定値（Google フォームが作る名前） */
 export const DEFAULT_SHEET_TITLE = 'フォームの回答 1';
@@ -82,6 +88,10 @@ export interface RawReportRow {
   venueOther: unknown;
   event: unknown;
   count: unknown;
+  /** イベント内容・参加組数・参加人数（列が無い日報・以前の版の呼び出しでは、無い＝空欄として扱う） */
+  content?: unknown;
+  groups?: unknown;
+  people?: unknown;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -135,10 +145,38 @@ export function parseReportCount(v: unknown): number | null {
   return n <= MAX_REPORT_COUNT ? n : null;
 }
 
-const text = (v: unknown): string => (v == null ? '' : String(v)).trim();
-/** 何も入っていない行（途中の空行・消された回答）か */
+export const text = (v: unknown): string => (v == null ? '' : String(v)).trim();
+/**
+ * 何も入っていない行（途中の空行・消された回答）か。開催日・会場・会場（その他の場合）・イベント名・キットの使用数が、すべて空欄の行。
+ * Version 5 で読む列を増やしたが、空行の判定は Version 4 のまま（参加組数・参加人数・イベント内容だけが入った行——
+ * 手で足した合計の行など——で、すべての案件の同期を止めないため）。
+ */
 export function isBlankRow(r: RawReportRow): boolean {
   return [r.date, r.venue, r.venueOther, r.event, r.count].every((v) => text(v) === '');
+}
+
+/**
+ * 参加組数・参加人数の読み取り。個数と同じ形（0 以上 MAX_REPORT_COUNT 以下の整数）だけを受け付ける。
+ *   blank … 空欄（未入力。0 とはみなさない。同期は止めない）
+ *   bad   … 空欄ではないが、数として読み取れない（個数と同じく、同期を止める）
+ */
+export type Tally = { kind: 'blank' } | { kind: 'ok'; value: number } | { kind: 'bad' };
+export function parseReportTally(v: unknown): Tally {
+  if (text(v) === '') return { kind: 'blank' };
+  const n = parseReportCount(v);
+  return n == null ? { kind: 'bad' } : { kind: 'ok', value: n };
+}
+/** 参加組数・参加人数を読み取れない理由（空欄・読み取れるなら null）。field は、見出し名 */
+export function tallyProblem(field: string, v: unknown): string | null {
+  if (parseReportTally(v).kind !== 'bad') return null;
+  const h = `「${field}」`;
+  const s = typeof v === 'string' ? v.normalize('NFKC').trim() : '';
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return `${h}を数として読み取れません`;
+    return v < 0 ? `${h}がマイナスの値です` : !Number.isInteger(v) ? `${h}が整数ではありません（小数です）` : `${h}が大きすぎます（セルが日付の形式になっている場合も、こうなります）`;
+  }
+  if (COUNT_FORM.test(s)) return `${h}が大きすぎます`;
+  return `${h}に数字以外の文字（空白・区切り・単位を含む）が入っています（数字だけにするか、空欄にしてください）`;
 }
 
 /** スプレッドシートのエラーの値（数式の失敗など）。会場名としては扱わない */
@@ -265,7 +303,7 @@ export interface ReportContext { projects: Project[]; venues: Venue[] }
 
 interface Rival { name: string; keys: Set<string>; dates: Set<string>; claims: Set<string> }
 
-const isCancelled = (p: Project): boolean => p.status === '中止';
+export const isCancelled = (p: Pick<Project, 'status'>): boolean => p.status === '中止';
 
 /**
  * 同じ日報の会場名を持ち、会期が重なる、ほかの案件。
@@ -303,6 +341,206 @@ function ownerOf(
   return { owner: theirs.length > 0 ? 'held' : 'mine', others };
 }
 
+// ── 会期を、日報に合わせて広げる ───────────────────────────────
+/** 回答の無い日を、何日まで挟んで「会期の近く」とみなすか（会期を広げる候補・同じ案件にまとめる候補に使う） */
+export const NEAR_GAP_DAYS = 3;
+
+/** 会期の書き方（日報から作る案件の名前に添える）。例: 8/1 ／ 8/1〜8/3 */
+export function periodLabel(startDate: string, endDate: string): string {
+  const md = (d: string): string => { const [, m, day] = d.split('-'); return `${Number(m)}/${Number(day)}`; };
+  return startDate === endDate ? md(startDate) : `${md(startDate)}〜${md(endDate)}`;
+}
+
+/**
+ * 会期を日報に合わせて広げたときの、案件名。
+ * 案件名の末尾が、前の会期の書き方（日報から作った案件の名前「…（8/1〜8/3）」）のままなら、新しい会期の書き方に置き換える
+ * （開催中に作った案件の名前が「…（11/13）」のまま残らないように）。利用者が付けた名前（末尾が違う）は、変えない。
+ */
+export function renamedForPeriod(name: string, from: { startDate: string; endDate: string }, to: { startDate: string; endDate: string }): string {
+  const old = `${periodLabel(from.startDate, from.endDate)}）`;
+  if (!name.endsWith(old)) return name;
+  const head = name.slice(0, -old.length);
+  return head.endsWith('（') || head.endsWith('・') ? `${head}${periodLabel(to.startDate, to.endDate)}）` : name;
+}
+
+/** 日報から自動で決めた会期のままの案件か（利用者が会期を手で変えていない） */
+export function hasAutoPeriod(p: Pick<Project, 'startDate' | 'endDate' | 'reportPeriod'>): boolean {
+  return !!p.reportPeriod && p.reportPeriod.startDate === p.startDate && p.reportPeriod.endDate === p.endDate;
+}
+
+/** この会場名の回答がある日（テスト回答・空行を除く。開催日と会場名を読み取れる回答だけ） */
+export function venueReportDates(rows: RawReportRow[], keys: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (isBlankRow(r) || isTestRow(r)) continue;
+    const v = reportVenue(r);
+    const date = parseReportDate(r.date);
+    if (v && date && keys.has(v.key)) out.add(date);
+  }
+  return out;
+}
+
+/**
+ * 同じ日報の会場名を持つ、ほかの進行中の案件の会期に入っている日（そこへは、会期を広げない）。
+ * auto … そのうち、日報から決めた会期の案件（日報に合わせて、自分でも会期を伸ばす案件）のもの。
+ */
+function takenBy(p: Project, keys: ReadonlySet<string>, ctx: ReportContext): { all: Set<string>; auto: Set<string> } {
+  const all = new Set<string>();
+  const auto = new Set<string>();
+  for (const q of ctx.projects) {
+    if (q.id === p.id || isCancelled(q)) continue;
+    const qKeys = venueKeys(ctx.venues.find((v) => v.id === q.venueId));
+    if (![...qKeys].some((k) => keys.has(k))) continue;
+    const mine = hasAutoPeriod(q);
+    for (const d of listDates(q.startDate, q.endDate)) { all.add(d); if (mine) auto.add(d); }
+  }
+  return { all, auto };
+}
+const takenDates = (p: Project, keys: ReadonlySet<string>, ctx: ReportContext): Set<string> => takenBy(p, keys, ctx).all;
+
+export interface GrownPeriod {
+  startDate: string;
+  endDate: string;
+  /** 新しく会期に入る日のうち、回答のある日（日付順） */
+  added: string[];
+  /** 新しく会期に入る日のうち、回答の無い日（開催していない日として扱う。日付順） */
+  gaps: string[];
+}
+
+/**
+ * 案件の会期を、同じ会場名の回答がある日まで広げた結果。広げる日が無ければ null。
+ *   maxGap … 回答の無い日を、何日まで挟んでよいか。0 なら、連続する日だけ（日報だけで、同じ開催と決まる）。
+ * 会期の前後へ、回答のある日をたどって広げる。ほかの進行中の案件（同じ会場名）の会期に当たったら、そこで止まる。
+ * 中止の案件・会場や会期が決まっていない案件は、広げない。
+ */
+export function grownPeriod(p: Project, rows: RawReportRow[], ctx: ReportContext, maxGap: number): GrownPeriod | null {
+  if (maxGap < 0 || isCancelled(p)) return null;
+  const keys = venueKeys(ctx.venues.find((v) => v.id === p.venueId));
+  const start0 = dayNumber(p.startDate);
+  const end0 = dayNumber(p.endDate);
+  if (keys.size === 0 || !Number.isFinite(start0) || !Number.isFinite(end0) || end0 < start0) return null;
+  const have = venueReportDates(rows, keys);
+  if (have.size === 0) return null;
+  const taken = takenDates(p, keys, ctx);
+  /** from の次（dir ＝ +1）または前（−1）にある、回答のある日。無い・ほかの案件の会期に当たる、なら null */
+  const step = (from: number, dir: 1 | -1): number | null => {
+    for (let i = 1; i <= maxGap + 1; i += 1) {
+      const s = dateOfDay(from + dir * i);
+      if (taken.has(s)) return null;
+      if (have.has(s)) return from + dir * i;
+    }
+    return null;
+  };
+  let lo = start0;
+  let hi = end0;
+  for (let next = step(hi, 1); next != null && next - lo < MAX_DAYS; next = step(hi, 1)) hi = next;
+  for (let next = step(lo, -1); next != null && hi - next < MAX_DAYS; next = step(lo, -1)) lo = next;
+  if (lo === start0 && hi === end0) return null;
+  const added: string[] = [];
+  const gaps: string[] = [];
+  for (let d = lo; d <= hi; d += 1) {
+    if (d >= start0 && d <= end0) continue;
+    const s = dateOfDay(d);
+    (have.has(s) ? added : gaps).push(s);
+  }
+  return { startDate: dateOfDay(lo), endDate: dateOfDay(hi), added, gaps };
+}
+
+/**
+ * 日報から決めた会期の案件の、日報に合わせた会期。いまの会期のままでよければ null。
+ *   - 基準は、いまの会期の中で、回答のある日（最初の日〜最後の日）。会期の端の日の回答が無くなっていたら、その分だけ縮める
+ *     （回答の無くなった端の日を挟んで、その先の回答へ伸ばさない。離れた開催を、勝手に 1 つにしない）
+ *   - ただし、この案件の回答かもしれない回答がある日は、会期から外さない（縮めない）:
+ *       会場名を読み取れない回答（空欄・エラーの値）… 会期に残して、これまでどおり、同期を止める（planReportSync）
+ *       会場マスタに無い会場名の回答 … 会期に残して、「会期内の、会場名が一致しない回答」として示す（この会場の、別の書き方かもしれない）
+ *     登録済みの、別の会場の回答は、この案件の回答ではないので、数えない
+ *   - そこから前後へ、この会場の回答が連続している間だけ伸ばす。ほかの進行中の案件（同じ会場名）の会期に当たったら、そこで止まる
+ *   - 伸ばした先が、日報から決めた会期の別の案件と隣り合うときは、伸ばさない（その日は、相手の案件からも続いている。
+ *     どちらの続きかは、日報だけでは決まらないので、利用者が選ぶ）
+ *   - いまの会期の中に、この会場の回答のある日が 1 日も無いときは、変えない（基準にする日が無い）
+ * 中止の案件・会場や会期が決まっていない案件は、変えない。
+ */
+export function fittedPeriod(p: Project, rows: RawReportRow[], ctx: ReportContext): { startDate: string; endDate: string } | null {
+  if (isCancelled(p)) return null;
+  const keys = venueKeys(ctx.venues.find((v) => v.id === p.venueId));
+  const start0 = dayNumber(p.startDate);
+  const end0 = dayNumber(p.endDate);
+  if (keys.size === 0 || !Number.isFinite(start0) || !Number.isFinite(end0) || end0 < start0 || end0 - start0 >= MAX_DAYS) return null;
+  // この会場の回答がある日（have）と、この案件の回答かもしれない回答がある日（maybe）
+  const registered = new Set<string>();
+  for (const v of ctx.venues) for (const k of venueKeys(v)) registered.add(k);
+  const have = new Set<string>();
+  const maybe = new Set<string>();
+  for (const r of rows) {
+    if (isBlankRow(r) || isTestRow(r)) continue;
+    const date = parseReportDate(r.date);
+    if (!date) continue;
+    const v = reportVenue(r);
+    if (v && keys.has(v.key)) have.add(date);
+    else if (!v || !registered.has(v.key)) maybe.add(date);
+  }
+  let lo = NaN;
+  let hi = NaN;
+  let any = false;
+  for (let d = start0; d <= end0; d += 1) {
+    const s = dateOfDay(d);
+    if (have.has(s)) any = true;
+    if (!have.has(s) && !maybe.has(s)) continue;
+    if (Number.isNaN(lo)) lo = d;
+    hi = d;
+  }
+  if (!any) return null;
+  const taken = takenBy(p, keys, ctx);
+  const free = (d: number): boolean => { const s = dateOfDay(d); return have.has(s) && !taken.all.has(s); };
+  // 端の日に、この会場の回答があるときだけ、その先へ伸ばす（端の日が縮んだ側・この案件の回答か決まらない日で止まった側へは、伸ばさない）
+  let up = hi;
+  if (hi === end0 && have.has(dateOfDay(end0))) {
+    while (free(up + 1) && up + 1 - lo < MAX_DAYS) up += 1;
+    if (up > hi && taken.auto.has(dateOfDay(up + 1))) up = hi;
+  }
+  let down = lo;
+  if (lo === start0 && have.has(dateOfDay(start0))) {
+    while (free(down - 1) && up - (down - 1) < MAX_DAYS) down -= 1;
+    if (down < lo && taken.auto.has(dateOfDay(down - 1))) down = lo;
+  }
+  return down === start0 && up === end0 ? null : { startDate: dateOfDay(down), endDate: dateOfDay(up) };
+}
+
+/**
+ * 利用者が選んだ「広げたあとの会期」を、ほかの進行中の案件（同じ会場名）の会期に入らない範囲に収める。
+ * いまの会期から、wanted の端へ向かって 1 日ずつ広げ、ほかの案件の会期に当たったら、そこで止める（その先の日は、その案件を越えないと届かない）。
+ * wanted がいまの会期より狭い側は、いまの会期のまま（狭めない）。広がらなければ null。中止の案件・会期が決まっていない案件は null。
+ */
+export function clampedPeriod(
+  p: Project, wanted: { startDate: string; endDate: string }, ctx: ReportContext,
+): { startDate: string; endDate: string } | null {
+  if (isCancelled(p)) return null;
+  const s0 = dayNumber(p.startDate);
+  const e0 = dayNumber(p.endDate);
+  const s = Math.min(dayNumber(wanted.startDate), s0);
+  const e = Math.max(dayNumber(wanted.endDate), e0);
+  if (![s, e, s0, e0].every(Number.isFinite) || e0 < s0) return null;
+  const taken = takenDates(p, venueKeys(ctx.venues.find((v) => v.id === p.venueId)), ctx);
+  let lo = s0;
+  let hi = e0;
+  while (lo > s && !taken.has(dateOfDay(lo - 1)) && hi - (lo - 1) < MAX_DAYS) lo -= 1;
+  while (hi < e && !taken.has(dateOfDay(hi + 1)) && hi + 1 - lo < MAX_DAYS) hi += 1;
+  return lo === s0 && hi === e0 ? null : { startDate: dateOfDay(lo), endDate: dateOfDay(hi) };
+}
+
+/**
+ * 会期の外にある日（dates）を取り込むための、広げたあとの会期（「会期を広げて取り込む」で使う）。
+ * ほかの進行中の案件の会期は越えない。1 日も届かなければ null。
+ */
+export function widenTarget(p: Project, dates: string[], ctx: ReportContext): { startDate: string; endDate: string } | null {
+  const ds = dates.filter((d) => Number.isFinite(dayNumber(d))).sort();
+  if (ds.length === 0) return null;
+  const to = clampedPeriod(p, { startDate: ds[0], endDate: ds[ds.length - 1] }, ctx);
+  if (!to) return null;
+  const inside = new Set(listDates(to.startDate, to.endDate));
+  return ds.some((d) => inside.has(d)) ? to : null;
+}
+
 /**
  * 日報の回答から、案件の「同期の結果」を作る。案件や日報は書き換えない。
  * 会場または会期が決まっていない案件は、照合できないのでエラーにする。
@@ -329,6 +567,10 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
 
   const rivals = rivalsOf(p, keys, dates, { projects, venues });
   const claims = new Set(p.reportClaims ?? []);
+  // 会期のすぐ外にある、この会場の回答がある日（取り込まないが、「会期を広げれば取り込める」ものとして示す）
+  const near = new Set(grownPeriod(p, rows, { projects, venues }, NEAR_GAP_DAYS)?.added ?? []);
+  const outside = new Map<string, ReportOutside>();
+  const contents = new Map<string, ReportContentLine>();
 
   const days = new Map<string, ReportDay>();
   const held = new Map<string, ReportHeld>();
@@ -352,7 +594,15 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
     const mine = !!v && keys.has(v.key);
 
     // この案件のものでないと確実に言える回答は、ここで外す（読み取れない項目があっても、この案件の同期は止めない）
-    if (date && !dates.has(date)) return;                         // 会期の外（会場が何であっても）
+    if (date && !dates.has(date)) {                               // 会期の外（会場が何であっても）
+      if (mine && near.has(date)) {                               // 会期のすぐ外の、この会場の回答 … 取り込まずに、知らせる
+        const o = outside.get(date) ?? { date, rows: 0, count: 0 };
+        o.rows += 1;
+        o.count += parseReportCount(r.count) ?? 0;
+        outside.set(date, o);
+      }
+      return;
+    }
     if (v && !mine) {                                             // 別の会場名（この案件の会場名・別名ではない）
       if (!date) return;                                          // 開催日を読み取れなくても、この案件の回答ではない
       const u = unmatched.get(v.key) ?? { venue: v.name, rows: 0, count: 0, dates: [] };
@@ -373,7 +623,10 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
     // （会場名が空欄／開催日を読み取れない／会期が重なる案件があって、どちらのものか決まっていない日）。
     // 読み取れない項目が 1 つでもあれば、取り込まずに記録する（1 件でもあれば、あとで同期の全体を止める）
     const count = parseReportCount(r.count);
-    if (!date || !v || !owned || count == null) {
+    // 参加組数・参加人数は、空欄なら未入力として進める。空欄でないのに数として読み取れないときは、個数と同じく止める
+    const groups = parseReportTally(r.groups);
+    const people = parseReportTally(r.people);
+    if (!date || !v || !owned || count == null || groups.kind === 'bad' || people.kind === 'bad') {
       const items: ReportIssue['items'] = [];
       const badDate = dateProblem(r.date);
       if (badDate) items.push({ field: REPORT_HEADERS.date, reason: badDate });
@@ -381,6 +634,10 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
       if (badVenue) items.push(badVenue);
       const badCount = countProblem(r.count);
       if (badCount) items.push({ field: REPORT_HEADERS.count, reason: badCount });
+      const badGroups = tallyProblem(REPORT_HEADERS.groups, r.groups);
+      if (badGroups) items.push({ field: REPORT_HEADERS.groups, reason: badGroups });
+      const badPeople = tallyProblem(REPORT_HEADERS.people, r.people);
+      if (badPeople) items.push({ field: REPORT_HEADERS.people, reason: badPeople });
       issues.push({ row: index + FIRST_ANSWER_ROW, date, items });
       return;
     }
@@ -399,8 +656,18 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
     d.count += count;
     d.rows += 1;
     if (!d.keys!.includes(v.key)) d.keys!.push(v.key);
+    // 参加組数・参加人数: 入力のあった回答だけを足す。未入力の回答は、件数を数えておく（0 とはみなさない）
+    if (groups.kind === 'ok') d.groups = (d.groups ?? 0) + groups.value; else d.groupsBlank = (d.groupsBlank ?? 0) + 1;
+    if (people.kind === 'ok') d.people = (d.people ?? 0) + people.value; else d.peopleBlank = (d.peopleBlank ?? 0) + 1;
     days.set(date, d);
     rowsUsed += 1;
+    const label = text(r.content);
+    if (label) {
+      const c = contents.get(venueKey(label)) ?? { label, rows: 0, count: 0 };
+      c.rows += 1;
+      c.count += count;
+      contents.set(venueKey(label), c);
+    }
   });
 
   if (issues.length > 0) {
@@ -412,6 +679,11 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
   }
 
   const byDate = <T extends { date: string }>(a: T, b: T) => a.date.localeCompare(b.date);
+  // どの回答も未入力だった日は、「未入力の件数」を持たない（合計が無い＝未入力、で分かる。以前の版の結果と同じ形になる）
+  for (const d of days.values()) {
+    if (d.groups === undefined) delete d.groupsBlank;
+    if (d.people === undefined) delete d.peopleBlank;
+  }
   const sync: ReportSync = {
     at: now,
     venueId: p.venueId,
@@ -426,8 +698,58 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
     unmatched: [...unmatched.values()]
       .map((u) => ({ ...u, dates: [...u.dates].sort() }))
       .sort((a, b) => b.rows - a.rows || a.venue.localeCompare(b.venue)),
+    ...(contents.size > 0 ? { contents: [...contents.values()].sort((a, b) => b.rows - a.rows || a.label.localeCompare(b.label)) } : {}),
+    ...(outside.size > 0 ? { outside: [...outside.values()].sort(byDate) } : {}),
   };
   return { ok: true, sync };
+}
+
+// ── 会期の変更をともなう同期 ───────────────────────────────────
+/** 同期と一緒に行う、会期の変更（日報に合わせる。広げるほか、日報から決めた会期の案件は、回答の無くなった端の日を縮めることがある） */
+export interface PeriodChange {
+  /** 変更の前の会期（書き込むときに、案件の会期がこのままかを確かめる。利用者が変えていたら、会期は変えない） */
+  from: { startDate: string; endDate: string };
+  to: { startDate: string; endDate: string };
+  /** 新しく会期に入る日のうち、回答の無い日（開催していない日として扱う） */
+  notHeld: string[];
+}
+
+export interface ProjectSyncInput extends SyncInput {
+  /**
+   * 利用者が選んだ、広げたあとの会期（「会期を広げて取り込む」）。いまの会期から、この範囲まで広げる
+   * （狭い側は、いまの会期のまま。ほかの進行中の案件の会期には入らない＝clampedPeriod）。
+   * 指定が無いときは、日報から決めた会期のままの案件（hasAutoPeriod）だけ、回答のある日に会期を合わせる（fittedPeriod）。
+   */
+  period?: { startDate: string; endDate: string };
+}
+
+/**
+ * 案件の同期の計画（会期の変更を含む）。案件の「日報を同期」と、案件一覧の「日報から案件を作成・更新」の両方が、これを使う。
+ *   - 会期を広げる場合は、広げた会期で照合する（結果の startDate・endDate も、広げたあとの会期）
+ *   - 照合の決まり（会場＋会期・読み取れない回答があれば止める・丸ごと置き換える）は、planReportSync のまま
+ */
+export function planProjectSync(input: ProjectSyncInput): { plan: SyncPlan; change: PeriodChange | null } {
+  const { project: p, projects, venues, rows } = input;
+  const ctx = { projects, venues };
+  let to: { startDate: string; endDate: string } | null = null;
+  const notHeld: string[] = [];
+  if (input.period) {
+    // 利用者が選んだ範囲まで、いまの会期を広げる（狭めない）。ほかの進行中の案件の会期には、入らない
+    to = clampedPeriod(p, input.period, ctx);
+    if (to) {
+      const s0 = dayNumber(p.startDate);
+      const e0 = dayNumber(p.endDate);
+      const have = venueReportDates(rows, venueKeys(venues.find((v) => v.id === p.venueId)));
+      for (let d = dayNumber(to.startDate); d <= dayNumber(to.endDate); d += 1) if ((d < s0 || d > e0) && !have.has(dateOfDay(d))) notHeld.push(dateOfDay(d));
+    }
+  } else if (hasAutoPeriod(p)) {
+    // 日報から決めた会期の案件は、回答のある日に合わせる（連続する日へ伸ばす・回答の無くなった端の日は縮める）
+    to = fittedPeriod(p, rows, ctx);
+  }
+  if (!to) return { plan: planReportSync(input), change: null };
+  const grown: Project = { ...p, startDate: to.startDate, endDate: to.endDate };
+  const plan = planReportSync({ ...input, project: grown, projects: projects.map((q) => (q.id === p.id ? grown : q)) });
+  return { plan, change: { from: { startDate: p.startDate, endDate: p.endDate }, to, notHeld } };
 }
 
 // ── 同期の結果の使い方 ─────────────────────────────────────────
@@ -518,6 +840,22 @@ export function unmatchedGaps(sync: ReportSync | undefined): ReportUnmatched[] {
 }
 
 /**
+ * 同期のときに「会期のすぐ外にある」と記録した回答のうち、いまも、会期を広げれば取り込める日のもの。
+ * 同期のあとで、その日を会期に含む案件ができた（日報から別の案件として作った・会期を変えた）ら、その案件の回答なので、出さない
+ * （「会期を広げて取り込む」を勧めると、2 つの案件の会期が重なってしまう）。その案件の向こう側にある日も、出さない。
+ */
+export function openOutside(p: Project, ctx: ReportContext): ReportOutside[] {
+  const out = p.reportSync?.outside ?? [];
+  if (out.length === 0) return out;
+  // 広げて届く範囲（ほかの進行中の案件の会期に当たるまで）。その先の日は、その案件を越えないと取り込めないので、出さない
+  const reach = widenTarget(p, out.map((o) => o.date), ctx);
+  if (!reach) return [];
+  const own = new Set(listDates(p.startDate, p.endDate));
+  const inside = new Set(listDates(reach.startDate, reach.endDate));
+  return out.filter((o) => inside.has(o.date) && !own.has(o.date));
+}
+
+/**
  * 同期のあとで、照合の条件が変わっているか（変わっていれば、同期のやり直しを勧める）。
  *   venue … 案件の会場を変えた ／ period … 会期を変えた
  *   names … 会場名・別名を変えた（その名前で取り込んだ日の実績は、使っていない）。ctx を渡したときだけ確かめる
@@ -545,6 +883,11 @@ export function hydrateReportSync(v: unknown): ReportSync | undefined {
   const list = (x: unknown): Record<string, unknown>[] => (Array.isArray(x) ? x.filter((e) => !!e && typeof e === 'object') as Record<string, unknown>[] : []);
   const strs = (x: unknown): string[] => (Array.isArray(x) ? x.filter((e): e is string => typeof e === 'string') : []);
   const REASONS: ReportSkipReason[] = ['bad-date', 'bad-count', 'no-venue', 'other-project'];
+  /** 任意の数の項目（0 以上の数のときだけ持つ。無い・形が違うときは、持たない） */
+  const opt = (o: Record<string, unknown>, key: string): Record<string, number> =>
+    (typeof o[key] === 'number' && Number.isFinite(o[key] as number) && (o[key] as number) >= 0 ? { [key]: o[key] as number } : {});
+  const contents = list(s.contents).filter((c) => typeof c.label === 'string' && c.label !== '').map((c) => ({ label: c.label as string, rows: n(c.rows), count: n(c.count) }));
+  const outside = list(s.outside).filter((o) => typeof o.date === 'string').map((o) => ({ date: o.date as string, rows: n(o.rows), count: n(o.count) }));
   return {
     at: str(s.at),
     venueId: str(s.venueId),
@@ -552,6 +895,7 @@ export function hydrateReportSync(v: unknown): ReportSync | undefined {
     endDate: str(s.endDate),
     days: list(s.days).filter((d) => typeof d.date === 'string').map((d) => ({
       date: d.date as string, count: n(d.count), rows: n(d.rows), ...(Array.isArray(d.keys) ? { keys: strs(d.keys) } : {}),
+      ...opt(d, 'groups'), ...opt(d, 'groupsBlank'), ...opt(d, 'people'), ...opt(d, 'peopleBlank'),
     })),
     rowsRead: n(s.rowsRead),
     rowsUsed: n(s.rowsUsed),
@@ -560,6 +904,8 @@ export function hydrateReportSync(v: unknown): ReportSync | undefined {
       .map((x) => ({ reason: x.reason as ReportSkipReason, rows: n(x.rows), dates: strs(x.dates) })),
     held: list(s.held).filter((h) => typeof h.date === 'string').map((h) => ({ date: h.date as string, count: n(h.count), rows: n(h.rows), others: strs(h.others) })),
     unmatched: list(s.unmatched).filter((u) => typeof u.venue === 'string').map((u) => ({ venue: u.venue as string, rows: n(u.rows), count: n(u.count), dates: strs(u.dates) })),
+    ...(contents.length > 0 ? { contents } : {}),
+    ...(outside.length > 0 ? { outside } : {}),
   };
 }
 
@@ -582,12 +928,17 @@ export function parseSheetUrl(input: string): ReportSource | null {
  * 同期に使う日報の場所。案件に記録があればそれ、無ければ、同じ置き場所のほかの案件が最後に使った場所
  * （一度どこかの案件で同期すれば、ほかの案件・ほかの端末でも、場所を入れ直さずに同期できる）。
  */
-export function findReportSource(p: Project, projects: Project[]): ReportSource | null {
-  if (p.reportSource?.spreadsheetId) return p.reportSource;
+export function findReportSource(p: Project | null, projects: Project[]): ReportSource | null {
+  if (p?.reportSource?.spreadsheetId) return p.reportSource;
+  return latestReportSource(projects)?.source ?? null;
+}
+
+/** 同じ置き場所の案件が、最後に同期に使った日報の場所と、その同期の日時（無ければ null） */
+export function latestReportSource(projects: Project[]): { source: ReportSource; at: string } | null {
   let best: Project | null = null;
   for (const q of projects) {
     if (!q.reportSource?.spreadsheetId) continue;
     if (!best || (q.reportSync?.at ?? '') > (best.reportSync?.at ?? '')) best = q;
   }
-  return best?.reportSource ?? null;
+  return best?.reportSource ? { source: best.reportSource, at: best.reportSync?.at ?? '' } : null;
 }

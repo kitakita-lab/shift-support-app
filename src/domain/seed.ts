@@ -176,10 +176,11 @@ export function newProject(venue?: Venue): Project {
  * コンテンツ・費用・レイアウトを複製し、スタッフ配置は引き継がない（別の日程の案件として使うことが多く、
  * 同じ日のまま複製すると双方に掛け持ちの警告が出るため。作業ログ D-19）。
  * JCOS の収支の条件（単価・追加の請求）と日報の場所は引き継ぐ。実績（日報の同期結果・手入力）と、
- * 日ごとの設定・「この案件の実績にする」と決めた日は引き継がない（元の案件の会期のものなので）。
+ * 日ごとの設定・「この案件の実績にする」と決めた日・日報から決めた会期の控えは引き継がない（元の案件の会期のものなので。
+ * 複製した案件の会期は、利用者が決める。日報に合わせて自動では伸ばさない）。
  */
 export function duplicateProject(p: Project): Project {
-  const { reportSync: _sync, actualsManual: _manual, reportClaims: _claims, ...copy } = structuredClone(p);
+  const { reportSync: _sync, actualsManual: _manual, reportClaims: _claims, reportPeriod: _period, ...copy } = structuredClone(p);
   return {
     ...copy,
     id: genId(),

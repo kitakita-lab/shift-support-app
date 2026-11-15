@@ -88,6 +88,11 @@ describe('形の崩れた Version 4 の項目（画面が落ちない形にそ�
     expect(hydrateProject(broken({ reportSource: { spreadsheetId: 'abc', gid: '7' } })).reportSource).toEqual({ spreadsheetId: 'abc', gid: null });
     for (const v of [{ spreadsheetId: 5 }, { spreadsheetId: '' }, 'abc', null]) expect('reportSource' in hydrateProject(broken({ reportSource: v })), JSON.stringify(v)).toBe(false);
   });
+  it('日報から決めた会期の控え（Version 5）: 2 つの日付がそろっていれば残し、形が違えば外す。無い案件には足さない', () => {
+    expect(hydrateProject(broken({ reportPeriod: { startDate: '2026-11-13', endDate: '2026-11-14', extra: 1 } })).reportPeriod).toEqual({ startDate: '2026-11-13', endDate: '2026-11-14' });
+    for (const v of [{ startDate: '2026-11-13' }, { startDate: 1, endDate: 2 }, 'abc', null, []]) expect('reportPeriod' in hydrateProject(broken({ reportPeriod: v })), JSON.stringify(v)).toBe(false);
+    expect('reportPeriod' in hydrateProject(broken({}))).toBe(false);
+  });
   it('どんな形でも、読み込んだあとの計算は落ちない', () => {
     const junk: unknown[] = ['x', 5, null, [], {}, { days: 'x' }, { enabled: true, days: null, extraBillings: {} }, { days: [{}], held: [{}], unmatched: [{}], skipped: [{}] }];
     for (const a of junk) for (const b of junk) {

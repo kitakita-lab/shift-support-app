@@ -3,7 +3,8 @@
 // 失敗したときは { ok: false } を返すだけで、案件のデータには一切触れない
 // （呼び出し側は、ok のときだけ結果を案件に書く。通信エラー・権限エラー・見出しの不一致で、前回の実績が消えることはない）。
 // 日報に読み取れない回答があるときも同じ（code: 'bad-rows'）。一部だけを取り込んだ結果は作らず、どの回答のどの項目かを返す。
-import { RawReportRow, ReportIssue, planReportSync } from '../domain/report';
+import { clearNotHeld, markNotHeld } from '../domain/jcos';
+import { PeriodChange, RawReportRow, ReportIssue, hasAutoPeriod, planProjectSync, planReportSync, renamedForPeriod } from '../domain/report';
 import { Project, ReportSource, ReportSync, Venue } from '../types';
 import { ReportError, ReportErrorCode } from './sheets';
 
@@ -24,16 +25,22 @@ export interface SyncInput {
   projects: Project[];
   venues: Venue[];
   source: ReportSource | null;
+  /**
+   * 利用者が選んだ、広げたあとの会期（「会期を広げて取り込む」）。無ければ、日報から自動で決めた会期のままの案件だけ、
+   * 日報に連続する日が増えていたら、自動で会期を伸ばす（domain/report.ts の planProjectSync）。
+   */
+  period?: { startDate: string; endDate: string };
 }
 
 export type SyncOutcome =
-  | { ok: true; sync: ReportSync; source: ReportSource }
+  /** period … 同期と一緒に行う、会期の変更（日報に合わせて広げる）。無ければ、会期は変えない */
+  | { ok: true; sync: ReportSync; source: ReportSource; period?: PeriodChange }
   /** issues … 読み取れない回答があって止めたとき（code: 'bad-rows'）の、回答ごとの内容 */
   | { ok: false; code: ReportErrorCode; message: string; issues?: ReportIssue[] };
 
 const fail = (code: ReportErrorCode, message: string): SyncOutcome => ({ ok: false, code, message });
 
-export async function runReportSync({ project, projects, venues, source }: SyncInput, deps: SyncDeps): Promise<SyncOutcome> {
+export async function runReportSync({ project, projects, venues, source, period }: SyncInput, deps: SyncDeps): Promise<SyncOutcome> {
   // 通信しなくても分かる問題は、認証の画面を出す前に知らせる（回答 0 件で照合して、会場・会期が決まっているかだけを見る）
   const pre = planReportSync({ project, projects, venues, rows: [], now: deps.now() });
   if (!pre.ok) return fail('setup', pre.message);
@@ -50,21 +57,40 @@ export async function runReportSync({ project, projects, venues, source }: SyncI
       if (e instanceof ReportError && (e.code === 'auth-expired' || e.code === 'no-scope')) deps.forget(token);
       throw e;
     }
-    const plan = planReportSync({ project, projects, venues, rows, now: deps.now() });
+    const { plan, change } = planProjectSync({ project, projects, venues, rows, now: deps.now(), period });
     if (!plan.ok) {
-      // 読み取れない回答がある … 何も取り込まずに止める（前回の実績は、呼び出し側にそのまま残る）
+      // 読み取れない回答がある … 何も取り込まずに止める（前回の実績は、呼び出し側にそのまま残る。会期も変えない）
       return plan.issues?.length ? { ok: false, code: 'bad-rows', message: plan.message, issues: plan.issues } : fail('setup', plan.message);
     }
-    return { ok: true, sync: plan.sync, source };
+    return { ok: true, sync: plan.sync, source, ...(change ? { period: change } : {}) };
   } catch (e) {
     if (e instanceof ReportError) return fail(e.code, e.message);
     return fail('unknown', '日報を同期できませんでした（予期しないエラー）。もう一度お試しください。');
   }
 }
 
-/** 同期の結果を案件に書く（実績を丸ごと置き換える。使った日報の場所も記録する） */
+/**
+ * 同期の結果を案件に書く（実績を丸ごと置き換える。使った日報の場所も記録する）。
+ * 会期の変更をともなう同期（日報に合わせて会期を変える）は、案件の会期が、同期を始めたときのままのときだけ、会期も変える。
+ * 利用者が、同期の途中で会期を変えていたら、会期はそのままにする（実績だけを書く。画面は「会期が変わっています」と知らせ、
+ * いまの会期の中の日の実績だけを使う）。
+ */
 export function applySync(p: Project, outcome: Extract<SyncOutcome, { ok: true }>): Project {
-  return { ...p, reportSync: outcome.sync, reportSource: outcome.source };
+  const next: Project = { ...p, reportSync: outcome.sync, reportSource: outcome.source };
+  // 「開催していない日」としてあった日に、回答が入っていたら、印を外す（開催した日＝請求する・アルバイト 1 人に戻る）
+  if (next.jcos) next.jcos = clearNotHeld(next.jcos, outcome.sync.days.map((d) => d.date));
+  const c = outcome.period;
+  if (!c || p.startDate !== c.from.startDate || p.endDate !== c.from.endDate) return next;
+  next.startDate = c.to.startDate;
+  next.endDate = c.to.endDate;
+  // 日報から決めた会期の案件は、控えも合わせる（次からも、日報に合わせる）。
+  // 会期を手で決めた案件を、利用者が選んで広げたときは、控えを付けない（手で決めた会期の案件のまま。自動では変えない）
+  if (hasAutoPeriod(p)) next.reportPeriod = { startDate: c.to.startDate, endDate: c.to.endDate };
+  // 新しく会期に入った日のうち、回答の無い日は、開催していない日として扱う（請求しない・アルバイト 0 人。手で決めた日は変えない）
+  if (c.notHeld.length > 0 && next.jcos) next.jcos = markNotHeld(next.jcos, c.notHeld);
+  // 案件名の末尾が、前の会期の書き方（日報から作った案件の名前）のままなら、新しい会期に合わせる
+  next.name = renamedForPeriod(p.name, c.from, c.to);
+  return next;
 }
 
 // ── 同期できなかったときの記録 ─────────────────────────────────

@@ -56,6 +56,22 @@ export function listDates(start: string, end: string): string[] {
   return out;
 }
 
+/** "YYYY-MM-DD" を、日の通し番号（1970-01-01 からの日数）にする。日付として読めなければ NaN。日付どうしの差・前後の日を求めるために使う */
+export function dayNumber(s: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? '');
+  if (!m) return NaN;
+  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const d = new Date(t);
+  // 2/30 のような、存在しない日付は受け付けない
+  if (d.getUTCFullYear() !== Number(m[1]) || d.getUTCMonth() !== Number(m[2]) - 1 || d.getUTCDate() !== Number(m[3])) return NaN;
+  return Math.round(t / 86400000);
+}
+/** 日の通し番号を "YYYY-MM-DD" にする（dayNumber の逆） */
+export function dateOfDay(n: number): string {
+  const d = new Date(n * 86400000);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
 /**
  * 端末のタイムゾーンでの日付 "YYYY-MM-DD"。
  * toISOString() は UTC の日付になるため、日本では午前 9 時まで前日の日付になってしまう。

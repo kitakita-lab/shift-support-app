@@ -1,6 +1,8 @@
 // マスタ画面（スタッフ／会場／コンテンツ／パーツ）。すべて表計算風グリッドで直接編集する。
 import { useState } from 'react';
 import { unitMaterialCost } from '../domain/calc';
+import { venueKey, venueKeys } from '../domain/report';
+import { looseVenueKey } from '../domain/reportImport';
 import { newVenue } from '../domain/seed';
 import { genId, yen } from '../domain/util';
 import { AppData, Composite, CompositeMember, Content, Material, PartType, Staff, Venue } from '../types';
@@ -45,8 +47,19 @@ export function StaffMaster({ data, setMaster }: Props) {
 export function VenueMaster({ data, setMaster }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const venue = data.venues.find((v) => v.id === editing);
+  // 同じ会場を、重複して登録していないか（日報の同期は、会場名か別名で照合するので、同じ名前の会場が 2 件あると、どちらの会場か決まらない）
+  const nameWarn = (v: Venue): string | undefined => {
+    if (!v.name.trim()) return '会場名が未入力です（案件の会場の欄に、名前の無い会場として出ます）';
+    const key = venueKey(v.name);
+    if (data.venues.some((o) => o.id !== v.id && venueKeys(o).has(key))) return '同じ名前（または別名）の会場が、ほかにも登録されています。重複していないか確認してください';
+    const loose = looseVenueKey(v.name);
+    if (loose && data.venues.some((o) => o.id !== v.id && [o.name, ...(o.reportNames ?? [])].some((n) => looseVenueKey(n) === loose))) {
+      return '記号・空白だけが違う名前の会場が、ほかにも登録されています。同じ会場なら、片方の「日報での会場名（別名）」にまとめてください';
+    }
+    return undefined;
+  };
   const cols: Col<Venue>[] = [
-    { key: 'name', title: '会場名', width: 220, get: (v) => v.name, set: (v, x) => ({ ...v, name: x }), warn: (v) => (!v.name.trim() ? '会場名が未入力です' : undefined) },
+    { key: 'name', title: '会場名', width: 220, get: (v) => v.name, set: (v, x) => ({ ...v, name: x }), warn: nameWarn },
     { key: 'feeFixed', title: '会場費 固定(円)', width: 120, type: 'number', get: (v) => v.feeFixed, set: (v, x) => ({ ...v, feeFixed: n0(x) }) },
     { key: 'feePerDay', title: '会場費 日額(円)', width: 120, type: 'number', get: (v) => v.feePerDay, set: (v, x) => ({ ...v, feePerDay: n0(x) }) },
     { key: 'feeRatePct', title: '売上歩合(%)', width: 100, type: 'number', get: (v) => v.feeRatePct, set: (v, x) => ({ ...v, feeRatePct: n0(x) }) },
@@ -63,7 +76,7 @@ export function VenueMaster({ data, setMaster }: Props) {
   const used = (id: string) => data.projects.filter((p) => p.venueId === id).length;
   return (
     <section>
-      <h2>会場<small>会場費の既定値と、レイアウトの雛形（周辺店舗・入口・通路など）を管理します。日報の同期は、会場名（または別名）と会期で照合します</small></h2>
+      <h2>会場<small>会場費の既定値と、レイアウトの雛形（周辺店舗・入口・通路など）を管理します。日報にある会場は、案件一覧の「日報から案件を作成・更新」で自動で登録されます（ここで登録し直す必要はありません）。日報の同期は、会場名（または別名）と会期で照合します</small></h2>
       <Grid
         rows={data.venues} cols={cols} rowKey={(v) => v.id} deletable selectedKey={editing ?? undefined}
         onChange={(rows) => { if (confirmRemoval(data.venues, rows, used, '会場')) setMaster('venues', rows); }}
