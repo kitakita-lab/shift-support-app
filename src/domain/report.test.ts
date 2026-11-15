@@ -8,7 +8,7 @@ import {
   findReportSource, fittedPeriod, grownPeriod, hasAutoPeriod, hydrateReportSync,
   isBlankRow, isTestRow, openOutside, parseReportCount, parseReportDate, parseReportTally, parseSheetUrl, periodLabel, planProjectSync, planReportSync, renamedForPeriod, reportVenue,
   rivalClaimedDates, syncStaleness,
-  tallyProblem, unmatchedGaps, usableReportDays, venueKey, venueKeys, venueProblem, venueReportDates, widenTarget,
+  tallyProblem, unmatchedGaps, usableReportDays, venueKey, venueKeys, venueProblem, venueReportDates, widenTarget, contentKey,
 } from './report';
 import { rng } from './testkit';
 import { mkProject } from './testkit';
@@ -964,8 +964,9 @@ describe('同期の結果に、参加組数・参加人数・イベント内容�
   });
   it('空欄の回答は、未入力として進める（0 とはみなさない。同期は止めない）。一部だけ未入力の日は、未入力の件数を持つ', () => {
     const s = plan([full('2026/11/13', CENTER, 62), full('2026/11/14', CENTER, 58, 28, ''), full('2026/11/14', CENTER, 5, '', 9)]);
-    expect(s.days[0]).toEqual({ date: '2026-11-13', count: 62, rows: 1, keys: [venueKey(CENTER)] });           // どちらも未入力 … 項目そのものを持たない
-    expect(s.days[1]).toEqual({ date: '2026-11-14', count: 63, rows: 2, keys: [venueKey(CENTER)], groups: 28, groupsBlank: 1, people: 9, peopleBlank: 1 });
+    const BIN = '花の小びんづくり（無料）';                                                                      // full() の、内容の初期値
+    expect(s.days[0]).toEqual({ date: '2026-11-13', count: 62, rows: 1, keys: [venueKey(CENTER)], contents: [{ label: BIN, count: 62 }] });   // どちらも未入力 … 項目そのものを持たない
+    expect(s.days[1]).toEqual({ date: '2026-11-14', count: 63, rows: 2, keys: [venueKey(CENTER)], groups: 28, groupsBlank: 1, people: 9, peopleBlank: 1, contents: [{ label: BIN, count: 63 }] });
   });
   it('0 と入力された回答は、0 として数える（未入力とは区別する）', () => {
     const s = plan([full('2026/11/13', CENTER, 0, 0, 0)]);
@@ -999,13 +1000,35 @@ describe('同期の結果に、参加組数・参加人数・イベント内容�
     ]);
     expect(s.contents).toEqual([{ label: '花の小びんづくり（無料）', rows: 2, count: 120 }, { label: '花の袋づくり', rows: 1, count: 12 }]);
   });
+  it('日別にも、内容ごとの個数を持つ（内容ごとの材料原価の計算に使う）。記載の無い回答の個数は入れない。並びは、回答の順に依らない', () => {
+    const rows = [
+      full('2026/11/13', CENTER, 30, 1, 1, '花の袋づくり'), full('2026/11/13', CENTER, 62, 1, 1, '花の小びんづくり（無料）'), full('2026/11/13', CENTER, 8, 1, 1, ' 花の小びんづくり（無料）'),
+      full('2026/11/13', CENTER, 5, 1, 1, ''),                                                       // 内容の記載なし（合計には入る）
+      full('2026/11/14', CENTER, 3, 1, 1, ''),                                                       // 記載のある回答が 1 件も無い日 … 項目そのものを持たない
+      full('2026/11/15', CENTER, 4, 1, 1, 'ＦＬＯＷＥＲ　ＢＡＧ'), full('2026/11/15', CENTER, 6, 1, 1, 'flower bag'),   // 全角/半角・空白・大小だけが違う書き方は、同じ内容
+    ];
+    const s = plan(rows);
+    expect(s.days.map((d) => [d.date, d.count, d.contents])).toEqual([
+      ['2026-11-13', 105, [{ label: '花の小びんづくり（無料）', count: 70 }, { label: '花の袋づくり', count: 30 }]],
+      ['2026-11-14', 3, undefined],
+      ['2026-11-15', 10, [{ label: 'ＦＬＯＷＥＲ　ＢＡＧ', count: 10 }]],
+    ]);
+    // 回答の順を逆にしても、日別の内訳の並びと個数は同じ（同じ内容の書き方が複数あるときの、表示用の書き方だけが変わる）
+    const reversed = plan([...rows].reverse());
+    expect(reversed.days.map((d) => d.contents?.map((c) => [contentKey(c.label), c.count]))).toEqual(s.days.map((d) => d.contents?.map((c) => [contentKey(c.label), c.count])));
+    // 内容の列が無い日報（以前の形）では、どの日も、内訳を持たない
+    expect(plan(ROWS).days.every((d) => d.contents === undefined)).toBe(true);
+  });
   it('保存してある結果を読み直しても、同じ形のまま（形の合わない値は落とす）', () => {
     const s = plan([full('2026/11/13', CENTER, 62, 30, ''), full('2026/11/13', CENTER, 1, '', 5), full('2026/11/18', CENTER, 55, 1, 1)]);
     expect(hydrateReportSync(JSON.parse(JSON.stringify(s)))).toEqual(s);
     const broken = { ...s, days: [{ ...s.days[0], groups: '30', people: -1, groupsBlank: null }], contents: [{ label: 5 }, { label: 'x', rows: 'a' }], outside: 'x' };
     const h = hydrateReportSync(broken)!;
-    expect(h.days[0]).toEqual({ date: '2026-11-13', count: 63, rows: 2, keys: [venueKey(CENTER)], peopleBlank: 1 });
+    expect(h.days[0]).toEqual({ date: '2026-11-13', count: 63, rows: 2, keys: [venueKey(CENTER)], peopleBlank: 1, contents: [{ label: '花の小びんづくり（無料）', count: 63 }] });
     expect([h.contents, h.outside]).toEqual([[{ label: 'x', rows: 0, count: 0 }], undefined]);
+    // 日別の内訳: 名前と、0 以上の個数がそろっているものだけを残す
+    const brokenDay = { ...s, days: [{ ...s.days[0], contents: [{ label: 'ok', count: 3 }, { label: '', count: 1 }, { label: 'neg', count: -1 }, { label: 'str', count: '5' }, 'x'] }, { date: '2026-11-14', count: 1, rows: 1, contents: 'x' }] };
+    expect(hydrateReportSync(brokenDay)!.days.map((d) => d.contents)).toEqual([[{ label: 'ok', count: 3 }], undefined]);
   });
 });
 

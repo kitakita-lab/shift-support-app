@@ -294,7 +294,7 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
     notify('info', [
       `日報から、案件 ${r.projects.length} 件を作成しました（実績つき）。`,
       r.addedVenues.length > 0 ? `会場マスタに無かった会場 ${r.addedVenues.length} 件（${r.addedVenues.map((v) => `「${v.name}」`).join('')}）を、新しく登録しました。` : '',
-      '請求・支払いの金額は、標準の初期値です。案件ごとに確認してください。',
+      '請求・支払いの金額は、標準の初期値です。案件ごとに確認してください。アルバイト代は、試算の日別の表で、配置した日・人数を入れると計上されます（未入力は 0 人）。',
     ].filter(Boolean).join(' '));
   };
 
@@ -497,7 +497,7 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
                   {chosen.length === ready.length ? `この ${chosen.length} 件を作成` : `選んだ ${chosen.length} 件を作成`}
                 </button>
               </div>
-              <p className="rimport__hint">会場・開催日・実績（キットの使用数・参加組数・参加人数）は、日報から入ります。JCOS 案件として作り、請求・支払いの金額は標準の初期値にします（あとから変えられます）。</p>
+              <p className="rimport__hint">会場・開催日・実績（キットの使用数・参加組数・参加人数）は、日報から入ります。JCOS 案件として作り、請求・支払いの金額は標準の初期値にします（あとから変えられます）。アルバイト代は、配置した日・人数を入れるまで計上しません。</p>
               <ul className="rimport__list">
                 {ready.map((c) => (
                   <li key={c.id} data-testid="import-create" data-id={c.id}>
