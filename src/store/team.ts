@@ -50,6 +50,15 @@ export function buildEnvOf(vercelEnv: string | null | undefined): BuildEnv {
   return vercelEnv ? 'preview' : 'local';
 }
 
+/**
+ * 判定に使う VERCEL_ENV。本番として扱うのは、ビルド（vite build）だけ。
+ * 開発サーバー（vite）は、VERCEL_ENV=production が付いていても、本番のビルドではない（手元の localhost から、本番のデータにつながない）。
+ */
+export function effectiveVercelEnv(vercelEnv: string | null | undefined, command: 'build' | 'serve'): string {
+  const v = vercelEnv ?? '';
+  return command === 'serve' && v === 'production' ? 'development' : v;
+}
+
 export function firebaseKindOf(apiKey: string | null | undefined, projectId: string | null | undefined): FirebaseKind {
   if (!apiKey || !projectId) return 'none';
   return projectId.startsWith('demo-') ? 'demo' : 'real';
@@ -77,11 +86,34 @@ export const BLOCK_TEXT: Record<BlockReason, string> = {
 };
 
 /**
+ * 止めたあとに、何を直せばよいか。ビルドの種類と理由で変える: 本番のビルドに、検証用のチーム名を入れさせないため
+ * （入れると、ビルドは通るが、本番が検証用の場所を指す）。
+ */
+function remedy(d: Extract<TeamDecision, { ok: false }>): string[] {
+  const fix = d.reason === 'invalid'
+    ? '検証用のビルドなら、VITE_TEAM_ID を、検証用のチーム名（例: kkl-preview）に直してください。'
+    : '検証用のビルド（Vercel の Preview・手元）なら、VITE_TEAM_ID に、検証用のチーム名（例: kkl-preview）を設定してください。';
+  // 本番のビルドで止まるのは、値が使えない形のときだけ
+  if (d.env === 'production') return ['本番のビルドです。Production 環境の VITE_TEAM_ID を、消してください（本番には、設定しません）。検証用のチーム名は、入れないでください。'];
+  // Vercel が「本番ではない」と示したビルド
+  if (d.env === 'preview') return [fix];
+  // VERCEL_ENV が渡っていないビルド。手元のほか、Vercel の本番のビルドで、VERCEL_ENV が渡っていない場合も、ここに来る
+  return [
+    fix,
+    '本番のビルド（Vercel の Production）でこの表示が出た場合は、VITE_TEAM_ID に、検証用のチーム名を入れないでください。',
+    'Vercel が VERCEL_ENV=production を渡していません（プロジェクトの設定「Automatically expose System Environment Variables」を確かめてください）。',
+    d.reason === 'invalid' ? 'あわせて、Production 環境の VITE_TEAM_ID を、消してください（本番には、設定しません）。' : '本番の配信は、前のビルドのまま残っています。',
+  ];
+}
+
+/**
  * ビルドの記録に出す行と、止めるときのメッセージ。
  * 「[kkl] VITE_TEAM_ID=…」の行は、配信されたビルドが検証用かどうかを、画面を開かなくても確かめるためのもの（値は秘密ではない）。
+ * command: build＝ビルド（止めるときは、失敗させる）／serve＝開発サーバー（止めずに、アプリが Firebase を起動しないことを知らせる）
  */
-export function buildReport(d: TeamDecision, input: TeamInput): { lines: string[]; error: string | null } {
-  const head = `[kkl] build: ${d.env} (${input.vercelEnv ? `VERCEL_ENV=${input.vercelEnv}` : 'VERCEL_ENV is not set'}), firebase: ${d.firebase}`;
+export function buildReport(d: TeamDecision, input: TeamInput, command: 'build' | 'serve' = 'build'): { lines: string[]; error: string | null } {
+  const what = command === 'build' ? 'build' : 'dev server';
+  const head = `[kkl] ${what}: ${d.env} (${input.vercelEnv ? `VERCEL_ENV=${input.vercelEnv}` : 'VERCEL_ENV is not set'}), firebase: ${d.firebase}`;
   if (d.ok) {
     const team = d.verify ? `[kkl] VITE_TEAM_ID=${d.teamId}`
       : d.explicit ? `[kkl] VITE_TEAM_ID=${d.teamId} (default team)`
@@ -89,14 +121,17 @@ export function buildReport(d: TeamDecision, input: TeamInput): { lines: string[
     return { lines: [head, team], error: null };
   }
   const shown = d.reason === 'unset' ? 'is not set' : `= ${JSON.stringify(String(input.teamId)).slice(0, 80)}`;
+  const first = command === 'build'
+    ? [`[kkl] Build stopped for safety (${d.reason}): VITE_TEAM_ID ${shown}.`, `安全のため、ビルドを止めました: ${BLOCK_TEXT[d.reason]}。`]
+    : [`[kkl] Firebase is switched off in this dev server (${d.reason}): VITE_TEAM_ID ${shown}.`, `この開発サーバーのアプリは、Firebase を起動しません（ログイン・共有データは使えません）: ${BLOCK_TEXT[d.reason]}。`];
   return {
     lines: [head, `[kkl] VITE_TEAM_ID ${shown} -> STOPPED (${d.reason})`],
     error: [
-      `[kkl] Build stopped for safety (${d.reason}): VITE_TEAM_ID ${shown}.`,
-      `Only a production build (VERCEL_ENV=production) may use the default team "${DEFAULT_TEAM_ID}".`,
-      'Every other build that has real Firebase settings needs VITE_TEAM_ID set to a separate, valid team name (for example: kkl-preview).',
-      `安全のため、ビルドを止めました: ${BLOCK_TEXT[d.reason]}。`,
-      `本番のデータ（${DEFAULT_TEAM_ID}）につながるビルドは、本番のビルドでしか作りません。検証用のビルドには、VITE_TEAM_ID に検証用のチーム名（例: kkl-preview）を設定してください。`,
+      ...first,
+      `Only a production build (VERCEL_ENV=production) may use the default team "${DEFAULT_TEAM_ID}"; it must not have VITE_TEAM_ID set to another name.`,
+      'Every other build that has real Firebase settings needs VITE_TEAM_ID set to a separate, valid team name.',
+      `本番のデータ（${DEFAULT_TEAM_ID}）につながるビルドは、本番のビルドでしか作りません。`,
+      ...remedy(d),
     ].join('\n'),
   };
 }

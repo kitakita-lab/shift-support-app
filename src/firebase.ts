@@ -4,15 +4,12 @@ import {
   Firestore, clearIndexedDbPersistence, connectFirestoreEmulator, getFirestore, initializeFirestore,
   memoryLocalCache, persistentLocalCache, persistentMultipleTabManager, terminate,
 } from 'firebase/firestore';
-import { TEAM_GUARD } from './store/paths';
+import { FIREBASE_ENABLED, TEAM_GUARD } from './store/paths';
 
 // 必須 env が未設定の場合（Vercel 等で未定義）は初期化をスキップする。
 // 共有データの場所を決められないビルド（本番ではないのに、検証用のチーム名が無い・使えない形。store/team.ts）でも、初期化しない。
 // ＝ログインも、共有データも使わない（通常のチームのデータには、つながない）。
-export const isFirebaseConfigured = TEAM_GUARD.ok && !!(
-  import.meta.env.VITE_FIREBASE_API_KEY &&
-  import.meta.env.VITE_FIREBASE_PROJECT_ID
-);
+export const isFirebaseConfigured = FIREBASE_ENABLED;
 /** Firebase を起動していない理由（ログインが要る機能の案内に使う） */
 export const firebaseOffReason = TEAM_GUARD.ok ? 'Firebase が未設定' : '安全のため、ログインと共有データを止めています';
 

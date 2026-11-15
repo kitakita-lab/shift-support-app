@@ -151,7 +151,10 @@ export function useAppData(): AppStore {
     if (loading) return;
     if (!uid) {
       setSession(null);
-      void claimCache(null);                       // ログアウト: 端末内の共有データの控えを消す
+      // ログアウト: 端末内の共有データの控えを消す。
+      // Firebase を起動していないビルド（設定なし・安全のために止めている）では、控えを消せないので、持ち主の印にも触れない
+      // （印だけを消すと、次に起動したビルドが、前のアカウントの控えを、消さずに使ってしまう）
+      if (isFirebaseConfigured) void claimCache(null);
       return;
     }
     const s = new SharedSession({ uid, email, displayName }, {

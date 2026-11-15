@@ -36,6 +36,11 @@ export const TEAM_ID: string = TEAM_GUARD.ok ? TEAM_GUARD.teamId : BLOCKED_TEAM_
  * これは、誤って通常の共有データを操作しないための分け方で、権限の境界ではない（誰が何を読み書きできるかは、Firestore のルールが決める）。
  */
 export const IS_VERIFY_BUILD = TEAM_GUARD.ok && TEAM_GUARD.verify;
+/**
+ * Firebase（ログイン・共有データ）を起動してよいか。設定があり、かつ、共有データの場所を決められたときだけ。
+ * 止めているビルド（TEAM_GUARD.ok が false）では、設定があっても false（firebase.ts は、これが false なら、何も初期化しない）。
+ */
+export const FIREBASE_ENABLED = TEAM_GUARD.ok && TEAM_GUARD.firebase !== 'none';
 
 export type MasterKey = 'staff' | 'venues' | 'contents' | 'partTypes' | 'composites';
 export const MASTER_KEYS: MasterKey[] = ['staff', 'venues', 'contents', 'partTypes', 'composites'];

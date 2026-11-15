@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import colls from './collections.json';
+
+// 手元の .env*（実際の Firebase の設定・チーム名）に左右されないよう、関係する環境変数を「無い」ことにしてから、paths.ts を読み込む
+const ENV_KEYS = ['VITE_TEAM_ID', 'VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID'] as const;
+vi.hoisted(() => { for (const k of ['VITE_TEAM_ID', 'VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID']) vi.stubEnv(k, ''); });
 import {
   APP_COLLS, BACKUP_COLL, DEFAULT_TEAM_ID, IS_VERIFY_BUILD, LEGACY_DATA_COLL, LEGACY_PROJECT_COLL, MASTER_COLL, MASTER_KEYS, MEMBER_COLL, META_COLL,
   PROBE_COLL, PROBE_DOC, TEAM_ID, collPath, docPath,
@@ -42,7 +46,8 @@ describe('ビルドの条件ごとの、共有データの場所（paths.ts を�
   const DEMO = { VITE_FIREBASE_API_KEY: 'demo-key', VITE_FIREBASE_PROJECT_ID: 'demo-kkl' };
   async function load(env: Record<string, string>, vercelEnv?: string) {
     vi.resetModules();
-    for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+    // 指定の無いものは、空（＝無い）にする（手元の .env* の値を、持ち込まない）
+    for (const k of ENV_KEYS) vi.stubEnv(k, env[k] ?? '');
     if (vercelEnv !== undefined) vi.stubGlobal('__KKL_VERCEL_ENV__', vercelEnv);
     return import('./paths');
   }
@@ -58,6 +63,7 @@ describe('ビルドの条件ごとの、共有データの場所（paths.ts を�
       expect(m.TEAM_GUARD).toMatchObject({ ok: false, reason: 'unset' });
       expect(m.TEAM_ID).toBe('__blocked__');
       expect(m.IS_VERIFY_BUILD).toBe(false);
+      expect(m.FIREBASE_ENABLED).toBe(false);          // Firebase の設定があっても、起動しない
       for (const p of everyPath(m)) expect(p).not.toContain(DEFAULT_TEAM_ID);
     });
     it(`${name} × 実際の Firebase × 通常のチーム名・使えない形: 止まる`, async () => {
@@ -65,6 +71,7 @@ describe('ビルドの条件ごとの、共有データの場所（paths.ts を�
         const m = await load({ ...REAL, VITE_TEAM_ID: teamId }, vercelEnv);
         expect(m.TEAM_GUARD, teamId).toMatchObject({ ok: false, reason });
         expect(m.TEAM_ID, teamId).toBe('__blocked__');
+        expect(m.FIREBASE_ENABLED, teamId).toBe(false);
         for (const p of everyPath(m)) expect(p, teamId).not.toContain(DEFAULT_TEAM_ID);
         vi.unstubAllEnvs();
       }
@@ -74,6 +81,7 @@ describe('ビルドの条件ごとの、共有データの場所（paths.ts を�
       expect(m.TEAM_GUARD).toMatchObject({ ok: true, teamId: 'kkl-preview', verify: true });
       expect(m.TEAM_ID).toBe('kkl-preview');
       expect(m.IS_VERIFY_BUILD).toBe(true);
+      expect(m.FIREBASE_ENABLED).toBe(true);
       for (const p of everyPath(m)) { expect(p.startsWith('teams/kkl-preview/')).toBe(true); expect(p).not.toContain(DEFAULT_TEAM_ID); }
     });
   }
@@ -82,16 +90,27 @@ describe('ビルドの条件ごとの、共有データの場所（paths.ts を�
     expect(m.TEAM_GUARD).toMatchObject({ ok: true, env: 'production', teamId: DEFAULT_TEAM_ID, verify: false });
     expect(m.TEAM_ID).toBe(DEFAULT_TEAM_ID);
     expect(m.IS_VERIFY_BUILD).toBe(false);
+    expect(m.FIREBASE_ENABLED).toBe(true);
     expect(m.collPath('wsStaff')).toEqual(['teams', DEFAULT_TEAM_ID, 'wsStaff']);
   });
   it('自動テストの構成（架空のプロジェクト）× チーム名なし: 通常のチーム名のまま動く', async () => {
     const m = await load(DEMO, '');
     expect(m.TEAM_GUARD).toMatchObject({ ok: true, firebase: 'demo', teamId: DEFAULT_TEAM_ID });
     expect(m.TEAM_ID).toBe(DEFAULT_TEAM_ID);
+    expect(m.FIREBASE_ENABLED).toBe(true);
+  });
+  it('Firebase の設定の無いビルド: 通常のチーム名のままで、Firebase は起動しない（これまでどおり）', async () => {
+    const partial: Record<string, string>[] = [{}, { VITE_FIREBASE_API_KEY: 'k' }, { VITE_FIREBASE_PROJECT_ID: 'some-real-project' }];
+    for (const env of partial) {
+      const m = await load(env, 'preview');
+      expect(m.TEAM_GUARD, JSON.stringify(env)).toMatchObject({ ok: true, firebase: 'none', teamId: DEFAULT_TEAM_ID });
+      expect(m.FIREBASE_ENABLED, JSON.stringify(env)).toBe(false);
+    }
   });
   it('VERCEL_ENV の埋め込みが無い実行でも、実際の Firebase の設定があれば、本番として扱わない（止まる）', async () => {
     const m = await load(REAL);
     expect(m.TEAM_GUARD).toMatchObject({ ok: false, env: 'local', reason: 'unset' });
     expect(m.TEAM_ID).toBe('__blocked__');
+    expect(m.FIREBASE_ENABLED).toBe(false);
   });
 });
