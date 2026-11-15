@@ -731,7 +731,17 @@ describe('レイアウト・汎用の試算の項目は、JCOS の収支に入�
   it('一覧・見出しの金額: JCOS 案件は 請求・実費・粗利、それ以外（切り替えを戻した案件を含む）は従来の 売上・費用・利益', () => {
     const e0 = estimate(withLayout, data);
     expect(projectMoney(withLayout, data)).toEqual({ jcos: false, revenue: e0.revenue, cost: e0.totalCost, profit: e0.profit });
-    expect(projectMoney(jcos, data)).toEqual({ jcos: true, revenue: 200000, cost: 153000, profit: 47000 });
+    expect(projectMoney(jcos, data)).toEqual({ jcos: true, revenue: 200000, cost: 153000, profit: 47000, noStaff: false });
+    // アルバイトを 1 日も配置していない JCOS 案件は、アルバイト代を 0 円で計算している（粗利を、確定した実績と取り違えないよう、印を付ける）
+    const bare = { ...jcos, jcos: { ...jcos.jcos!, days: {} } };
+    expect(projectMoney(bare, data)).toMatchObject({ jcos: true, noStaff: true });
+    expect(projectMoney(bare, data).profit).toBe(47000 + jcosEstimate(jcos).current.partTimerCost);
+    // 開催する日が無い（全日が「開催なし」）なら、印は付けない
+    const none = { ...jcos, jcos: { ...jcos.jcos!, days: Object.fromEntries(D5.map((d) => [d, { notHeld: true }])) } };
+    expect(projectMoney(none, data).noStaff).toBe(false);
+    // 1 日でも配置を入れたら、印は外れる
+    const one = { ...jcos, jcos: { ...jcos.jcos!, days: { [D5[0]]: { partTimers: 1 } } } };
+    expect(projectMoney(one, data).noStaff).toBe(false);
     const off = { ...jcos, jcos: { ...terms(), enabled: false } };
     expect(isJcos(off)).toBe(false);
     expect(projectMoney(off, data)).toEqual({ jcos: false, revenue: e0.revenue, cost: e0.totalCost, profit: e0.profit });

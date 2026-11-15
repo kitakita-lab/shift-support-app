@@ -180,21 +180,15 @@ export interface Access {
  * email は小文字にそろえたもの（normalizeEmail）。
  */
 export async function checkAccess(email: string): Promise<Access> {
-  let member: Body | null = null;
-  let readable = true;
-  try {
-    member = await readDocServer(MEMBER_COLL, email);
-  } catch (e) {
-    if (errorCode(e) !== 'permission-denied') throw e;
-    readable = false;                             // 自分の登録状況すら読めない（メールが未確認のアカウントなど）
+  // 2 つの読み取りは、同時に送る（1 つずつ待つと、通信が遅いときに、確認の全体が時間切れになりやすい。
+  // 実機での確認で、1 回の読み取りに数秒かかる状況があった）。どちらも「権限が無い」は、答えのうち。それ以外の失敗は、確認できなかったものとして返す
+  const [memberRead, probeRead] = await Promise.allSettled([readDocServer(MEMBER_COLL, email), readDocServer(PROBE_COLL, PROBE_DOC)]);
+  for (const r of [memberRead, probeRead]) {
+    if (r.status === 'rejected' && errorCode(r.reason) !== 'permission-denied') throw r.reason;
   }
-  let enforced = true;
-  try {
-    await readDocServer(PROBE_COLL, PROBE_DOC);
-    enforced = false;                             // 何も許可されないはずの場所が読めた＝名簿による制限が無い
-  } catch (e) {
-    if (errorCode(e) !== 'permission-denied') throw e;
-  }
+  const member = memberRead.status === 'fulfilled' ? memberRead.value : null;
+  const readable = memberRead.status === 'fulfilled';      // false: 自分の登録状況すら読めない（メールが未確認のアカウントなど）
+  const enforced = probeRead.status !== 'fulfilled';       // 何も許可されないはずの場所が読めた＝名簿による制限が無い
   if (member) return { role: member.role === 'owner' ? 'owner' : 'member', enforced };
   return { role: !enforced && readable ? 'open' : 'none', enforced };
 }
@@ -277,9 +271,14 @@ export async function initFresh(defaults: PlannedDoc[], source: string, actor: A
 // ── 旧形式（V1・V2）からの移行 ─────────────────────────────────
 /** 旧形式のデータをすべて読む（読むだけ） */
 export async function readLegacy(): Promise<LegacyData> {
+  // マスタ 5 件と、案件の一覧は、同時に読む（1 つずつ待つと、通信が遅いときに、時間切れになる。まだ使い始めていないチームでは、どれも「無い」が返るだけ）
+  const [docs, list] = await Promise.all([
+    Promise.all(MASTER_KEYS.map((key) => readDocServer(LEGACY_DATA_COLL, key))),
+    readCollServer(LEGACY_PROJECT_COLL),
+  ]);
   const masters = {} as LegacyData['masters'];
-  for (const key of MASTER_KEYS) masters[key] = await readDocServer(LEGACY_DATA_COLL, key);
-  const projects = (await readCollServer(LEGACY_PROJECT_COLL)).map((d) => ({ id: d.id, doc: d.body }));
+  MASTER_KEYS.forEach((key, i) => { masters[key] = docs[i]; });
+  const projects = list.map((d) => ({ id: d.id, doc: d.body }));
   // 旧形式には並び順が無い（読むたびに ID 順）。作成が古い順に近づけるため、最終更新の古い順にそろえる
   projects.sort((a, b) => (Number(a.doc.updatedAt) || 0) - (Number(b.doc.updatedAt) || 0) || a.id.localeCompare(b.id));
   return { masters, projects };

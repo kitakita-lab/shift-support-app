@@ -344,7 +344,8 @@ add('J1', '収支の計算方法を JCOS 案件にすると、請求と実費を
   await setup(page);
   ok((await headProfit(page)) === '利益 ¥66,850', `切り替え前: ${await headProfit(page)}`);
   await toJcosBare(page);
-  eq(await headProfit(page), `粗利（管理上） ¥${J00.gross.toLocaleString('ja-JP')}`, '見出しの表示（アルバイトを配置する前）');
+  // アルバイトを配置していない間は、粗利のそばに「アルバイト代 0 円で計算」と出す（確定した実績と、取り違えないように）
+  eq(await headProfit(page), `粗利（管理上） ¥${J00.gross.toLocaleString('ja-JP')}（アルバイト代 0 円で計算）`, '見出しの表示（アルバイトを配置する前）');
   eq([await kv(page, '請求：人件費').inputValue(), await kv(page, '請求：材料費').inputValue(), await kv(page, '支払い：アルバイト代').inputValue(), await kv(page, '支払い：材料原価').inputValue()],
     ['30000', '10000', '15000', '220'], 'JCOS の条件の初期値');
   eq(await page.locator('table.kv tr', { hasText: '固定売上' }).count(), 0, 'JCOS 案件では、固定売上の欄を出さない');
@@ -353,11 +354,14 @@ add('J1', '収支の計算方法を JCOS 案件にすると、請求と実費を
   eq([bare.billing, bare.cost, bare.gross], [J00.billing, J00.cost, J00.gross], '配置する前の請求・実費・粗利（アルバイト代 0 円）');
   const nostaff = page.locator('[data-testid="jcos-nostaff"]');
   ok((await nostaff.innerText()).includes('どの日にも配置されていません'), `配置していないことの表示: ${await nostaff.innerText()}`);
+  const top = page.locator('[data-testid="jcos-nostaff-top"]');
+  ok((await top.innerText()).includes('アルバイト代は、0 円で計算しています') && (await top.innerText()).includes('確定した実績ではありません'), `粗利のすぐ下の注意: ${await top.innerText()}`);
+  ok((await page.locator('.cards .card--main .card__label').innerText()).includes('試算'), '粗利のカードに「試算」と出ること');
   ok((await page.locator('.cards').innerText()).replace(/\s+/g, ' ').includes('アルバイト 0 人日'), '人日の表示（0 人日）');
   eq(await dayRow(page, D[0]).locator('td[data-label="アルバイト"]').innerText().then((t) => t.replace(/\s+/g, '')), '−0人＋¥0', '日別の表（0 人・0 円）');
   // 「開催する 5 日すべてに 1 人ずつ入れる」で、毎日 1 人を配置する
   await page.locator('[data-testid="jcos-staff-all"]').click();
-  eq(await nostaff.count(), 0, '配置したあとは、案内を出さない');
+  eq([await nostaff.count(), await top.count(), await page.locator('[data-testid="pv-nostaff"]').count()], [0, 0, 0], '配置したあとは、案内・注意を出さない');
   await sheet(page, '基本情報');
   eq(await headProfit(page), `粗利（管理上） ¥${J0.gross.toLocaleString('ja-JP')}`, '見出しの表示（毎日 1 人を配置）');
   const j = await jcos(page);
@@ -668,6 +672,82 @@ add('F3', 'JCOS の条件・手入力の実績を含むバックアップを復�
   await page.waitForSelector('text=案件一覧');
   await openProject(page);
   eq(await jcos(page), before, '復元後の収支');
+});
+
+add('J10', 'JCOS 案件の一覧: アルバイトを配置していない間は、粗利のセルに注意の印（アルバイト代 0 円で計算）が出る。配置すると消える。汎用の案件には出ない', async ({ page }) => {
+  await setup(page);
+  await toJcosBare(page);
+  await back(page);
+  const cell = () => page.locator('.grid tbody tr', { hasText: '11/13' }).locator('td.is-warn');
+  eq(await cell().count(), 1, '注意の印の付いたセル（1 つ＝粗利）');
+  ok((await cell().getAttribute('title')).includes('アルバイト代を 0 円で計算しています') && (await cell().innerText()).includes('（粗利）'), `注意の内容: ${await cell().getAttribute('title')}`);
+  eq(await page.locator('.grid tbody tr', { hasText: 'デモ' }).locator('td.is-warn').count(), 0, '汎用の案件（デモ）には、付かない');
+  // 1 日でも配置を入れると、消える
+  await openProject(page);
+  await sheet(page, '試算');
+  await page.locator('[data-testid="jcos-staff-all"]').click();
+  await back(page);
+  eq(await cell().count(), 0, '配置したあとの、注意の印');
+});
+
+add('J11', 'スマホ幅の案件一覧: アルバイトを配置していない JCOS 案件のカードに「アルバイト代 0 円で計算」と出る', async ({ page }) => {
+  await setup(page);
+  await toJcosBare(page);
+  await back(page);
+  const card = page.locator('[data-testid="project-card"]', { hasText: '11/13' });
+  ok((await card.locator('[data-testid="pcard-nostaff"]').innerText()).includes('アルバイト代 0 円で計算'), 'カードの注意');
+  eq(await page.locator('[data-testid="project-card"]', { hasText: 'デモ' }).locator('[data-testid="pcard-nostaff"]').count(), 0, '汎用の案件のカードには、出ない');
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), '画面が横にはみ出さないこと');
+}, { phone: true });
+
+// S. 一覧に出す「状態」（会期中は「開催中」。保存してある状態は変えない） ─────────────────
+/** 端末の日付を決めて、読み込み直す（「今日」に依る表示を確かめるため。時計は進めず、日付だけを固定する） */
+async function onDay(page, ymd, hm = '12:00') {
+  await page.clock.setFixedTime(new Date(`${ymd}T${hm}:00+09:00`));
+  await page.reload();
+  await page.waitForSelector('text=案件一覧');
+}
+const listStatus = (page, what = '11/13') => page.locator('.grid tbody tr', { hasText: what }).innerText().then((t) => ['開催中', '計画中', '確定', '実施済', '中止'].filter((x) => t.includes(x)));
+async function setStatus(page, value) {
+  await openProject(page);
+  await page.locator('table.kv tr', { hasText: '状態' }).locator('select').selectOption({ label: value });
+  await back(page);
+}
+add('S1', '一覧の「状態」: 「確定」の案件は、会期中だけ「開催中」と出る（会期の前・あとは「確定」のまま。保存してある状態は変えない）。「計画中」「中止」・手で決めた「実施済」は、会期中でも、そのまま', async ({ page }) => {
+  await loadSample(page);                       // サンプルの案件（11/13〜11/17）は「計画中」
+  await onDay(page, '2026-11-14');
+  eq(await listStatus(page), ['計画中'], '計画中の案件（会期中）');
+  await setStatus(page, '確定');
+  eq(await listStatus(page), ['開催中'], '確定の案件（会期中）');
+  // 案件の画面では、保存してある状態（確定）のままで、一覧での表示の理由を添える
+  await openProject(page);
+  eq(await page.locator('table.kv tr', { hasText: '状態' }).locator('select').inputValue(), '確定', '保存してある状態');
+  ok((await page.locator('[data-testid="status-shown"]').innerText()).includes('会期中のため「開催中」と表示しています'), '表示の理由');
+  await back(page);
+  await onDay(page, '2026-11-12');
+  eq(await listStatus(page), ['確定'], '確定の案件（会期の前＝開催予定）');
+  await onDay(page, '2026-11-17');
+  eq(await listStatus(page), ['開催中'], '確定の案件（会期の最終日）');
+  await onDay(page, '2026-11-18');
+  eq(await listStatus(page), ['確定'], '確定の案件（会期のあと＝過去。実施済にするのは、利用者）');
+  // 日付の変わり目（日本時間の深夜・早朝）でも、端末の日付で決まる（世界標準時の日付に、ずれない）
+  await onDay(page, '2026-11-12', '23:30');
+  eq(await listStatus(page), ['確定'], '会期の前日の 23:30');
+  await onDay(page, '2026-11-13', '00:30');
+  eq(await listStatus(page), ['開催中'], '会期の初日の 0:30');
+  await onDay(page, '2026-11-17', '23:30');
+  eq(await listStatus(page), ['開催中'], '会期の最終日の 23:30');
+  await onDay(page, '2026-11-18', '00:30');
+  eq(await listStatus(page), ['確定'], '会期の翌日の 0:30');
+  // 手で決めた「実施済」「中止」は、会期中でも、そのまま
+  await onDay(page, '2026-11-14');
+  await setStatus(page, '実施済');
+  eq(await listStatus(page), ['実施済'], '手で「実施済」にした案件（会期中）');
+  await openProject(page);
+  eq(await page.locator('[data-testid="status-shown"]').count(), 0, '表示が同じときは、理由を出さない');
+  await back(page);
+  await setStatus(page, '中止');
+  eq(await listStatus(page), ['中止'], '中止の案件（会期中）');
 });
 
 // ── 実行 ────────────────────────────────────────────────────

@@ -317,6 +317,11 @@ export interface JcosEstimate {
   billDays: number;
   /** アルバイトの稼働（人日）。請求対象日数とは別に数える */
   partTimerDays: number;
+  /**
+   * 開催する日があるのに、アルバイトを 1 日も配置していない（＝アルバイト代を 0 円で計算している）。
+   * 粗利を、確定した実績と取り違えないよう、金額のそばに出す（一覧・見出し・試算で、同じ条件を使う）
+   */
+  noStaff: boolean;
   plannedCount: number;
   /** 実績のある日の個数の合計・日数 */
   actualCount: number;
@@ -510,6 +515,7 @@ export function jcosEstimate(p: Project, ctx?: JcosContext): JcosEstimate {
     heldDays: need.length,
     billDays: days.filter((l) => l.billed).length,
     partTimerDays: sum(days, (l) => l.partTimers),
+    noStaff: need.length > 0 && sum(days, (l) => l.partTimers) === 0,
     plannedCount,
     actualCount: sum(withActual, (l) => l.count),
     actualDays: withActual.length,
@@ -546,15 +552,20 @@ export function jcosExcluded(est: Estimate): { label: string; amount: number }[]
   ].filter((x) => x.amount !== 0);
 }
 
-/** 一覧・見出しに出す金額（JCOS 案件は 請求・実費・粗利、それ以外は従来の 売上・費用・利益） */
-export interface Money { jcos: boolean; revenue: number; cost: number; profit: number }
+/**
+ * 一覧・見出しに出す金額（JCOS 案件は 請求・実費・粗利、それ以外は従来の 売上・費用・利益）。
+ * noStaff … JCOS 案件で、開催する日があるのに、アルバイトを 1 日も配置していない（＝アルバイト代を 0 円で計算している）。
+ *           粗利を、確定した実績と取り違えないよう、金額のそばに出す
+ */
+export interface Money { jcos: boolean; revenue: number; cost: number; profit: number; noStaff?: boolean }
 export function projectMoney(
   p: Project, data: Pick<AppData, 'staff' | 'contents' | 'partTypes'> & Partial<ReportContext>, generic?: Estimate,
 ): Money {
   if (isJcos(p)) {
     const ctx = data.projects && data.venues ? { projects: data.projects, venues: data.venues, contents: data.contents } : undefined;
-    const t = jcosEstimate(p, ctx).current;
-    return { jcos: true, revenue: t.billing, cost: t.cost, profit: t.gross };
+    const j = jcosEstimate(p, ctx);
+    const t = j.current;
+    return { jcos: true, revenue: t.billing, cost: t.cost, profit: t.gross, noStaff: j.noStaff };
   }
   const e = generic ?? estimate(p, data);
   return { jcos: false, revenue: e.revenue, cost: e.totalCost, profit: e.profit };

@@ -1,7 +1,7 @@
 // マスタ画面（スタッフ／会場／コンテンツ／パーツ）。すべて表計算風グリッドで直接編集する。
 import { useState } from 'react';
 import { unitMaterialCost } from '../domain/calc';
-import { venueKey, venueKeys } from '../domain/report';
+import { registeredElsewhere, venueKey, venueKeys } from '../domain/report';
 import { looseVenueKey } from '../domain/reportImport';
 import { newVenue } from '../domain/seed';
 import { genId, yen } from '../domain/util';
@@ -58,6 +58,15 @@ export function VenueMaster({ data, setMaster }: Props) {
     }
     return undefined;
   };
+  // 別名に、ほかの会場の会場名・別名と同じ名前を入れていないか。入れると、別の会場の日報が、この会場の案件の実績に混ざる
+  // （同じ日に両方の会場の案件があれば、どちらの実績か決まらなくなる）。禁止はせず、入れた欄に、理由を示す
+  const aliasWarn = (v: Venue): string | undefined => {
+    for (const n of v.reportNames ?? []) {
+      const other = registeredElsewhere(n, v.id, data.venues);
+      if (other) return `別名「${n.trim()}」は、別の会場「${other.name.trim() || '（名称未設定の会場）'}」の会場名（または別名）と同じです。別の会場なら、この欄から消してください（別の会場の日報が、この会場の案件の実績に混ざります）`;
+    }
+    return undefined;
+  };
   const cols: Col<Venue>[] = [
     { key: 'name', title: '会場名', width: 220, get: (v) => v.name, set: (v, x) => ({ ...v, name: x }), warn: nameWarn },
     { key: 'feeFixed', title: '会場費 固定(円)', width: 120, type: 'number', get: (v) => v.feeFixed, set: (v, x) => ({ ...v, feeFixed: n0(x) }) },
@@ -70,6 +79,7 @@ export function VenueMaster({ data, setMaster }: Props) {
       get: (v) => (v.reportNames ?? []).join('｜'),
       set: (v, x) => ({ ...v, reportNames: x === '' ? [] : x.split('｜') }),
       placeholder: () => '会場名と同じなら空欄',
+      warn: aliasWarn,
     },
     { key: 'memo', title: 'メモ', width: 280, get: (v) => v.memo, set: (v, x) => ({ ...v, memo: x }) },
   ];

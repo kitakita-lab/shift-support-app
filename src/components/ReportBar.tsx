@@ -6,7 +6,10 @@
 // 同じ案件の同期が重なって、古い結果が新しい実績を上書きすることがない。
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { contestedReportDays, findReportSource, openOutside, parseSheetUrl, rivalClaimedDates, syncStaleness, unmatchedGaps, usableReportDays, venueKey, widenTarget } from '../domain/report';
+import {
+  checkAlias, classifyUnmatched, contestedReportDays, findReportSource, openOutside, parseSheetUrl, rivalClaimedDates, syncStaleness, unmatchedGaps, usableReportDays,
+  venueKey, widenTarget,
+} from '../domain/report';
 import { dateRanges, totalsOf } from '../domain/reportImport';
 import { shortDate } from '../domain/util';
 import { firebaseOffReason, isFirebaseConfigured } from '../firebase';
@@ -15,7 +18,7 @@ import { lastFailure, loadSource, recordSyncResult } from '../report/records';
 import { fetchReportRows } from '../report/sheets';
 import { failureIsCurrent } from '../report/sync';
 import { abandonSync, isSyncRunning, startSyncJob, subscribeSyncJobs, syncJobsVersion, syncKey, syncRunningSince } from '../report/syncJob';
-import { AppData, Project, ReportSkipReason, ReportSource, ReportSync, Venue } from '../types';
+import { AppData, Project, ReportSkipReason, ReportSource, ReportSync, ReportUnmatched, Venue } from '../types';
 
 interface Props {
   project: Project;
@@ -51,18 +54,25 @@ function stamp(iso: string): string {
 const dates = (ds: string[]): string => ds.map(shortDate).join('・');
 /** 日付の一覧を、連続する範囲にまとめて書く（11/13(金)〜11/14(土)・11/16(月)） */
 const ranges = (ds: string[]): string => dateRanges(ds).map(([a, b]) => (a === b ? shortDate(a) : `${shortDate(a)}〜${shortDate(b)}`)).join('・');
-/** 確認が必要なものの数（保留の日・読み取れない回答・実績の無い日にある、別の会場名の回答・会期のすぐ外にある回答。outside … その日数） */
-const attention = (s: ReportSync | undefined, outside: number): number => (s ? s.held.length + s.skipped.length + unmatchedGaps(s).length + (outside > 0 ? 1 : 0) : 0);
 /**
- * 取り込めていない回答がある日（保留の日・この案件の実績が無い日にある、別の会場名の回答の日・会期のすぐ外の回答の日）。
- * 日数として数える（同じ日に、複数の理由が重なっても 1 日）。
+ * 確認が必要なものの数（保留の日・読み取れない回答・この会場の別の書き方かもしれない回答・実績の無い日にある、未登録の会場名の回答・
+ * 会期のすぐ外にある回答。outside … その日数）。ほかの会場として登録済みの会場名の回答は、数えない（別の会場の、ふつうの開催）。
  */
-function pendingDates(s: ReportSync | undefined, outside: string[]): Set<string> {
+const attention = (s: ReportSync | undefined, outside: number, venues: Venue[], venueId?: string): number =>
+  (s ? s.held.length + s.skipped.length + unmatchedGaps(s, venues, venueId).length + (outside > 0 ? 1 : 0) : 0);
+/**
+ * 取り込めていない回答がある日（保留の日・この会場の別の書き方かもしれない回答の日・この案件の実績が無い日にある、未登録の会場名の回答の日・
+ * 会期のすぐ外の回答の日）。日数として数える（同じ日に、複数の理由が重なっても 1 日）。
+ */
+function pendingDates(s: ReportSync | undefined, outside: string[], venues: Venue[], venueId?: string): Set<string> {
   const out = new Set<string>(outside);
   if (!s) return out;
   for (const h of s.held) out.add(h.date);
   const have = new Set([...s.days.map((d) => d.date), ...s.held.map((h) => h.date)]);
-  for (const u of unmatchedGaps(s)) for (const d of u.dates) if (!have.has(d)) out.add(d);
+  const { candidates, others } = classifyUnmatched(s, venues, venueId);
+  // 別名の候補は、この会場の回答かもしれない（記号だけが違う名前は、この案件の実績のある日のものも、取り込めていない回答として数える）
+  for (const u of candidates) for (const d of u.dates) out.add(d);
+  for (const u of others) if (u.gap && !u.registered) for (const d of u.dates) if (!have.has(d)) out.add(d);
   return out;
 }
 
@@ -80,6 +90,9 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
   const [url, setUrl] = useState('');
   const [urlError, setUrlError] = useState('');
   const [slow, setSlow] = useState(false);
+  // 別名として登録する前の確認（確かめている名前）。押すと、すぐには登録せず、対象と影響を示す。登録するのは、確認のボタンを押したとき
+  const [aliasAsk, setAliasAsk] = useState<string | null>(null);
+  useEffect(() => { setAliasAsk(null); }, [p.id]);
 
   const sync = p.reportSync;
   // 失敗の記録は、そのあとで同期の結果が新しくなっていたら（ほかの端末で同期が成功した）、出さない
@@ -110,7 +123,9 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
   const canSync = isFirebaseConfigured && !!user;
   const needsSource = !known?.spreadsheetId || editing;
   const total = sync ? sync.days.reduce((s, d) => s + d.count, 0) : 0;
-  const gaps = unmatchedGaps(sync);
+  // 会場名が一致しなかった回答（会期内）を、「この会場の別の書き方かもしれないもの」と「別の会場の回答」に分ける
+  // （同期のあとで、案件の会場を変えた場合は、どちらも出さない。もう一度同期してから）
+  const unmatched = classifyUnmatched(sync, data.venues, p.venueId);
   // 同期した実績のうち、いまは使っていない日（同期のあとで、会期が重なる案件が増えた・決定が変わった）
   const contested = contestedReportDays(p, data);
   // この案件が「自分の実績にする」と決めている日。決めているのに使えていない日は、相手の案件も同じ日を決めている
@@ -119,7 +134,7 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
   const assigned = contested.filter((h) => h.state === 'theirs');
   // 会期のすぐ外にある、この会場の回答（同期のときの記録のうち、いまも、どの案件の会期にも入っていない日のもの）
   const outside = openOutside(p, data);
-  const notes = attention(sync, outside.length) + undecided.length + (stale.venue || stale.period || stale.names ? 1 : 0) + (failure ? 1 : 0) + (conflicts.length > 0 ? 1 : 0);
+  const notes = attention(sync, outside.length, data.venues, p.venueId) + undecided.length + (stale.venue || stale.period || stale.names ? 1 : 0) + (failure ? 1 : 0) + (conflicts.length > 0 ? 1 : 0);
   // 相手の案件が「自分の実績にする」と決めている日／中止の案件か（中止の案件は、重なる日の実績を自分のものにできない）
   const theirClaims = rivalClaimedDates(p, data);
   const cancelled = p.status === '中止';
@@ -159,13 +174,13 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
    * 同期の完了は、あとから届く。そのとき、この画面が閉じられていても、端末に置く記録と案件への書き込みは行う
    * （画面の状態を変える setOpen などは、閉じた画面には効かない。開き直した画面は、記録を読み直す）。
    */
-  const run = (opt: { project?: Project; venues?: Venue[]; source?: ReportSource | null; period?: { startDate: string; endDate: string } } = {}) => {
+  const run = (opt: { project?: Project; venues?: Venue[]; source?: ReportSource | null; period?: { startDate: string; endDate: string }; allowClear?: boolean } = {}) => {
     const project = opt.project ?? p;
     const source = opt.source ?? known;
     // startSyncJob は、最初に（何も待たずに）認証を呼ぶ。ここはボタンのタップの中なので、Google の画面が止められない
     void startSyncJob(
       key,
-      { project, projects: data.projects.map((x) => (x.id === project.id ? project : x)), venues: opt.venues ?? data.venues, source, period: opt.period },
+      { project, projects: data.projects.map((x) => (x.id === project.id ? project : x)), venues: opt.venues ?? data.venues, source, period: opt.period, allowClear: opt.allowClear },
       { token: requestSheetsToken, rows: fetchReportRows, now: () => new Date().toISOString(), forget: forgetSheetsToken },
       {
         current,
@@ -177,7 +192,7 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
           if (r.kind === 'applied') {
             setEditing(false);
             setUrl('');
-            setOpen(attention(r.outcome.sync, r.outcome.sync.outside?.length ?? 0) > 0);
+            setOpen(attention(r.outcome.sync, r.outcome.sync.outside?.length ?? 0, data.venues, r.outcome.sync.venueId) > 0);
           } else {
             setOpen(true);                             // 開き直した画面では、上の useEffect が開く
           }
@@ -186,12 +201,18 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
     );
   };
 
-  const start = () => {
-    if (!needsSource) { run(); return; }
+  /**
+   * allowClear … 前回の実績が、すべて外れることになる結果でも書く（「前回の実績を外す」を押したとき。押さない限り、そのような結果は書かない）。
+   * そのときは、確認を求めた同期が読んだ日報を、読み直す（URL を入力し直している最中なら、入力してある URL）。
+   */
+  const start = (allowClear = false) => {
+    // 「前回の実績を外す」: URL を入力し直している最中（入力がある）でなければ、確認を求めた同期が読んだ日報を、読み直す
+    if (allowClear && failure?.clear?.source && !(editing && url.trim())) { run({ allowClear, source: failure.clear.source }); return; }
+    if (!needsSource) { run({ allowClear }); return; }
     const src = parseSheetUrl(url);
     if (!src) { setUrlError('スプレッドシートの URL（https://docs.google.com/spreadsheets/d/… で始まるもの）を貼り付けてください。'); setOpen(true); return; }
     setUrlError('');
-    run({ source: src });
+    run({ source: src, allowClear });
   };
   const claim = (ds: string[]) => {
     if (isSyncRunning(key)) return;                    // 同期中は、決定を変えない（決定だけが保存されて、同期が始まらないのを防ぐ）
@@ -207,10 +228,17 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
     onChange((cur) => ({ ...cur, reportClaims: next }));
     run({ project: { ...p, reportClaims: next } });
   };
-  const addAlias = (name: string) => {
+  // 別名の登録は、会場マスタを変える（この会場を使う、ほかの案件の照合にも効く）。別の会場を誤ってまとめないよう、
+  // 1 回目のタップでは登録せず、対象と影響を示す（aliasAsk）。登録するのは、確認のボタンを押したとき。
+  // 確認を、ブラウザのダイアログ（window.confirm）にしないのは、そのあとで Google の確認画面（ポップアップ）を開くことがあるため
+  // （ポップアップは、タップの処理の中で、何も待たずに開く必要がある。ダイアログを読んでいる間に、ブラウザが「利用者の操作」とみなさなくなることがある）。
+  const addAlias = (u: ReportUnmatched) => {
+    setAliasAsk(null);
     if (!venue || isSyncRunning(key)) return;
-    onAddVenueAlias(venue.id, name);
-    const names = [...new Set([...(venue.reportNames ?? []), name])];
+    // 登録の直前にも確かめる（ほかの会場として登録済みの名前・根拠の無い名前・ほかの会場にも同じ根拠がある名前は、登録しない）
+    if (!checkAlias(u.venue, venue.id, data.venues).ok) return;
+    onAddVenueAlias(venue.id, u.venue);
+    const names = [...new Set([...(venue.reportNames ?? []), u.venue])];
     run({ venues: data.venues.map((v) => (v.id === venue.id ? { ...v, reportNames: names } : v)) });
   };
   // 会期のすぐ外にある、この会場の回答を取り込むための、広げたあとの会期（回答の無い日を挟むときは、その日は「開催していない日」になる）
@@ -230,12 +258,12 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
   const people = tot && tot.days > 0 ? `${tally('組数', tot.groups, tot.groupsMissing)}・${tally('人数', tot.people, tot.peopleMissing)}` : '';
   const span = sync && sync.days.length > 0 ? ranges(sync.days.map((d) => d.date)) : '';
   // 取り込めていない回答がある日数と、手入力と日報が違う日数（どちらも 0 なら「なし」と出す）
-  const waiting = pendingDates(sync, outside.map((o) => o.date));
+  const waiting = pendingDates(sync, outside.map((o) => o.date), data.venues, p.venueId);
   for (const h of undecided) waiting.add(h.date);
   const nPending = waiting.size;
   // 「未反映・競合なし」と出すのは、最後の同期が成功していて、同期のあとで条件（会場・会期・会場名）も変わっていないときだけ
   const outcome = !sync ? ''
-    : failure ? '最後の同期は失敗（実績は、前回のまま）'
+    : failure ? (failure.clear ? '最後の同期は、反映していません（確認が必要です。実績は、前回のまま）' : '最後の同期は失敗（実績は、前回のまま）')
       : stale.venue || stale.period || stale.names ? '同期のあとで、会場か会期が変わっています（もう一度同期してください）'
         : nPending + conflicts.length === 0 ? '未反映・競合なし'
           : [nPending > 0 ? `未反映 ${nPending} 日` : '', conflicts.length > 0 ? `競合 ${conflicts.length} 日` : ''].filter(Boolean).join('・');
@@ -255,13 +283,13 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
   }
 
   return (
-    <div className={`reportbar${failure ? ' reportbar--error' : notes > 0 ? ' reportbar--warn' : ''}`} data-testid="report-bar" data-busy={busy ? '1' : '0'}>
+    <div className={`reportbar${failure && !failure.clear ? ' reportbar--error' : notes > 0 ? ' reportbar--warn' : ''}`} data-testid="report-bar" data-busy={busy ? '1' : '0'}>
       <div className="reportbar__main">
-        <button className="primary" onClick={start} disabled={busy || !canSync} data-testid="report-sync">{busy ? '同期中…' : '日報を同期'}</button>
+        <button className="primary" onClick={() => start()} disabled={busy || !canSync} data-testid="report-sync">{busy ? '同期中…' : '日報を同期'}</button>
         {busy && slow && <button onClick={() => abandonSync(key)} data-testid="report-stop">同期をやめる</button>}
         <span className="reportbar__status" data-testid="report-status">{summary}</span>
         <button className="reportbar__more" onClick={() => setOpen((v) => !v)} data-testid="report-toggle">
-          {failure ? '✕ 同期できませんでした' : notes > 0 ? `⚠ 確認 ${notes} 件` : '詳細'} {open ? '▲' : '▼'}
+          {failure ? (failure.clear ? '⚠ 確認が必要です' : '✕ 同期できませんでした') : notes > 0 ? `⚠ 確認 ${notes} 件` : '詳細'} {open ? '▲' : '▼'}
         </button>
       </div>
 
@@ -289,11 +317,17 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
 
       {open && (
         <div className="reportbar__detail" data-testid="report-detail">
-          {failure && (
+          {failure && !failure.clear && (
             <p className="neg" data-testid="report-error">
               ✕ {stamp(failure.at)} の同期は失敗しました：{failure.message}
               {sync ? `（前回 ${stamp(sync.at)} の実績 ${sync.days.length} 日分・${total} 個は、そのまま残しています）` : ''}
             </p>
+          )}
+          {failure?.clear && (
+            <div className="reportbar__item" data-testid="report-clear">
+              <p>⚠ {stamp(failure.at)} の同期は、<b>反映していません</b>：{failure.message}</p>
+              <button onClick={() => start(true)} disabled={busy || !canSync} data-testid="report-clear-go">前回の実績を外す（日報の内容にする）</button>
+            </div>
           )}
           {failure?.issues && failure.issues.length > 0 && (
             <ul className="plain neg" data-testid="report-issues">
@@ -376,21 +410,59 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
                   )}
                 </div>
               )}
-              {sync.unmatched.length > 0 && (
+              {unmatched.candidates.length > 0 && (
                 <div className="reportbar__item" data-testid="report-unmatched">
                   <p>
-                    会期内に、別の会場名の日報があります（<b>取り込んでいません</b>）。別の会場のイベントなら、そのままで構いません。
-                    この案件の会場の別の書き方なら、別名として登録すると取り込めます：
+                    会期内に、この会場の別の書き方かもしれない回答があります（<b>取り込んでいません</b>）。
+                    同じ会場なら、別名として登録すると取り込めます。別の会場なら、そのままで構いません：
                   </p>
                   <ul className="plain">
-                    {sync.unmatched.map((u) => (
-                      <li key={u.venue}>
-                        {gaps.includes(u) ? '⚠ ' : ''}「{u.venue}」{u.rows} 件・{u.count} 個（{dates(u.dates)}）
-                        {gaps.includes(u) ? '：この案件の実績が無い日の回答です ' : ' '}
-                        {venue && <button className="cellbtn cellbtn--wide" onClick={() => addAlias(u.venue)} disabled={busy || !canSync}>「{venue.name}」の別名として登録して同期</button>}
+                    {unmatched.candidates.map((u) => (
+                      <li key={u.venue} data-evidence={u.evidence}>
+                        ⚠ 「{u.venue}」{u.rows} 件・{u.count} 個（{dates(u.dates)}）：
+                        {u.evidence === 'variant' ? '会場名と、記号・空白だけが違います ' : '会場名の一部が同じで、この案件の実績が無い日の回答です '}
+                        {venue && aliasAsk !== u.venue && (
+                          <button className="cellbtn cellbtn--wide" onClick={() => setAliasAsk(u.venue)} disabled={busy || !canSync}>「{venue.name}」の別名として登録して同期…</button>
+                        )}
+                        {venue && aliasAsk === u.venue && (
+                          <div className="reportbar__confirm" data-testid="report-alias-confirm">
+                            <p><b>「{u.venue}」を、会場「{venue.name}」の別名として登録します。まだ登録していません。</b></p>
+                            <ul className="plain">
+                              <li>登録すると、「{u.venue}」と書かれた回答（{dates(u.dates)}・{u.rows} 件・{u.count} 個）が、この案件の実績に入ります。</li>
+                              <li>会場「{venue.name}」を使う、ほかの案件でも、この書き方の回答を取り込むようになります。</li>
+                              <li><b>別の会場の回答の場合は、登録しないでください</b>（別の会場の実績が混ざります）。</li>
+                              <li>取り消すには、「会場」タブで、この別名を消してから、もう一度同期します。</li>
+                            </ul>
+                            <button className="primary" onClick={() => addAlias(u)} disabled={busy || !canSync} data-testid="report-alias-go">同じ会場なので、登録して同期する</button>{' '}
+                            <button onClick={() => setAliasAsk(null)} data-testid="report-alias-cancel">やめる</button>
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+              {unmatched.others.length > 0 && (
+                <div className="reportbar__item" data-testid="report-others">
+                  <p>
+                    同じ期間に、ほかの会場の回答があります（別の会場の開催として扱い、<b>この案件には取り込みません</b>）：
+                  </p>
+                  <ul className="plain">
+                    {unmatched.others.map((u) => (
+                      <li key={u.venue} data-registered={u.registered ? '1' : '0'} data-gap={u.gap ? '1' : '0'}>
+                        {!u.registered && u.gap ? '⚠ ' : ''}「{u.venue}」{u.rows} 件・{u.count} 個（{dates(u.dates)}）
+                        {u.registered ? '：登録済みの、別の会場です'
+                          : u.similar ? `：会場「${u.similar}」にも似た名前です（どの会場の回答か、名前からは決められません）`
+                            : u.gap ? '：未登録の会場名で、この案件の実績が無い日の回答です' : ''}
+                      </li>
+                    ))}
+                  </ul>
+                  {unmatched.others.some((u) => !u.registered && u.gap) && (
+                    <p className="hint">
+                      ⚠ の回答が、この会場の別の書き方の場合は、「会場」タブで、この会場の「日報での会場名（別名）」に登録してから、もう一度同期してください。
+                      別の会場なら、そのままで構いません（案件一覧の「日報から案件を作成・更新」で、その会場の案件になります）。
+                    </p>
+                  )}
                 </div>
               )}
               {sync.skipped.map((s) => (
@@ -410,7 +482,7 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
           {canSync && known?.spreadsheetId && !editing && (
             <p className="reportbar__hint">日報の場所：設定済み <button className="cellbtn cellbtn--wide" onClick={() => setEditing(true)} data-testid="report-change">変更</button></p>
           )}
-          <p className="reportbar__hint">同期は、この案件の実績を日報の内容で置き換えます（何度押しても二重には数えません）。日報に読み取れない回答があるときは、取り込みを中止します（前回の実績を残します）。日報そのものは変更しません。</p>
+          <p className="reportbar__hint">同期は、この案件の実績を日報の内容で置き換えます（何度押しても二重には数えません）。日報に読み取れない回答があるとき・この案件の回答が 1 件も無くなったときは、取り込まずに止めます（前回の実績を残します）。日報そのものは変更しません。</p>
         </div>
       )}
     </div>

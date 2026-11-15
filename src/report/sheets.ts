@@ -27,6 +27,7 @@ export type ReportErrorCode =
   | 'wrong-account'  // 認証の画面で、別のアカウントを選んだ
   | 'setup'          // 案件の会場・会期が決まっていない／日報の場所が決まっていない
   | 'bad-rows'       // 日報に、読み取れない回答がある（取り込みを中止した。どの回答かは、同期の結果の issues）
+  | 'confirm-clear'  // 前回の実績が、すべて外れることになる（書かずに止めた。失敗ではなく、利用者の確認待ち。report/sync.ts の clearedBySync）
   | 'unknown';
 
 export class ReportError extends Error {

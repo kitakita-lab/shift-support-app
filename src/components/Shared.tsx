@@ -117,6 +117,12 @@ export function SharedPhasePanel({ shared, session, onUseLocal }: { shared: Shar
           <div className="panel__title">共有データは、まだ用意されていません</div>
           <p>このチームの共有データを使い始めますか？ 始めると、共有側にパーツと組み合わせ配置の初期値が作られ、メンバーが案件やマスタを登録できるようになります。</p>
           <p className="hint">ボタンを押すまで、共有側には何も書き込みません。「この端末だけのデータ」は、これまでどおり使えます。</p>
+          {IS_VERIFY_BUILD && (
+            <p className="hint" data-testid="init-verify-note">
+              検証用ビルドです。使い始めると、検証用の場所（{TEAM_ID}）にだけ、初期値を作ります。通常の共有データ（{DEFAULT_TEAM_ID}）は、読み書きしません。
+              検証用の場所を使うかどうかは、管理者の判断です（使わない場合は、「この端末だけのデータ」で確かめられます）。
+            </p>
+          )}
           {shared.error && <p className="neg" data-testid="shared-error">{shared.error}</p>}
           <div className="panel__btns">
             <button className="primary" data-testid="init-shared" disabled={!!shared.job} onClick={() => void session?.startFresh()}>{shared.job || '共有データを使い始める'}</button>

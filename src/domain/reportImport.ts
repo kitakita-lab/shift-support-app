@@ -18,6 +18,7 @@ import { defaultJcos, markNotHeld } from './jcos';
 import {
   FIRST_ANSWER_ROW, NEAR_GAP_DAYS, RawReportRow, ReportIssue, dateProblem, fittedPeriod, hasAutoPeriod, isBlankRow, isCancelled, isTestRow, parseReportDate, periodLabel,
   planProjectSync, planReportSync, reportVenue, text, venueKey, venueKeys, venueProblem, widenTarget,
+  looseVenueKey,
 } from './report';
 import { newProject, newVenue } from './seed';
 import { MAX_DAYS, dateOfDay, dayNumber, genId, listDates } from './util';
@@ -208,10 +209,8 @@ export function groupRuns(runs: ReportRun[], joins: ReadonlySet<string>): Import
 }
 
 // ── 会場マスタとの照合 ─────────────────────────────────────────
-/** 記号・括弧・区切りを除いた会場名（「記号だけが違う」会場を見つけるため。照合そのものには使わない） */
-export function looseVenueKey(s: unknown): string {
-  return venueKey(s).replace(/[\p{P}\p{S}]/gu, '');
-}
+// 記号・括弧・区切りを除いた会場名（looseVenueKey）は、report.ts にある（案件ごとの同期でも、同じ見分け方を使うため）
+export { looseVenueKey };
 
 export type VenueMatch =
   /** 登録済みの会場（会場名か別名が、日報の会場名と同じ）。others … 同じ名前で登録されている、ほかの会場の数 */

@@ -6,8 +6,9 @@
 //   - Sheets API: ブラウザから https://sheets.googleapis.com/ への通信を横取りし、テストが持っている表から応答を作る
 // ここで確かめられないもの: 実際の Google の確認画面（未審査アプリの警告・許可のチェック）、Sheets API の有効化、
 //   実際の日報の閲覧権限。これらは、実環境での確認事項として残る。
+import { loadPlaywright } from '../playwright.mjs';
 import {
-  LEGACY_COLLS, V3_COLLS, add, admin, createProject, eq, loadSample, notices, ok, openProject, runFile, sheet, signIn, signOut, sleep, space, startApp, tab,
+  LEGACY_COLLS, V3_COLLS, add, admin, browser, createProject, eq, loadSample, notices, ok, openProject, runFile, sheet, signIn, signOut, sleep, space, startApp, tab,
   until, TEAM,
 } from './lib.mjs';
 
@@ -233,7 +234,7 @@ add('R3', '同じ日報を何度同期しても、実績は同じ（二重計上
   eq(await jcos(a), first, '再読み込み後の収支');
 });
 
-add('R4', '日報が修正・削除・追加されたら、次の同期で実績が置き換わる', async ({ device: mk }) => {
+add('R4', '日報が修正・削除・追加されたら、次の同期で実績が置き換わる（回答が一部だけ無くなった場合。1 件も無くなった場合は、R29）', async ({ device: mk }) => {
   const { a, sheets } = await prepare(mk);
   await syncNow(a, SHEET_URL);
   eq((await jcos(a)).actual, 120, '最初の実績');
@@ -247,9 +248,11 @@ add('R4', '日報が修正・削除・追加されたら、次の同期で実績
   eq(await jcos(a), { billing: 120000, cost: 120 * 220, gross: gross(120), actual: 120, basis: 'mixed' }, '修正後の収支（70 ＋ 50 個）');
   eq(days(await until(() => projectDoc('秋の花まつり'), (p) => p?.reportSync?.days?.[0]?.count === 70)), [['2026-11-13', 70, 1], ['2026-11-15', 50, 2]], '共有データの実績');
   ok((await detail(a)).includes('11/15(日) 50 個（2 件の合計）'), `複数の回答を合算した日の表示: ${await detail(a)}`);
-  sheets.rows = [];                                                // 回答がすべて消えた
+  // 残りが 1 件になっても、置き換える（止めるのは、1 件も無くなったときだけ）
+  sheets.rows = [answer(serial('2026-11-15'), CENTER, 6)];
   await syncNow(a);
-  eq(await jcos(a), { billing: 120000, cost: 0, gross: gross(0), actual: 0, basis: 'planned' }, '回答がすべて消えたあと');
+  eq(await jcos(a), { billing: 120000, cost: 6 * 220, gross: gross(6), actual: 6, basis: 'mixed' }, '回答が 1 件だけになったあと');
+  eq(await a.locator('[data-testid="report-clear"]').count(), 0, '確認は求めない（回答が残っている）');
 });
 
 add('R5', '同期に失敗したときは、前回の実績を消さずに残し、失敗の内容を表示する（通信エラー・権限なし・API が無効・認証切れ・見出しの不一致・見出しの重複）', async ({ device: mk }) => {
@@ -293,25 +296,47 @@ add('R5', '同期に失敗したときは、前回の実績を消さずに残し
   eq(await jcos(a), good, '成功後の収支');
 });
 
-add('R6', '会場名の書き方が違う回答は取り込まない。「別名として登録して同期」を押すと、その書き方の回答も取り込む（明示的な対応づけ）', async ({ device: mk }) => {
-  const { a, sheets } = await prepare(mk);
+add('R6', '会場名の書き方が違う回答は取り込まない。同じ会場だと言える根拠のある書き方にだけ「別名として登録して同期」が出て、押すと、画面の中で、対象と影響を確かめる。確認のボタンを押したときだけ登録して、その書き方の回答も取り込む（明示的な対応づけ）', async ({ device: mk }) => {
+  const { A, a, sheets } = await prepare(mk);
   sheets.rows = [
     answer(serial('2026-11-13'), CENTER, 62),
-    answer(serial('2026-11-14'), 'その他', 58, '北街モール1F 中央広場'),   // 自由入力の、別の書き方
+    answer(serial('2026-11-14'), 'その他', 58, '北街モール1F 中央広場'),   // 自由入力の、別の書き方（会場名に、文字を書き足した形）
     answer(serial('2026-11-14'), '北街モール', 9),                          // 名前の一部だけ（別の場所かもしれない）
     answer(serial('2026-11-15'), '北街モール(中央広場) ', 30),              // 半角かっこ・末尾の空白（同じ会場とみなす）
   ];
   await syncNow(a, SHEET_URL);
   eq((await jcos(a)).actual, 92, '全角/半角・空白の違いだけの回答は取り込む（62 ＋ 30）');
-  const item = a.locator('[data-testid="report-unmatched"] li', { hasText: '北街モール1F 中央広場' });
+  const item = a.locator('[data-testid="report-unmatched"] li[data-evidence]', { hasText: '北街モール1F 中央広場' });
   ok((await item.innerText()).replace(/\s+/g, ' ').includes('1 件・58 個（11/14(土)）'), `一致しない回答の表示: ${await item.innerText()}`);
+  eq(await item.getAttribute('data-evidence'), 'short', '候補にした根拠（会場名に、文字を書き足した形で、この案件の実績が無い日の回答）');
+  const aliases = async () => (await admin.list(`${T}/wsVenues`)).find((v) => v.name === CENTER).reportNames ?? [];
+  // 押しても、すぐには登録しない。対象と影響を、画面の中に示して、確認する（ブラウザのダイアログは使わない: そのあとで、Google の確認画面を開けなくなることがあるため）
+  A.dialogs.length = 0;
   await item.getByRole('button', { name: /別名として登録して同期/ }).click();
+  const ask = item.locator('[data-testid="report-alias-confirm"]');
+  const askText = (await ask.innerText()).replace(/\s+/g, ' ');
+  ok(askText.includes(`「北街モール1F 中央広場」を、会場「${CENTER}」の別名として登録します。まだ登録していません`) && askText.includes('11/14(土)・1 件・58 個')
+    && askText.includes('別の会場の回答の場合は、登録しないでください') && askText.includes('ほかの案件でも'), `確認の表示（対象と影響）: ${askText}`);
+  eq(A.dialogs.length, 0, 'ブラウザのダイアログ（出ていないこと）');
+  await sleep(SETTLE_MS);
+  eq([await aliases(), (await jcos(a)).actual, await busy(a)], [[], 92, '0'], '確認を出しただけの時点（別名は増えない・実績は変わらない・同期は始まらない）');
+  // 「やめる」なら、何も変わらない
+  await ask.locator('[data-testid="report-alias-cancel"]').click();
+  eq(await item.locator('[data-testid="report-alias-confirm"]').count(), 0, '「やめる」のあと、確認が閉じること');
+  await sleep(SETTLE_MS);
+  eq([await aliases(), (await jcos(a)).actual], [[], 92], '「やめる」のあと（別名は増えない・実績は変わらない）');
+  // もう一度押して、確認のボタンを押したときだけ、登録して同期する
+  await item.getByRole('button', { name: /別名として登録して同期/ }).click();
+  await item.locator('[data-testid="report-alias-go"]').click();
   await until(() => busy(a), (b) => b === '0', 10000);
   eq((await until(() => jcos(a), (j) => j.actual === 150)).actual, 150, '別名を登録したあとの実績（62 ＋ 58 ＋ 30）');
   const venue = await until(async () => (await admin.list(`${T}/wsVenues`)).find((v) => v.name === CENTER), (v) => (v?.reportNames ?? []).length > 0);
   eq(venue.reportNames, ['北街モール1F 中央広場'], '会場マスタの別名');
-  // 名前の一部だけの回答は、登録しない限り取り込まれない
+  // 名前の一部だけの回答は、登録しない限り取り込まれない。その日（11/14）に、この案件の実績が入ったので、別名の候補からは外れる
+  // （同じ日の、別の場所の開催とみなす。ボタンは出ない）
   ok((await detail(a)).includes('「北街モール」1 件・9 個'), `残っている一致しない回答: ${await detail(a)}`);
+  eq(await a.locator('[data-testid="report-unmatched"]').count(), 0, '別名の候補（残っていないこと）');
+  eq(await a.locator('[data-testid="report-bar"]').getByRole('button', { name: /別名として登録/ }).count(), 0, '「別名として登録」のボタン（出ていないこと）');
   // 会場マスタの画面でも、別名を確認・編集できる
   await tab(a, '会場');
   eq(await a.locator('[data-c="reportNames"]').first().inputValue(), '北街モール1F 中央広場', '会場マスタの別名の欄');
@@ -850,6 +875,194 @@ add('R20', '同期の途中でログアウトしたとき、あとから届い�
   ok(!(await toggleText(a)).includes('同期できませんでした'), `知らせは消える: ${await toggleText(a)}`);
 });
 
+// ── 実機での確認（2026-11-16）で見つかった場面 ──────────────────────
+// 同じ日に、別の会場でも開催していた。その回答に「（この案件の会場）の別名として登録して同期」が出ていて、押すと、別の会場の個数が混ざるところだった。
+add('R26', '同じ日に、登録済みの別の会場の回答がある: 別の会場の開催として扱う。「別名として登録」は出ない・確認の印も付かない・別の会場の個数は入らない', async ({ device: mk }) => {
+  const SOUTH = '南港アウトレット ゲート前';
+  const { a, sheets } = await prepare(mk);
+  await addVenue(a, SOUTH);
+  await openProject(a, '秋の花まつり');
+  ok(await until(async () => (await admin.list(`${T}/wsVenues`)).some((v) => v.name === SOUTH), Boolean, 10000), '（準備）別の会場が、会場マスタに登録されること');
+  sheets.rows = [
+    answer(serial('2026-11-13'), CENTER, 62),
+    answer(serial('2026-11-14'), CENTER, 58),
+    answer(serial('2026-11-15'), CENTER, 30),
+    answer(serial('2026-11-15'), 'その他', 7, SOUTH),          // 同じ日の、別の会場（登録済み）
+  ];
+  await syncNow(a, SHEET_URL);
+  eq((await jcos(a)).actual, 150, '実績（62 ＋ 58 ＋ 30。別の会場の 7 個は、入らない）');
+  // 確認が要るものが無いので、詳細は、自動では開かない
+  eq(await a.locator('[data-testid="report-detail"]').count(), 0, '同期のあと、詳細が自動で開かないこと（確認が要るものが無い）');
+  const text = await detail(a);
+  ok(text.includes(`「${SOUTH}」1 件・7 個（11/15(日)） ：登録済みの、別の会場です`) || text.includes(`「${SOUTH}」1 件・7 個（11/15(日)）：登録済みの、別の会場です`), `別の会場の回答の表示: ${text}`);
+  ok(text.includes('この案件には取り込みません'), `別の会場として扱う説明: ${text}`);
+  eq(await a.locator('[data-testid="report-unmatched"]').count(), 0, '別名の候補（出ないこと）');
+  eq(await a.locator('[data-testid="report-bar"]').getByRole('button', { name: /別名として登録/ }).count(), 0, '「別名として登録」のボタン（出ないこと）');
+  const li = a.locator('[data-testid="report-others"] li', { hasText: SOUTH });
+  eq([await li.getAttribute('data-registered'), await li.getAttribute('data-gap')], ['1', '0'], '登録済みの別の会場・この案件の実績がある日');
+  // 会場マスタは、変わらない（どちらの会場にも、別名は増えない）
+  const venues = await admin.list(`${T}/wsVenues`);
+  eq(venues.map((v) => [v.name, v.reportNames ?? []]).sort(), [[CENTER, []], [SOUTH, []]].sort(), '会場マスタ（別名なし）');
+  // もう一度同期しても、同じ
+  await syncNow(a);
+  eq((await jcos(a)).actual, 150, 'もう一度同期したあとの実績');
+  // 会場タブで、別の会場の名前を、手で別名に入れたとき: 入れた欄に、警告と理由が出る（禁止はしない。消せば、警告も消える）
+  await tab(a, '会場');
+  const aliasCell = a.locator('.grid tbody tr', { has: a.locator(`[data-c="name"]`) }).first().locator('td', { has: a.locator('[data-c="reportNames"]') });
+  eq(await aliasCell.getAttribute('title'), null, '（準備）別名の欄に、警告が無いこと');
+  await a.locator('[data-c="reportNames"]').first().fill(SOUTH);
+  const warned = await until(() => aliasCell.getAttribute('title'), (t) => !!t, 5000);
+  ok(String(warned).includes(`別の会場「${SOUTH}」の会場名（または別名）と同じです`) && String(warned).includes('混ざります'), `別名の欄の警告: ${warned}`);
+  await a.locator('[data-c="reportNames"]').first().fill('');
+  eq(await until(() => aliasCell.getAttribute('title'), (t) => !t, 5000), null, '消したあとは、警告も消える');
+});
+
+// 実機での確認の依頼（2026-11-16）「日報から回答が消えた場合に安全に停止する」。
+// 案件一覧の「日報から案件を作成・更新」は、前から、確認を求めていた（import.mjs の I31）。案件の「日報を同期」は、黙って 0 件に置き換えていた。
+add('R29', '案件の回答が、日報から 1 件も無くなったとき（案件の「日報を同期」）: 取り込まずに止めて、確認を求める（前回の実績と収支は、そのまま。共有データにも書かない）。開き直しても、確認は残る。「前回の実績を外す」を押したときだけ外れる。会場の別名を消して照合が切れたときも止まり、別名を戻して同期すると、元どおり', async ({ device: mk }) => {
+  const { a, sheets } = await prepare(mk);
+  await syncNow(a, SHEET_URL);
+  const good = await jcos(a);
+  eq(good.actual, 120, '（準備）最初の実績');
+  const before = written(await syncedDoc('秋の花まつり'));
+  // この案件の回答だけが、日報から無くなった（ほかの会場の回答は、残っている）
+  sheets.rows = [answer(serial('2026-11-14'), EAST, 33)];
+  await syncNow(a);
+  ok((await toggleText(a)).includes('確認が必要です') && !(await toggleText(a)).includes('同期できませんでした'), `知らせ（失敗ではなく、確認）: ${await toggleText(a)}`);
+  const ask = (await a.locator('[data-testid="report-clear"]').innerText()).replace(/\s+/g, ' ');
+  ok(ask.includes('反映していません') && ask.includes('1 件もありません') && ask.includes('2 日・キット 120 個') && ask.includes('外していません'), `確認の文: ${ask}`);
+  eq(await a.locator('[data-testid="report-error"]').count(), 0, '失敗の表示は、出さない');
+  const st = await status(a);
+  ok(st.includes('2 日分 120 個') && st.includes('確認が必要です'), `同期の表示（前回の実績のまま）: ${st}`);
+  eq(await jcos(a), good, '止まったあとの収支（前回の実績のまま）');
+  await sleep(SETTLE_MS);
+  eq(written(await projectDoc('秋の花まつり')), before, '共有データの案件（何も書かれていない）');
+  // もう一度押しても、同じ（「日報を同期」を押すだけでは、外れない）
+  await syncNow(a);
+  eq((await jcos(a)).actual, 120, 'もう一度同期したあとの実績');
+  // 開き直しても、確認は残る
+  await a.reload();
+  await a.waitForSelector('[data-testid="space"][data-space="shared"]');
+  await a.evaluate((t) => { window.__kkl.sheetsToken = () => t; }, TOKEN);
+  await openProject(a, '秋の花まつり');
+  ok((await toggleText(a)).includes('確認が必要です'), `開き直したあとの知らせ: ${await toggleText(a)}`);
+  await detail(a);
+  // 「前回の実績を外す」を押したときだけ、日報のとおりになる
+  await a.locator('[data-testid="report-clear-go"]').click();
+  await until(() => busy(a), (b) => b === '0', 10000);
+  eq(await jcos(a), { billing: 120000, cost: 0, gross: gross(0), actual: 0, basis: 'planned' }, '外したあとの収支（予定に戻る）');
+  eq(days(await syncedDoc('秋の花まつり', (p) => p?.reportSync?.days?.length === 0)), [], '共有データの実績（外れている）');
+  eq(await a.locator('[data-testid="report-clear"]').count(), 0, '確認（消えていること）');
+  // 外れたあとは、回答が無いままでも、確認は求めない（外れるものが無い）
+  await syncNow(a);
+  ok(!(await toggleText(a)).includes('確認が必要です') && !(await toggleText(a)).includes('同期できませんでした'), `外したあとの同期: ${await toggleText(a)}`);
+
+  // 会場の別名を消して、照合が切れたとき（回答は、日報に残っている）も、止まる
+  const venueDoc = async () => (await admin.list(`${T}/wsVenues`)).find((v) => v.name === CENTER);
+  const setAlias = async (text) => {
+    await tab(a, '会場');
+    await a.locator('[data-c="reportNames"]').first().fill(text);
+    eq((await until(venueDoc, (v) => (v?.reportNames ?? []).join('｜') === text, 10000))?.reportNames ?? [], text ? [text] : [], `（準備）会場マスタの別名が「${text}」になること`);
+    await openProject(a, '秋の花まつり');
+  };
+  sheets.rows = [answer(serial('2026-11-13'), '北街モール', 62), answer(serial('2026-11-14'), '北街モール', 58)];
+  await setAlias('北街モール');
+  await syncNow(a);
+  eq(await jcos(a), good, '別名で書かれた回答を取り込んだあとの収支');
+  const aliased = written(await syncedDoc('秋の花まつり', (p) => p?.reportSync?.days?.length === 2));
+  await setAlias('');
+  await syncNow(a);
+  ok((await toggleText(a)).includes('確認が必要です'), `別名を消したあとの同期（止まる）: ${await toggleText(a)}`);
+  ok((await a.locator('[data-testid="report-clear"]').innerText()).includes('会場マスタの会場名・別名'), '確認の文に、会場マスタを変えたときにも起きることが書いてある');
+  await sleep(SETTLE_MS);
+  eq(written(await projectDoc('秋の花まつり')), aliased, '共有データの案件（前回の実績を持ったまま）');
+  // 別名を戻して同期すると、元どおり（確認も消える）
+  await setAlias('北街モール');
+  await syncNow(a);
+  eq(await jcos(a), good, '別名を戻して同期したあとの収支');
+  ok(!(await toggleText(a)).includes('確認が必要です'), `別名を戻したあとの知らせ: ${await toggleText(a)}`);
+});
+
+/** スマホ（iPhone 相当の幅・タッチ）の端末 */
+async function phone(url) {
+  const { devices } = loadPlaywright();
+  const ctx = await (await browser()).newContext({ ...devices['iPhone 13'], timezoneId: 'Asia/Tokyo', locale: 'ja-JP' });
+  const d = { name: 'phone', ctx, url, dialogs: [], errors: [], accept: true };
+  d.open = async () => {
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(10000);
+    page.on('dialog', async (dlg) => { d.dialogs.push(dlg.message().replace(/\s+/g, ' ')); if (d.accept) await dlg.accept(); else await dlg.dismiss(); });
+    page.on('pageerror', (e) => d.errors.push(e.message));
+    await page.goto(url);
+    await page.waitForFunction(() => !!window.__kkl);
+    return page;
+  };
+  d.close = () => ctx.close();
+  return d;
+}
+
+add('R30', 'iPhone 相当の幅で、実機検証への対応の表示が、横にはみ出さず、押せる: 同じ日の別の会場の回答の表示・別名の確認（画面の中。ダイアログを使わない）・確認待ち（前回の実績を外す）。押さない限り、何も変わらない', async ({ device: mk, url }) => {
+  const SOUTH = '南港アウトレット ゲート前';
+  const rows = () => [
+    answer(serial('2026-11-13'), CENTER, 62),
+    answer(serial('2026-11-13'), 'その他', 7, SOUTH),                      // 同じ日の、別の会場（登録済み）
+    answer(serial('2026-11-14'), 'その他', 58, '北街モール1F 中央広場'),   // この会場の、別の書き方（この案件の実績が無い日）
+  ];
+  // PC で、会場 2 つと案件を用意して、同期しておく（共有データ）
+  const { a } = await prepare(mk, { sheets: { rows: rows() } });
+  await addVenue(a, SOUTH);
+  ok(await until(async () => (await admin.list(`${T}/wsVenues`)).some((v) => v.name === SOUTH), Boolean, 10000), '（準備）別の会場が、会場マスタに登録されること');
+  await openProject(a, '秋の花まつり');
+  await syncNow(a, SHEET_URL);
+  const before = written(await syncedDoc('秋の花まつり'));
+  // スマホで、同じアカウントでログインして、案件を開く
+  const P = await phone(url);
+  try {
+    const sheets = await fakeSheets(P, { rows: rows() });
+    const p = await openPage(P);
+    await signIn(p, 'a@example.com');
+    // スマホの表示では、はみ出した中身に合わせて、ブラウザが「ページの幅」（innerWidth）のほうを広げることがある。端末の画面の幅と比べる
+    const W = p.viewportSize().width;
+    const overflow = () => p.evaluate((w) => Math.max(0, Math.max(document.documentElement.scrollWidth, window.innerWidth) - w), W);
+    const wide = () => p.locator('[data-testid="report-bar"] button:visible').evaluateAll((els, w) => els.map((e) => [e.textContent.trim().slice(0, 14), Math.round(e.getBoundingClientRect().right)]).filter(([, r]) => r > w), W);
+    const small = (loc) => loc.evaluateAll((els) => els.map((e) => [e.textContent.trim().slice(0, 14), Math.round(e.getBoundingClientRect().height)]).filter(([, h]) => h < 32));
+    const shot = async (name) => { if (process.env.SHOTS) await p.screenshot({ path: `${process.env.SHOTS}/R30-${name}.png`, fullPage: true }); };
+    eq(await until(() => p.locator('[data-testid="project-card"]').count(), (n) => n === 1, 10000), 1, '（準備）スマホに、案件が届くこと');
+    await p.locator('[data-testid="project-card"] .pcard__open').first().tap();
+    await p.waitForSelector('[data-testid="report-bar"]');
+    if (!(await p.locator('[data-testid="report-detail"]').count())) await p.locator('[data-testid="report-toggle"]').tap();
+    await p.waitForSelector('[data-testid="report-detail"]');
+    ok((await p.locator('[data-testid="report-others"]').innerText()).replace(/\s+/g, ' ').includes(`「${SOUTH}」1 件・7 個（11/13(金)）：登録済みの、別の会場です`), '同じ日の、別の会場の回答の表示');
+    const item = p.locator('[data-testid="report-unmatched"] li[data-evidence]');
+    eq(await item.count(), 1, '別名の候補（この会場の別の書き方だけ）');
+    await shot('1-detail');
+    eq([await overflow(), await wide()], [0, []], '詳細を開いた画面が、横にはみ出していないこと');
+    // 別名の確認（画面の中）
+    P.dialogs.length = 0;
+    await item.getByRole('button', { name: /別名として登録して同期/ }).tap();
+    const ask = item.locator('[data-testid="report-alias-confirm"]');
+    await ask.waitFor();
+    await shot('2-alias-confirm');
+    eq([P.dialogs.length, await overflow(), await wide(), await small(ask.locator('button'))], [0, 0, [], []], '別名の確認を開いた画面（ダイアログなし・はみ出しなし・小さすぎるボタンなし）');
+    await ask.locator('[data-testid="report-alias-cancel"]').tap();
+    eq(await item.locator('[data-testid="report-alias-confirm"]').count(), 0, '「やめる」で、確認が閉じること');
+    // 確認待ち: この案件の回答が、日報から無くなった
+    sheets.rows = [answer(serial('2026-11-13'), 'その他', 7, SOUTH)];
+    await p.locator('[data-testid="report-sync"]').tap();
+    eq(await until(() => busy(p), (b) => b === '0', 10000), '0', '同期が終わること');
+    await p.waitForSelector('[data-testid="report-clear"]');
+    await shot('3-confirm-clear');
+    eq([await overflow(), await wide(), await small(p.locator('[data-testid="report-clear"] button'))], [0, [], []], '確認待ちの画面（はみ出しなし・小さすぎるボタンなし）');
+    ok((await p.locator('[data-testid="report-clear"]').innerText()).includes('1 日・キット 62 個'), '確認待ちの文（外れることになる実績）');
+    // どのボタンも押していないので、共有データは、PC で同期したときのまま（別名も増えていない）
+    await sleep(SETTLE_MS);
+    eq(written(await projectDoc('秋の花まつり')), before, '共有データの案件（変わっていない）');
+    eq((await admin.list(`${T}/wsVenues`)).map((v) => [v.name, v.reportNames ?? []]).sort(), [[CENTER, []], [SOUTH, []]].sort(), '会場マスタ（別名なし）');
+  } finally {
+    await P.close();
+  }
+});
+
 // ── 実機での確認を、安全に行うための前提 ──────────────────────────
 // 検証用のビルド（VITE_TEAM_ID で、通常とは別のチーム名を指定）が、通常のチームの共有データ（＝本番相当のデータ）を
 // 読み書きしないことを、ブラウザから出た通信そのもので確かめる。
@@ -1041,6 +1254,53 @@ add('R23', '実環境のルールが想定より緩かった場合（ログイ�
     app.stop();
   }
 }, { rules: 'e2e/sync/fixtures/any-team.rules' });
+
+// ── 実機での確認（2026-11-16）で見つかった場面: 共有データの確認が、時間切れになった ──────────
+// 表示は「…確認できませんでした（通信できませんでした（時間切れ））」。この文は、アカウントの確認が通ったあと（＝ログインしたアカウントが、
+// 検証用のチームの場所を読める＝ルールが、リポジトリのものより緩い）、以前の形式のデータの読み取り（1 つずつ 6 回）が、合計の上限を超えたときにだけ出る。
+// 読み取りを同時に送るようにしたので、1 回の読み取りに数秒かかる通信でも、時間切れにならない。
+/** Firestore への通信（要求 1 つずつ）を、ms だけ遅らせる（1 回の読み取りに、数秒かかる通信を模す） */
+const slowFirestore = (D, ms) => D.ctx.route(/google\.firestore\.v1\.Firestore/, async (route) => { await sleep(ms); try { await route.continue(); } catch { /* 閉じたあと */ } });
+/** ログインしてから、確認が終わるまで（「確認しています」でなくなるまで）の、状態と、かかった秒数 */
+async function checkedPhase(page, email) {
+  const t0 = Date.now();
+  await page.evaluate(([e]) => window.__kkl.signInAs(e, {}), [email]);
+  await page.waitForSelector('.auth-user');
+  const phase = await until(() => page.locator('[data-testid="shared-phase"]').getAttribute('data-phase'), (x) => !!x && x !== 'checking', 60000);
+  return { phase, seconds: (Date.now() - t0) / 1000, error: phase === 'error' ? await page.locator('[data-testid="shared-error"]').innerText() : '' };
+}
+add('R27', '通信が遅い（1 回の読み取りに数秒）× ルールが想定より緩い: 確認が時間切れにならず、「共有データは、まだ用意されていません」と出る（まだ使い始めていない場所の、正しい表示）。何も書き込まない', async ({ device: mk }) => {
+  const production = await seedProduction(mk);
+  const app = await startApp({ env: { VITE_TEAM_ID: OTHER } });
+  try {
+    const P = await mk('P', app.url);
+    await slowFirestore(P, 2500);
+    const p = await openPage(P);
+    const r = await checkedPhase(p, 'a@example.com');
+    eq([r.phase, r.error], ['needs-init', ''], `確認の結果（${r.seconds.toFixed(1)} 秒）`);
+    ok(r.seconds < 25, `確認にかかった時間（読み取りを 1 つずつ待つと、35 秒かかって時間切れになっていた）: ${r.seconds.toFixed(1)} 秒`);
+    const text = (await p.locator('[data-testid="shared-phase"]').innerText()).replace(/\s+/g, ' ');
+    ok(text.includes('共有データは、まだ用意されていません') && text.includes('ボタンを押すまで、共有側には何も書き込みません'), `まだ使い始めていないことの表示: ${text}`);
+    ok(text.includes(`検証用の場所（${OTHER}）にだけ`) && text.includes(`通常の共有データ（${TEAM}）は、読み書きしません`), `検証用ビルドでの説明: ${text}`);
+    eq(await teamDocs(OTHER), {}, '検証用のチームの下（何も書かれていないこと）');
+    eq(JSON.stringify(await teamDocs(TEAM)), JSON.stringify(production.docs), '本番相当のデータ（1 件も変わっていないこと）');
+  } finally {
+    app.stop();
+  }
+}, { rules: 'e2e/sync/fixtures/any-team.rules' });
+
+add('R28', '通信が遅い（1 回の読み取りに数秒）× 現在のルール: 確認が時間切れにならず、「このアカウントは、チームに登録されていません」と出る', async ({ device: mk }) => {
+  const app = await startApp({ env: { VITE_TEAM_ID: OTHER } });
+  try {
+    const P = await mk('P', app.url);
+    await slowFirestore(P, 4500);
+    const p = await openPage(P);
+    const r = await checkedPhase(p, 'a@example.com');
+    eq([r.phase, r.error], ['unregistered', ''], `確認の結果（${r.seconds.toFixed(1)} 秒。読み取りを 1 つずつ待つと、12 秒の上限を超えて「接続できないため…確認できませんでした」になっていた）`);
+  } finally {
+    app.stop();
+  }
+});
 
 // Version 5.2 から、本番ではないビルドは、検証用のチーム名が無いと作れない（ビルドが失敗し、アプリも Firebase を起動しない。e2e/guard.mjs）。
 // ここで確かめているのは、通常のチーム名のままのビルド（本番のビルド・Version 5.2 より前のプレビュー）の見え方。

@@ -22,7 +22,7 @@ const broken = (patch: Record<string, unknown>): Project => ({ ...mkProject(), .
 function usable(p: Project): void {
   jcosEstimate(p);
   projectWarnings(p, mkData({ projects: [p] }));
-  unmatchedGaps(p.reportSync);
+  unmatchedGaps(p.reportSync, []);
   usableReportDays(p);
 }
 
