@@ -156,9 +156,10 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
 
   /**
    * 案件 1 件を、読んである日報で同期する（案件の「日報を同期」と同じ処理。period … 会期を広げて取り込むとき）。
+   * allowClear … 前回の実績が、すべて外れることになる結果でも書く（利用者が「前回の実績を外す」を押したときだけ。report/sync.ts の clearedBySync）。
    * 同期の日時は、日報を読んだ日時にする（読んだあとで行われた、新しい同期と見分けるため）。
    */
-  const runUpdate = (projectId: string, period?: { startDate: string; endDate: string }): void => {
+  const runUpdate = (projectId: string, period?: { startDate: string; endDate: string }, allowClear = false): void => {
     const project = data.projects.find((p) => p.id === projectId);
     if (!project || !report || !plan || !isFresh() || !live || isNewer(getProject(projectId) ?? project)) return;
     const k = syncKey(scope, projectId);
@@ -169,7 +170,7 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
     const projects = plan.projected.map((q) => (q.id === projectId ? project : q));
     void startSyncJob(
       k,
-      { project, projects, venues: data.venues, source, period },
+      { project, projects, venues: data.venues, source, period, allowClear },
       // 回答は、読んであるものを使う（もう一度は読まない。認証も要らない）
       { token: async () => '', rows: async () => rows, now: () => at, forget: () => {} },
       {
@@ -249,7 +250,17 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
    */
   const failureOf = (u: UpdateItem) => {
     const f = lastFailure(syncKey(scope, u.projectId));
-    return f && report && f.at >= report.at && failureIsCurrent(f, projectOf(u.projectId)?.reportSync?.at) ? f : null;
+    // 「前回の実績が、すべて外れることになるので止めた」記録（案件の画面の同期で付く。確認待ち）は、失敗として数えない
+    // （この一覧では、「未反映」として、同じ確認を出す＝UpdateItem.gone）
+    return f && !f.clear && report && f.at >= report.at && failureIsCurrent(f, projectOf(u.projectId)?.reportSync?.at) ? f : null;
+  };
+  /**
+   * いまの日報での同期が、「前回の実績が、すべて外れることになる」ので止まっている案件の、前回の実績（無ければ null）。
+   * ふつうは、計画の時点で分かる（UpdateItem.gone）。計画では分からずに、同期が止めた場合も、同じ確認を出せるようにする（行き止まりにしない）
+   */
+  const pendingClearOf = (u: UpdateItem): { days: number; count: number } | null => {
+    const f = lastFailure(syncKey(scope, u.projectId));
+    return f?.clear && report && f.at >= report.at && failureIsCurrent(f, projectOf(u.projectId)?.reportSync?.at) ? { days: f.clear.days, count: f.clear.count } : null;
   };
   /** 更新の行の状態 */
   const stateOf = (u: UpdateItem): RowState => {
@@ -359,6 +370,8 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
   const updateRow = (u: UpdateItem) => {
     const st = states.get(u.projectId)!;
     const f = failureOf(u);
+    // 前回の実績が、すべて外れることになる更新（自動では反映しない。利用者が確かめてから）
+    const gone = u.gone ?? pendingClearOf(u);
     const nConflict = conflicts.get(u.projectId) ?? 0;
     const target = projectOf(u.projectId);
     const label = {
@@ -394,15 +407,15 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
         {st === 'pending' && otherSheet(target) && (
           <p className="rimport__sub" data-testid="import-other-sheet">※ この案件は、別の日報（スプレッドシート）で同期しています。この日報の内容で置き換えるときだけ、「反映する」を押してください。</p>
         )}
-        {st === 'pending' && u.gone && (
+        {st === 'pending' && gone && (
           <p className="rimport__sub" data-testid="import-gone">
-            {`⚠ 前回の同期で入った実績（${u.gone.days} 日・キット ${u.gone.count} 個）が、案件に残っています。回答が日報から削除されたか、別の会場名・開催日に直されています`
+            {`⚠ 前回の同期で入った実績（${gone.days} 日・キット ${gone.count} 個）が、案件に残っています。回答が日報から削除されたか、別の会場名・開催日に直されています`
               + '（会場マスタの会場名・別名を変えたときにも起きます）。自動では外していません。日報を確かめて、前回の実績を外すときだけ、下のボタンを押してください。'}
           </p>
         )}
         {st === 'pending' && (
-          <button className="cellbtn cellbtn--wide" onClick={() => { if (freshNow()) runUpdate(u.projectId); }} disabled={!usable} data-testid="import-apply">
-            {u.gone ? '前回の実績を外す（日報の内容にする）' : '反映する'}
+          <button className="cellbtn cellbtn--wide" onClick={() => { if (freshNow()) runUpdate(u.projectId, undefined, !!gone); }} disabled={!usable} data-testid="import-apply">
+            {gone ? '前回の実績を外す（日報の内容にする）' : '反映する'}
           </button>
         )}
         {u.outside.length > 0 && st !== 'newer' && (

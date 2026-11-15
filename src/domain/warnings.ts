@@ -4,7 +4,7 @@ import { AppData, Assignment, PlacedItem, Project, Warning } from '../types';
 import { assignmentHours, countParts, countSeats, seatDemand } from './calc';
 import { isJcos } from './jcos';
 import { buildLabels, findOverlaps, itemSize } from './layout';
-import { contestedReportDays, syncStaleness, unmatchedGaps } from './report';
+import { classifyUnmatched, contestedReportDays, syncStaleness } from './report';
 import { MAX_DAYS, daySpan, listDates, num, shortDate, toMinutes } from './util';
 
 function overlaps(a: Assignment, b: Assignment): boolean {
@@ -126,8 +126,11 @@ export function projectWarnings(p: Project, data: AppData): Warning[] {
       if (assigned.length) add('report:assigned', `日報: 同期済みの実績のうち ${assigned.length} 日は、別の案件の実績として割り当て済みのため、使っていません（${assigned.map((h) => shortDate(h.date)).join('・')}）。`, 'info');
       const unread = (sync.skipped ?? []).filter((x) => x.reason !== 'other-project').reduce((n, x) => n + x.rows, 0);
       if (unread > 0) add('report:skipped', `日報: 読み取れずに実績へ入れていない回答が ${unread} 件あります（「日報を同期」の詳細を確認してください）。`);
-      const gaps = unmatchedGaps(sync);
-      if (gaps.length) add('report:unmatched', `日報: この案件の実績が無い日に、別の会場名の回答があります（${gaps.map((u) => `「${u.venue}」`).join('')}）。この会場の別の書き方なら、別名として登録してください。`, 'info');
+      // 会場名が一致しなかった回答のうち、確認が要るもの。ほかの会場として登録済みの名前は、別の会場の開催なので、出さない
+      const unmatched = classifyUnmatched(sync, data.venues, p.venueId);
+      const unknown = unmatched.others.filter((u) => u.gap && !u.registered);
+      if (unmatched.candidates.length) add('report:unmatched', `日報: この会場の別の書き方かもしれない回答があります（${unmatched.candidates.map((u) => `「${u.venue}」`).join('')}）。同じ会場なら、「日報を同期」の詳細から、別名として登録してください。`, 'info');
+      else if (unknown.length) add('report:unmatched', `日報: この案件の実績が無い日に、未登録の会場名の回答があります（${unknown.map((u) => `「${u.venue}」`).join('')}）。この会場の別の書き方なら、「会場」タブで別名に登録してください。`, 'info');
     }
   }
 

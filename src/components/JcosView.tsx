@@ -50,6 +50,8 @@ export default function JcosView({ project: p, j, generic, onChange }: Props) {
   const plannedOnly = j.planned.count - j.days.filter((d) => d.actual).reduce((s, d) => s + d.plannedCount, 0);
   // アルバイトを、まだ 1 日も配置していないとき（アルバイト代は、配置した日・人数だけ計上する。自動では計上しない）
   const openDays = j.days.filter((d) => !d.notHeld && d.partTimers === 0).map((d) => d.date);
+  // 開催する日があるのに、アルバイトを 1 日も配置していない（＝アルバイト代を 0 円で計算している）。粗利のすぐ下にも、注意を出す
+  const noStaffYet = j.partTimerDays === 0 && openDays.length > 0;
   const staffAll = () => onChange((x) => (x.jcos ? { ...x, jcos: staffDays(x.jcos, openDays) } : x));
   // 内容ごとの材料原価（空欄にすると、その内容の指定を外して、案件の標準に戻す）
   const setUnit = (key: string, v: string) => onChange((x) => {
@@ -87,7 +89,7 @@ export default function JcosView({ project: p, j, generic, onChange }: Props) {
     <div className="est jcos" data-testid="jcos-view" data-basis={j.basis}>
       <div className="cards">
         <div className={`card card--main${t.gross < 0 ? ' card--neg' : ''}`}>
-          <div className="card__label">粗利（管理上）</div>
+          <div className="card__label">粗利（管理上・試算）</div>
           <div className="card__value" data-testid="jcos-gross">{signed(t.gross)}</div>
           <div className="card__note">{t.marginPct == null ? '' : `粗利率 ${t.marginPct.toFixed(1)}%・`}<span data-testid="jcos-basis">{basisText}</span></div>
         </div>
@@ -102,8 +104,15 @@ export default function JcosView({ project: p, j, generic, onChange }: Props) {
           <div className="card__note">アルバイト {j.partTimerDays} 人日・{t.count} 個</div>
         </div>
       </div>
+      {j.noStaff && (
+        <p className="hint jcos__caution" data-testid="jcos-nostaff-top">
+          ⚠ アルバイト代は、0 円で計算しています（配置した日・人数が、まだ入っていません）。配置があった場合は、下の「日別」の表で人数を入れると、粗利から引かれます。
+          この粗利は、確定した実績ではありません。
+        </p>
+      )}
       <p className="hint">
-        粗利（管理上）＝ JCOS への請求 − 実際の支払い。自分たちの稼働の原価や税金は含まない、管理のための数字です（最終的な利益ではありません）。
+        粗利（管理上）＝ JCOS への請求 − 入力してある支払い（アルバイト代・材料原価・その他実費）。日報の実績と、入力した条件から計算した<b>試算</b>です。
+        自分たちの稼働の原価や税金は含まない、管理のための数字です（最終的な利益ではありません）。
       </p>
 
       <table className="grid est__summary jcos__summary">
@@ -180,7 +189,7 @@ export default function JcosView({ project: p, j, generic, onChange }: Props) {
       </div>
 
       <h3>日別<small>「請求」のチェックと「アルバイト」の人数は、日ごとに変えられます。アルバイト代は、配置した日・人数だけ計上します（人数を入れていない日は 0 人）。実績個数は、日報の同期で入ります（同期できないときは手入力）。「開催なし」の日は、請求・アルバイト代・予定個数が付きません</small></h3>
-      {j.partTimerDays === 0 && openDays.length > 0 && (
+      {noStaffYet && (
         <p className="hint" data-testid="jcos-nostaff">
           アルバイトは、どの日にも配置されていません（アルバイト代 0 円）。配置した日があれば、下の表で人数を入れてください。{' '}
           <button className="cellbtn cellbtn--wide" onClick={staffAll} data-testid="jcos-staff-all">開催する {openDays.length} 日すべてに 1 人ずつ入れる</button>

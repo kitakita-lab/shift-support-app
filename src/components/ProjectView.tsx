@@ -4,7 +4,8 @@ import { assignmentHours, estimate, laborLine, unitMaterialCost } from '../domai
 import { issueAs } from '../domain/figure';
 import { defaultJcos, isJcos, jcosEstimate } from '../domain/jcos';
 import { applyTemplate } from '../domain/layout';
-import { genId, listDates, num, shortDate, toMinutes, yen } from '../domain/util';
+import { shownStatus } from '../domain/report';
+import { genId, listDates, localDate, num, shortDate, toMinutes, yen } from '../domain/util';
 import { checkNewAssignment, projectWarnings } from '../domain/warnings';
 import { AppData, Assignment, JcosTerms, OtherCost, Project, ProjectContent, ProjectStatus, Venue, Warning } from '../types';
 import Grid, { Col, n0, nNull } from './Grid';
@@ -62,6 +63,10 @@ export default function ProjectView({ project: p, data, space, current, onChange
   // いまの案件と会場の一覧も渡す（同じ会場で会期が重なる案件があるとき、同じ日報の回答を 2 つの案件で数えないため）
   const j = useMemo(() => (jcosOn ? jcosEstimate(p, data) : null), [jcosOn, p, data]);
   const profit = j ? j.current.gross : est.profit;
+  // JCOS 案件で、開催する日があるのに、アルバイトを 1 日も配置していない（＝アルバイト代を 0 円で計算している）
+  const noStaff = !!j && j.noStaff;
+  // 一覧に出す状態（会期中は「開催中」。保存してある状態は、変えない）
+  const shown = shownStatus(p, localDate());
   const venue = data.venues.find((v) => v.id === p.venueId);
   const dates = useMemo(() => listDates(p.startDate, p.endDate), [p.startDate, p.endDate]);
   const wOf = (target: string) => warnings.find((w) => w.target === target)?.message;
@@ -194,7 +199,7 @@ export default function ProjectView({ project: p, data, space, current, onChange
       <div className="pv__head">
         <button onClick={onBack}>← 案件一覧</button>
         <h2>{p.name || '（名称未設定）'}<small>{venue?.name ?? '会場未選択'}{dates.length ? `・${shortDate(dates[0])}〜${shortDate(dates[dates.length - 1])}（${dates.length}日間）` : ''}</small></h2>
-        <span className="pv__profit" data-testid="pv-profit" data-jcos={jcosOn ? '1' : '0'}>{jcosOn ? '粗利（管理上）' : '利益'} <b className={profit < 0 ? 'neg' : ''}>{yen(profit)}</b></span>
+        <span className="pv__profit" data-testid="pv-profit" data-jcos={jcosOn ? '1' : '0'}>{jcosOn ? '粗利（管理上）' : '利益'} <b className={profit < 0 ? 'neg' : ''}>{yen(profit)}</b>{noStaff && <small className="pv__note" data-testid="pv-nostaff" title="配置した日・人数が、まだ入っていません。確定した実績ではありません">（アルバイト代 0 円で計算）</small>}</span>
         <button className={`warnbtn${nWarn ? ' warnbtn--on' : ''}`} onClick={() => setShowWarn((v) => !v)}>
           ⚠ 警告 {nWarn}件{nInfo > 0 ? `・参考 ${nInfo}件` : ''} {showWarn ? '▲' : '▼'}
         </button>
@@ -231,6 +236,7 @@ export default function ProjectView({ project: p, data, space, current, onChange
                   <select value={p.status} onChange={(e) => set({ status: e.target.value as ProjectStatus })}>
                     {STATUSES.map((s) => <option key={s}>{s}</option>)}
                   </select>
+                  {shown.note && <div className="hint" data-testid="status-shown">{shown.note}</div>}
                 </Field>
                 <Field label="収支の計算方法">
                   <div className="seg seg--fill" data-testid="calc-mode" data-mode={jcosOn ? 'jcos' : 'generic'}>

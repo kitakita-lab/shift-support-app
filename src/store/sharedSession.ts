@@ -420,7 +420,7 @@ export class SharedSession {
       }
       this.unwatchMeta();
       this.metaUnsub = watchMeta((body) => this.onMeta(body), () => { /* 権限の問題は、データの購読側で扱う */ });
-      await this.decide(meta, gen);
+      await this.decide(meta, gen, confirmed);
     } catch (e) {
       if (!this.dead(gen)) this.emit({ phase: 'error', error: `共有データを確認できませんでした（${reason(errorCode(e))}）。` });
     }
@@ -451,7 +451,8 @@ export class SharedSession {
 
   private canAdmin(): boolean { return this.view.role === 'owner' || this.view.role === 'open'; }
 
-  private async decide(meta: Body | null, gen: number): Promise<void> {
+  /** confirmed … この確認で、アカウントが使えることを、サーバーに確かめられたか（確かめられずに、前回の確認結果で進んでいるなら false） */
+  private async decide(meta: Body | null, gen: number, confirmed = false): Promise<void> {
     this.emit({ meta });
     if (meta && Number(meta.formatVersion) > FORMAT_VERSION) { this.detach(); this.emit({ phase: 'too-new' }); return; }
     if (meta && meta.status === 'done') { this.attach(); return; }
@@ -460,7 +461,17 @@ export class SharedSession {
     try {
       legacy = await withTimeout(readLegacy(), 20000);
     } catch (e) {
-      if (!this.dead(gen)) this.emit({ phase: 'error', error: `共有データの状態を確認できませんでした（${reason(errorCode(e))}）。` });
+      // 止まったのは、以前の形式のデータがあるかどうかの読み取り（確認の 3 段階目）。どの段階で、なぜ止まったかが分かるように書く
+      const code = errorCode(e);
+      const slow = code === 'timeout' || code === 'unavailable';
+      if (!this.dead(gen)) {
+        this.emit({
+          phase: 'error',
+          error: `共有データの状態を確認できませんでした（${reason(code)}）。`
+            + (confirmed ? 'アカウントの確認は済んでいます。' : '')
+            + (slow ? '通信が遅いか、切れている可能性があります。「もう一度確認する」を押してください。' : ''),
+        });
+      }
       return;
     }
     if (this.dead(gen)) return;

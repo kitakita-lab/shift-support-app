@@ -303,6 +303,105 @@ export interface SyncInput {
  */
 export type SyncPlan = { ok: true; sync: ReportSync } | { ok: false; message: string; issues?: ReportIssue[] };
 
+// ── 会場の「別の書き方」かどうか ─────────────────────────────────
+// 日報との照合は、会場名か、登録した別名との一致だけで行う（あいまい一致では、取り込まない）。
+// 一致しなかった会場名を「別名に登録しますか」と勧めるのは、**同じ会場だと言える根拠があるときだけ**:
+//   - 同じ日・同じ会期に回答がある、というだけでは、根拠にしない（別の会場で、同じ日に開催するのは、ふつうのこと）
+//   - ほかの会場として登録済みの名前は、別の会場と分かっているので、勧めない・登録もさせない
+/** 記号・括弧・区切りを除いた会場名（「記号だけが違う」会場を見つけるため。照合そのものには使わない） */
+export function looseVenueKey(s: unknown): string {
+  return venueKey(s).replace(/[\p{P}\p{S}]/gu, '');
+}
+
+/**
+ * 日報の会場名が、ある会場の「別の書き方」だと言える根拠。
+ *   variant … 記号・括弧・空白だけが違う（表記ゆれ。例:「北街モール・中央広場」と「北街モール（中央広場）」）
+ *   short   … 片方が、もう片方から文字を省いた形（略称・書き足し。例:「北街モール」「北街モール1F 中央広場」と「北街モール（中央広場）」）
+ */
+export type AliasEvidence = 'variant' | 'short';
+/** 略称とみなす短いほうの名前の、最小の文字数（これより短い名前は、多くの会場名に含まれてしまう） */
+const MIN_SHORT_NAME = 3;
+/** a の文字を、順番を変えずに、b の中から拾えるか（a が、b から文字を省いた形か） */
+function isSubsequence(a: string[], b: string[]): boolean {
+  let i = 0;
+  for (const ch of b) if (i < a.length && ch === a[i]) i += 1;
+  return i === a.length;
+}
+/** name（日報での会場名）が、venue の別の書き方だと言える根拠。無ければ null（同じ名前・登録済みの別名も null＝すでに一致している） */
+export function aliasEvidence(name: unknown, venue: Venue | undefined): AliasEvidence | null {
+  const key = venueKey(name);
+  if (!venue || !key || venueKeys(venue).has(key)) return null;
+  const loose = [...looseVenueKey(name)];
+  if (loose.length === 0) return null;
+  let short = false;
+  for (const n of [venue.name, ...(venue.reportNames ?? [])]) {
+    const other = [...looseVenueKey(n)];
+    if (other.length === 0) continue;
+    if (other.join('') === loose.join('')) return 'variant';
+    const [a, b] = loose.length <= other.length ? [loose, other] : [other, loose];
+    if (a.length >= MIN_SHORT_NAME && isSubsequence(a, b)) short = true;
+  }
+  return short ? 'short' : null;
+}
+
+/** その名前を、会場名か別名に持つ、ほかの会場（＝別の会場として登録済み）。無ければ null */
+export function registeredElsewhere(name: unknown, venueId: string, venues: Venue[]): Venue | null {
+  const key = venueKey(name);
+  if (!key) return null;
+  return venues.find((v) => v.id !== venueId && venueKeys(v).has(key)) ?? null;
+}
+
+const EVIDENCE_RANK: Record<AliasEvidence, number> = { short: 1, variant: 2 };
+/**
+ * その名前について、同じか、より強い根拠のある、ほかの登録済みの会場（無ければ null）。
+ * 同じ施設の別の場所（「…（中央広場）」と「…（東口前）」）が両方登録してあるときの、施設名だけの回答など。どちらの会場の回答か、名前からは決められない
+ */
+export function rivalVenue(name: unknown, venueId: string, venues: Venue[], evidence: AliasEvidence): Venue | null {
+  return venues.find((v) => {
+    if (v.id === venueId) return false;
+    const e = aliasEvidence(name, v);
+    return !!e && EVIDENCE_RANK[e] >= EVIDENCE_RANK[evidence];
+  }) ?? null;
+}
+
+/**
+ * その名前を、会場の別名として登録してよいか（別の会場を、誤って 1 つにまとめないための確認。「別名として登録して同期」で登録する直前に、必ず通す）。
+ *   other-venue … ほかの会場として登録済みの名前（登録すると、2 つの会場が同じ回答を取り合い、別の会場の実績が混ざる）
+ *   no-evidence … この会場の別の書き方だと言える根拠が無い名前
+ *   ambiguous   … ほかの登録済みの会場にも、同じか、より強い根拠がある名前（どの会場の回答か、決められない）
+ * 「会場」タブで、利用者が手で入れる別名は、ここを通らない（意図して対応づける場所。ほかの会場の名前と同じなら、警告を出す）。
+ */
+export type AliasCheck =
+  | { ok: true; evidence: AliasEvidence }
+  | { ok: false; reason: 'no-venue' | 'empty' | 'already' | 'other-venue' | 'no-evidence' | 'ambiguous'; other?: Venue };
+export function checkAlias(name: unknown, venueId: string, venues: Venue[]): AliasCheck {
+  const venue = venues.find((v) => v.id === venueId);
+  if (!venue) return { ok: false, reason: 'no-venue' };
+  const key = venueKey(name);
+  if (!key) return { ok: false, reason: 'empty' };
+  if (venueKeys(venue).has(key)) return { ok: false, reason: 'already' };
+  const other = registeredElsewhere(name, venueId, venues);
+  if (other) return { ok: false, reason: 'other-venue', other };
+  const evidence = aliasEvidence(name, venue);
+  if (!evidence) return { ok: false, reason: 'no-evidence' };
+  const rival = rivalVenue(name, venueId, venues, evidence);
+  if (rival) return { ok: false, reason: 'ambiguous', other: rival };
+  return { ok: true, evidence };
+}
+
+/**
+ * 会場に別名を足した、会場マスタを返す（「別名として登録して同期」の書き込み。登録してよい名前だけ＝checkAlias）。
+ * 足せないときは、会場マスタを変えずに、理由を返す。
+ */
+export function withVenueAlias(
+  venues: Venue[], venueId: string, name: string,
+): { ok: true; venues: Venue[] } | { ok: false; check: Extract<AliasCheck, { ok: false }> } {
+  const check = checkAlias(name, venueId, venues);
+  if (!check.ok) return { ok: false, check };
+  const alias = name.trim();
+  return { ok: true, venues: venues.map((v) => (v.id === venueId ? { ...v, reportNames: [...new Set([...(v.reportNames ?? []), alias])] } : v)) };
+}
+
 /** いまの案件と会場の一覧（会期が重なる案件・会場の別名を見るため） */
 export interface ReportContext { projects: Project[]; venues: Venue[] }
 
@@ -371,6 +470,43 @@ export function renamedForPeriod(name: string, from: { startDate: string; endDat
 /** 日報から自動で決めた会期のままの案件か（利用者が会期を手で変えていない） */
 export function hasAutoPeriod(p: Pick<Project, 'startDate' | 'endDate' | 'reportPeriod'>): boolean {
   return !!p.reportPeriod && p.reportPeriod.startDate === p.startDate && p.reportPeriod.endDate === p.endDate;
+}
+
+// ── 一覧・見出しに出す「状態」 ─────────────────────────────────
+// 案件の「状態」（計画中・確定・実施済・中止）は、利用者が決める値で、アプリは書き換えない（日報から作る案件は、初めから「実施済」）。
+// 「開催中」は、保存しない。会期と今日の日付から、表示のときに決める（日付が進めば、何もしなくても変わる）:
+//   - 中止 … いつでも「中止」
+//   - 会期中（開始日 ≦ 今日 ≦ 終了日）で、状態が「確定」 … 「開催中」
+//   - 会期中で、状態が「実施済」… 会期を日報に合わせている案件だけ「開催中」（日報は、その日の開催が終わってから出すので、
+//     会期の終わり＝最新の回答の日。開催が続いていても、今日の回答は、まだ無い。最新の回答の翌日までを、会期中とみなす）。
+//     会期を手で決めた案件の「実施済」は、利用者がそう決めたものなので、そのまま出す
+//   - 会期中でも、状態が「計画中」 … 「計画中」のまま（開催が決まっていない案件を、日付だけで「開催中」と出さない）
+//   - 会期の前・あと … 状態のまま（開催予定・過去の案件の表示は、変えない）
+/** 日報に合わせた会期の案件で、最新の回答の日のあと、何日まで「会期中」とみなすか */
+export const REPORT_LAG_DAYS = 1;
+export type ShownStatus = Project['status'] | '開催中';
+export interface StatusView {
+  /** 一覧・見出しに出す状態 */
+  label: ShownStatus;
+  /** 保存してある状態と違う表示にしているとき、その理由（違わなければ ''） */
+  note: string;
+}
+export function shownStatus(p: Pick<Project, 'status' | 'startDate' | 'endDate' | 'reportPeriod'>, today: string): StatusView {
+  const same: StatusView = { label: p.status, note: '' };
+  if (p.status === '中止' || p.status === '計画中') return same;
+  const start = dayNumber(p.startDate);
+  const end = dayNumber(p.endDate);
+  const now = dayNumber(today);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(now) || end < start) return same;
+  const auto = hasAutoPeriod(p);
+  if (p.status === '実施済' && !auto) return same;
+  const last = end + (auto ? REPORT_LAG_DAYS : 0);
+  if (now < start || now > last) return same;
+  // 会期を、日報に合わせている案件は、会期の終わり（日報の最新の回答の日）の翌日までを、会期中として出している
+  const note = auto
+    ? `案件一覧では、会期中の可能性があるため「開催中」と表示しています（会期は、日報の最新の回答の日まで。その翌日までは、開催中として表示します）。保存してある状態は「${p.status}」のままです。`
+    : `案件一覧では、会期中のため「開催中」と表示しています。保存してある状態は「${p.status}」のままです。`;
+  return { label: '開催中', note };
 }
 
 /** この会場名の回答がある日（テスト回答・空行を除く。開催日と会場名を読み取れる回答だけ） */
@@ -841,14 +977,52 @@ export function rivalClaimedDates(p: Project, ctx: ReportContext): Set<string> {
 }
 
 /**
- * 会場名が一致しなかった回答のうち、「この案件の実績が無い日」のもの。
- * 同じ会期に、別の会場で別のイベントがあるのはふつうのことなので、一致しない回答があるだけでは確認を求めない。
- * この案件の実績が入っていない日に、別の書き方の会場名の回答があるときだけ、「書き方が違うだけかもしれない」として確認を求める。
+ * 会場名が一致しなかった回答（会期内）の分け方。案件の「日報を同期」の表示と、確認が必要かどうかの判定に使う。
+ *   candidates … この会場の別の書き方かもしれない（根拠がある）。別名として登録するかを、利用者に確かめる
+ *     - 記号・括弧だけが違う（variant）… 日を問わない
+ *     - 略称・書き足し（short）… その名前の回答のある日の**すべて**で、この案件の実績が無いときだけ
+ *       （1 日でも、この案件の実績のある日に出ている名前は、同じ日に、別の場所で開催した回答とみなす。登録すると、その日の個数も入ってしまう）
+ *   others … それ以外（別の会場の回答として扱う。取り込まない。別名の登録は、勧めない）
+ *     - registered … ほかの会場として登録済み（別の会場と分かっている。同じ日の開催は、ふつうのこと）
+ *     - similar … ほかの登録済みの会場にも、同じか、より強い根拠がある（その会場の名前。どの会場の回答か、決められない）
+ *     - gap … この案件の実績が無い日の回答がある（未登録の名前なら、書き方が大きく違うだけ、という可能性は残るので、知らせる）
+ * 判定は、いまの会場マスタで行う（同期のあとで会場が登録されたら、その時点から、登録済みとして扱う）。
+ * venueId … 案件の、いまの会場。同期のときの会場と違う（同期のあとで、案件の会場を変えた）なら、何も返さない:
+ *   保存してある「一致しなかった回答」は、前の会場から見たもので、いまの会場について、何も言えない（もう一度同期するまで、別名は勧めない）。
  */
-export function unmatchedGaps(sync: ReportSync | undefined): ReportUnmatched[] {
-  if (!sync) return [];
+export interface UnmatchedCandidate extends ReportUnmatched { evidence: AliasEvidence }
+export interface UnmatchedOther extends ReportUnmatched { registered: boolean; gap: boolean; similar?: string }
+export interface UnmatchedView { candidates: UnmatchedCandidate[]; others: UnmatchedOther[] }
+export function classifyUnmatched(sync: ReportSync | undefined, venues: Venue[], venueId?: string): UnmatchedView {
+  const view: UnmatchedView = { candidates: [], others: [] };
+  if (!sync || (venueId !== undefined && venueId !== sync.venueId)) return view;
+  const venue = venues.find((v) => v.id === sync.venueId);
   const have = new Set([...(sync.days ?? []).map((d) => d.date), ...(sync.held ?? []).map((h) => h.date)]);
-  return (sync.unmatched ?? []).filter((u) => u.dates.some((d) => !have.has(d)));
+  for (const u of sync.unmatched ?? []) {
+    const dates = Array.isArray(u.dates) ? u.dates : [];
+    const gap = dates.some((d) => !have.has(d));
+    const allGap = dates.length > 0 && dates.every((d) => !have.has(d));
+    const registered = !!registeredElsewhere(u.venue, sync.venueId, venues);
+    const evidence = registered ? null : aliasEvidence(u.venue, venue);
+    const rival = evidence ? rivalVenue(u.venue, sync.venueId, venues, evidence) : null;
+    if (evidence && !rival && (evidence === 'variant' || allGap)) view.candidates.push({ ...u, evidence });
+    else view.others.push({ ...u, registered, gap, ...(rival ? { similar: rival.name } : {}) });
+  }
+  return view;
+}
+
+/**
+ * 会場名が一致しなかった回答のうち、確認を求めるもの:
+ *   - この会場の別の書き方かもしれない回答（根拠があるもの。classifyUnmatched の candidates）
+ *   - この案件の実績が無い日にある、未登録の会場名の回答（書き方が大きく違うだけ、という可能性が残るので、知らせる）
+ * 同じ会期に、別の会場で別のイベントがあるのはふつうのことなので、一致しない回答があるだけでは確認を求めない。
+ * ほかの会場として登録済みの名前の回答は、どの日のものでも、確認を求めない（別の会場の開催と分かっている）。
+ */
+export function unmatchedGaps(sync: ReportSync | undefined, venues: Venue[], venueId?: string): ReportUnmatched[] {
+  if (!sync) return [];
+  const { candidates, others } = classifyUnmatched(sync, venues, venueId);
+  const keep = new Set<string>([...candidates.map((u) => u.venue), ...others.filter((u) => u.gap && !u.registered).map((u) => u.venue)]);
+  return (sync.unmatched ?? []).filter((u) => keep.has(u.venue));
 }
 
 /**

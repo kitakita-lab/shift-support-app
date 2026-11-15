@@ -9,7 +9,7 @@ import { PHONE, useMediaQuery } from './components/useMedia';
 import { useAuth } from './contexts/AuthContext';
 import { estimate } from './domain/calc';
 import { projectMoney } from './domain/jcos';
-import { venueKey } from './domain/report';
+import { shownStatus, venueKey, withVenueAlias } from './domain/report';
 import { matchVenue } from './domain/reportImport';
 import { duplicateProject, newProject, newVenue, sampleData } from './domain/seed';
 import { genId, listDates, localDate, shortDate, yen } from './domain/util';
@@ -31,6 +31,9 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'parts', label: 'パーツ' },
   { id: 'data', label: 'データ' },
 ];
+
+/** JCOS 案件で、アルバイトを配置していないときの注意（一覧の「利益」のセル・カードに出す） */
+const NO_STAFF_NOTE = 'アルバイト代を 0 円で計算しています（配置した日・人数が、まだ入っていません）。確定した実績ではありません。';
 
 export default function App() {
   const store = useAppData();
@@ -88,6 +91,8 @@ export default function App() {
   const phone = useMediaQuery(PHONE);
   type Row = (typeof rows)[number];
   const venueName = (id: string) => data.venues.find((v) => v.id === id)?.name ?? '';
+  // 今日の日付（端末の日付）。一覧の「状態」を、会期中は「開催中」と出すために使う
+  const today = localDate();
   const period = (p: Project) => {
     const d = listDates(p.startDate, p.endDate);
     return d.length ? `${shortDate(d[0])}〜${shortDate(d[d.length - 1])}（${d.length}日）` : '';
@@ -97,10 +102,15 @@ export default function App() {
     { key: 'venue', title: '会場', width: 140, get: (r) => venueName(r.p.venueId) },
     { key: 'period', title: '期間', width: 200, get: (r) => period(r.p) },
     { key: 'contents', title: 'コンテンツ', width: 150, get: (r) => r.est.contentLines.map((l) => l.name).join('、') },
-    { key: 'status', title: '状態', width: 70, get: (r) => r.p.status },
+    // 状態: 会期中は「開催中」と出す（保存してある状態は変えない。決め方は domain/report.ts の shownStatus）
+    { key: 'status', title: '状態', width: 70, get: (r) => shownStatus(r.p, today).label },
     { key: 'rev', title: '売上', width: 100, align: 'right', get: (r) => yen(r.money.revenue) },
     { key: 'cost', title: '費用', width: 100, align: 'right', get: (r) => yen(r.money.cost) },
-    { key: 'profit', title: '利益', width: 110, align: 'right', get: (r) => `${yen(r.money.profit)}${r.money.jcos ? '（粗利）' : ''}`, warn: (r) => (r.money.profit < 0 ? '赤字の試算です' : undefined) },
+    {
+      key: 'profit', title: '利益', width: 110, align: 'right', get: (r) => `${yen(r.money.profit)}${r.money.jcos ? '（粗利）' : ''}`,
+      // JCOS 案件で、アルバイトを配置していない間は、粗利が確定した実績に見えないよう、印を付ける
+      warn: (r) => [r.money.profit < 0 ? '赤字の試算です' : '', r.money.noStaff ? NO_STAFF_NOTE : ''].filter(Boolean).join(' ／ ') || undefined,
+    },
     { key: 'warn', title: '警告', width: 60, align: 'right', get: (r) => (r.warn ? `⚠ ${r.warn}` : '') },
   ];
 
@@ -230,9 +240,13 @@ export default function App() {
             onSaveVenueTemplate={(venueId, p) => setMaster('venues', data.venues.map((v) => (v.id === venueId
               ? { ...v, template: { ...v.template, width: p.layout.width, height: p.layout.height, env: p.layout.env.map((e) => ({ ...e, id: genId() })) } }
               : v)))}
-            onAddVenueAlias={(venueId, name) => setMaster('venues', data.venues.map((v) => (v.id === venueId
-              ? { ...v, reportNames: [...new Set([...(v.reportNames ?? []), name.trim()])].filter(Boolean) }
-              : v)))}
+            onAddVenueAlias={(venueId, name) => {
+              // 書き込む直前にも確かめる（domain/report.ts の checkAlias。ほかの会場として登録済みの名前・根拠の無い名前は、別名に足さない）
+              const r = withVenueAlias(data.venues, venueId, name);
+              if (r.ok) { setMaster('venues', r.venues); return; }
+              if (r.check.reason === 'other-venue') store.notify('warn', `「${name.trim()}」は、別の会場「${r.check.other?.name ?? ''}」として登録されているため、別名には登録していません。`);
+              else if (r.check.reason !== 'already') store.notify('warn', `「${name.trim()}」は、この会場の別の書き方だと確かめられないため、別名には登録していません（登録するときは、「会場」タブで入力してください）。`);
+            }}
             onAddVenue={addVenueByName}
           />
         )}
@@ -253,12 +267,13 @@ export default function App() {
                     <button className="pcard__open" onClick={() => setOpenId(r.p.id)} aria-label={`案件「${r.p.name || '名称未設定'}」を開く`}>
                       {/* 並びは内側の要素で組む（ボタンそのものを格子の入れ物にすると、効かないブラウザがある） */}
                       <span className="pcard__body">
-                        <span className="pcard__name">{r.p.name || '（名称未設定）'}<span className="pcard__status">{r.p.status}</span>{r.warn > 0 && <span className="pcard__warn">⚠ {r.warn}</span>}</span>
+                        <span className="pcard__name">{r.p.name || '（名称未設定）'}<span className="pcard__status" data-testid="pcard-status">{shownStatus(r.p, today).label}</span>{r.warn > 0 && <span className="pcard__warn">⚠ {r.warn}</span>}</span>
                         <span className="pcard__sub">{venueName(r.p.venueId) || '会場未選択'}{period(r.p) ? `・${period(r.p)}` : ''}</span>
                         <span className="pcard__money">
                           <span>{r.money.jcos ? '請求' : '売上'} {yen(r.money.revenue)}</span>
                           <span>{r.money.jcos ? '実費' : '費用'} {yen(r.money.cost)}</span>
                           <b className={r.money.profit < 0 ? 'neg' : ''}>{r.money.jcos ? '粗利' : '利益'} {yen(r.money.profit)}</b>
+                          {r.money.noStaff && <span className="pcard__note" data-testid="pcard-nostaff">⚠ アルバイト代 0 円で計算</span>}
                         </span>
                         <span className="pcard__go" aria-hidden="true">›</span>
                       </span>
