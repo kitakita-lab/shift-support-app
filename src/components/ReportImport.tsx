@@ -193,7 +193,8 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
     for (const item of plan.items) {
       if (item.kind !== 'update') continue;
       const p = data.projects.find((x) => x.id === item.projectId);
-      if (!p || isNewer(p) || otherSheet(p)) continue;
+      // 前の同期で入った実績が、すべて外れることになる更新（この日報に、その案件の実績になる回答が無い）は、自動では反映しない（利用者が確かめてから）
+      if (!p || isNewer(p) || otherSheet(p) || item.gone) continue;
       // 止まる見込みのものも、同期にかける（案件のデータは変えずに、止まった理由を、その案件に記録する）
       if (!item.preview.ok || item.preview.changed) { runUpdate(item.projectId); continue; }
       // 読めて、日報と同じ内容と確かめた案件に残っている、この取得より前の失敗の記録は、消す（案件の画面に、古い失敗を出し続けない）。
@@ -375,7 +376,13 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
             会場：{u.venueName}／この取得（{stamp(report!.at)}）のあとで、案件の画面か、ほかの端末で同期されています。ここで読んだ内容では、上書きしません（もう一度取得すると、最新の日報で確かめます）。
           </p>
         ) : (
-          <p className="rimport__sub">会場：{u.venueName}／{u.preview.ok ? totalsText(u.preview.totals) : `開催日：${ranges(u.dates)}`}</p>
+          <p className="rimport__sub">
+            会場：{u.venueName}／
+            {u.dates.length === 0
+              // この日報に、回答が 1 件も無い案件（読み取れない回答で止まるときは、その回答が、この案件のものかもしれないので、「ありません」とは書かない）
+              ? `会期：${span(u.startDate, u.endDate)}${u.preview.ok ? '／この日報に、この案件の実績になる回答はありません' : ''}`
+              : u.preview.ok ? totalsText(u.preview.totals) : `開催日：${ranges(u.dates)}`}
+          </p>
         )}
         {st === 'failed' && <p className="rimport__sub neg">{u.preview.ok ? f?.message : u.preview.message}</p>}
         {st === 'failed' && !u.preview.ok && u.preview.issues.length > 0 && (
@@ -387,7 +394,17 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
         {st === 'pending' && otherSheet(target) && (
           <p className="rimport__sub" data-testid="import-other-sheet">※ この案件は、別の日報（スプレッドシート）で同期しています。この日報の内容で置き換えるときだけ、「反映する」を押してください。</p>
         )}
-        {st === 'pending' && <button className="cellbtn cellbtn--wide" onClick={() => { if (freshNow()) runUpdate(u.projectId); }} disabled={!usable} data-testid="import-apply">反映する</button>}
+        {st === 'pending' && u.gone && (
+          <p className="rimport__sub" data-testid="import-gone">
+            {`⚠ 前回の同期で入った実績（${u.gone.days} 日・キット ${u.gone.count} 個）が、案件に残っています。回答が日報から削除されたか、別の会場名・開催日に直されています`
+              + '（会場マスタの会場名・別名を変えたときにも起きます）。自動では外していません。日報を確かめて、前回の実績を外すときだけ、下のボタンを押してください。'}
+          </p>
+        )}
+        {st === 'pending' && (
+          <button className="cellbtn cellbtn--wide" onClick={() => { if (freshNow()) runUpdate(u.projectId); }} disabled={!usable} data-testid="import-apply">
+            {u.gone ? '前回の実績を外す（日報の内容にする）' : '反映する'}
+          </button>
+        )}
         {u.outside.length > 0 && st !== 'newer' && (
           <p className="rimport__sub" data-testid="import-outside">
             ⚠ 会期の外に、この開催の回答があります（{ranges(u.outside)}。取り込んでいません）。{' '}

@@ -415,6 +415,64 @@ describe('何度取り込んでも、二重にならない', () => {
   });
 });
 
+describe('前にこの日報で同期した案件の回答が、日報から 1 件も無くなったとき', () => {
+  const made = () => {
+    const { venues, projects } = applyAll(plan());
+    return { venues, projects, hikari: projects.find((p) => p.startDate === '2026-11-13')! };
+  };
+  const without = ROWS.filter((r) => r.venue !== HIKARI);
+  it('その案件を、既存の案件の更新として出す（前の実績を、黙って残さない）。自動では外さない印（gone）と、外れる実績の日数・個数を付ける', () => {
+    const { venues, projects, hikari } = made();
+    expect(hikari.reportSync?.days.map((d) => d.count)).toEqual([30, 99]);
+    const again = plan({ rows: without, projects, venues });
+    const u = updates(again).find((x) => x.projectId === hikari.id)!;
+    expect(u).toBeDefined();
+    expect(u.preview).toMatchObject({ ok: true, changed: true, period: null, totals: { days: 0, count: 0 } });
+    expect([u.gone, u.dates, u.rows, u.runs, u.outside, u.widenTo, u.startDate, u.endDate]).toEqual([{ days: 2, count: 129 }, [], 0, [], [], null, '2026-11-13', '2026-11-14']);
+    // ほかの案件は、これまでどおり（変更なし）。新しい候補は出ない
+    expect(updates(again).filter((x) => x.projectId !== hikari.id).map((x) => [x.gone, x.preview.ok && x.preview.changed])).toEqual(Array(5).fill([undefined, false]));
+    expect(creates(again)).toEqual([]);
+    // 同期すると、実績が空になり、次からは「変更なし」（印も付かない）
+    const r = planProjectSync({ project: hikari, projects: again.projected, venues, rows: without, now: NOW });
+    expect(r.plan.ok && r.plan.sync.days).toEqual([]);
+    const after = projects.map((p) => (p.id === hikari.id && r.plan.ok ? { ...p, reportSync: r.plan.sync } : p));
+    const third = updates(plan({ rows: without, projects: after, venues })).find((x) => x.projectId === hikari.id)!;
+    expect([third.gone, third.preview.ok && third.preview.changed, third.dates]).toEqual([undefined, false, []]);
+  });
+  it('回答が 1 件も無い日報でも、同じ（どの案件も、更新として出る）', () => {
+    const { venues, projects } = made();
+    const again = plan({ rows: [], projects, venues });
+    expect(updates(again).map((u) => [!!u.gone, u.preview.ok && u.preview.changed])).toEqual(Array(6).fill([true, true]));
+    expect([creates(again), again.span]).toEqual([[], null]);
+  });
+  it('別の日報（スプレッドシート）で同期した案件・一度も同期していない案件・中止の案件は、相手にしない', () => {
+    const { venues, projects, hikari } = made();
+    const other = projects.map((p) => (p.id === hikari.id ? { ...p, reportSource: { spreadsheetId: 'another-sheet-id-0123456789abcd', gid: 1 } } : p));
+    expect(updates(plan({ rows: without, projects: other, venues })).some((u) => u.projectId === hikari.id)).toBe(false);
+    const never = projects.map((p) => { if (p.id !== hikari.id) return p; const { reportSync: _s, ...rest } = p; return rest as Project; });
+    expect(updates(plan({ rows: without, projects: never, venues })).some((u) => u.projectId === hikari.id)).toBe(false);
+    const cancelled = projects.map((p) => (p.id === hikari.id ? { ...p, status: '中止' as const } : p));
+    expect(updates(plan({ rows: without, projects: cancelled, venues })).some((u) => u.projectId === hikari.id)).toBe(false);
+  });
+  it('回答が、同じ会場の、離れた日に直されたとき: 直された日は新しい候補になり、もとの案件は「実績になる回答が無い」として出る（勝手に付け替えない）', () => {
+    const { venues, projects, hikari } = made();
+    const moved = ROWS.map((r) => (r.venue === HIKARI ? { ...r, date: r.date === '2026/11/13' ? '2026/11/27' : '2026/11/28' } : r));
+    const again = plan({ rows: moved, projects, venues });
+    expect(creates(again).map((c) => [c.venueName, c.startDate, c.endDate, c.near.length])).toEqual([[HIKARI, '2026-11-27', '2026-11-28', 0]]);
+    expect(updates(again).find((u) => u.projectId === hikari.id)).toMatchObject({ gone: { days: 2, count: 129 }, dates: [] });
+  });
+  it('会期が重なって決められない案件は、決められない開催として示すだけ（ここでは、更新にしない）', () => {
+    const venues = [mkVenue('v-hikari', HIKARI)];
+    const rows = ROWS.filter((r) => r.venue === HIKARI);
+    const a = mkProject({ id: 'p-a', name: 'A', venueId: 'v-hikari', startDate: '2026-11-13', endDate: '2026-11-14', contents: [], assignments: [] });
+    const first = planReportSync({ project: a, projects: [a], venues, rows, now: NOW });
+    const synced = { ...a, reportSync: first.ok ? first.sync : undefined, reportSource: SOURCE };
+    const b = mkProject({ id: 'p-b', name: 'B', venueId: 'v-hikari', startDate: '2026-11-13', endDate: '2026-11-14', contents: [], assignments: [] });
+    const again = plan({ rows, projects: [synced, b], venues });
+    expect(again.items.map((i) => i.kind)).toEqual(['ambiguous']);
+  });
+});
+
 describe('開催中の案件（日報に、連続する日が増えていく）', () => {
   const first = ROWS.filter((r) => r.venue !== HIKARI || r.date === '2026/11/13');   // 11/13 の回答まで
   it('日報から作った案件は、次の日の回答が増えたら、会期が自動で伸びる（更新として扱い、新しい案件は作らない）', () => {

@@ -887,4 +887,45 @@ add('I30', '共有データが圏外の間は、読んだ内容での作成を�
   eq(days(docs[0]), [['2026-11-13', 30], ['2026-11-14', 99]], '作られた案件の実績');
 });
 
+add('I31', '案件の回答が、日報から 1 件も無くなったとき: 前の実績を、黙って残さない（「未反映」として確認を求める）。自動では外さない。「前回の実績を外す」を押すと、実績が外れ、収支は予定に戻る', async ({ device: mk }) => {
+  const minato = () => [answer('2026-09-11', 'その他', 39, { other: MINATO }), answer('2026-09-12', 'その他', 48, { other: MINATO })];
+  const { a, sheets } = await prepare(mk, [...hikariRows(), ...minato()]);
+  await importNow(a, SHEET_URL);
+  await createAll(a);
+  const name = `${HIKARI}（11/13〜11/14）`;
+  await serverProjects((xs) => xs.length === 2 && xs.every((p) => p.reportSync));
+  eq(await until(() => updateStates(a), (xs) => xs.length === 2 && xs.every((x) => x === 'done'), 8000), ['done', 'done'], '作成のあとの行の状態');
+  // ひかり広場の回答を、日報からすべて消す（みなと市場は、そのまま）
+  sheets.rows = minato();
+  await importNow(a);
+  const gone = a.locator('[data-testid="import-gone"]');
+  await gone.waitFor();
+  const text = (await gone.innerText()).replace(/\s+/g, ' ');
+  ok(text.includes('2 日・キット 129 個') && text.includes('自動では外していません'), `確認の文: ${text}`);
+  const rowOf = a.locator('[data-testid="import-update"]', { hasText: name });
+  eq(await rowOf.getAttribute('data-state'), 'pending', '行の状態（未反映）');
+  ok((await rowOf.innerText()).includes('この日報に、この案件の実績になる回答はありません'), `行の説明: ${(await rowOf.innerText()).replace(/\s+/g, ' ')}`);
+  const st = await status(a);
+  ok(st.includes('既存の案件 2 件') && st.includes('確認が必要 1 件（うち、未反映 1 件）') && !st.includes('未反映・競合なし'), `まとめ: ${st}`);
+  eq(await candidates(a).count(), 0, '新しい候補は出ない');
+  // 自動では外れない（少し待っても、案件の実績は、前のまま）
+  await sleep(1200);
+  eq(days(byName(await projects(), name)), [['2026-11-13', 30], ['2026-11-14', 99]], '自動では、実績を外さない');
+  // 押すと、外れる
+  await rowOf.locator('[data-testid="import-apply"]').click();
+  const docs = await serverProjects((xs) => !!byName(xs, name)?.reportSync && days(byName(xs, name)).length === 0);
+  eq([docs.length, days(byName(docs, `${MINATO}（9/11〜9/12）`))], [2, [['2026-09-11', 39], ['2026-09-12', 48]]], 'ほかの案件は、そのまま');
+  eq(await until(() => rowOf.getAttribute('data-state'), (x) => x === 'done', 8000), 'done', '外したあとの行の状態');
+  ok((await rowOf.innerText()).includes('日報の内容に更新しました'), '外したあとの行の表示');
+  const after = await status(a);
+  ok(after.includes('更新 1 件') && after.includes('未反映・競合なし'), `外したあとのまとめ: ${after}`);
+  // 収支: 実績が無くなったので、予定（個数 0）に戻る
+  await openProject(a, name);
+  eq(await jcos(a), { billing: 80000, cost: 30000, gross: 50000, actual: 0, basis: 'planned' }, '外したあとの収支');
+  // もう一度取得しても、同じ（変更なし。確認も求めない）
+  await importNow(a);
+  eq(await until(() => updateStates(a), (xs) => xs.length === 2 && xs.every((x) => x === 'done'), 8000), ['done', 'done'], 'もう一度取得したあと');
+  ok((await status(a)).includes('未反映・競合なし'), `もう一度取得したあとのまとめ: ${await status(a)}`);
+});
+
 await runFile('「日報から案件を作成・更新」の確認（Firebase エミュレータ ＋ 差し替えの日報）');

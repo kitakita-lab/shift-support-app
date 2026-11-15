@@ -298,6 +298,7 @@ interface ItemBase {
   /** 会場名（登録済みの会場なら、会場マスタの会場名。未登録なら、日報での書き方） */
   venueName: string;
   runs: ImportGroup['runs'];
+  /** 回答のある日と、その最初の日・最後の日（この日報に回答が 1 件も無い、既存の案件の更新では、dates は空で、startDate・endDate は、その案件の会期） */
   dates: string[];
   startDate: string;
   endDate: string;
@@ -357,6 +358,12 @@ export interface UpdateItem extends ItemBase {
   preview:
     | { ok: true; totals: ImportTotals; changed: boolean; period: { startDate: string; endDate: string } | null }
     | { ok: false; message: string; issues: ReportIssue[] };
+  /**
+   * 前の同期で入った実績があるのに、この日報には、この案件の実績になる回答が 1 件も無いとき、その（外れることになる）実績の日数と個数。
+   * 回答が削除された・別の会場名や開催日に直された、のほかに、照合が切れた（会場名や別名を変えた）ときにも起きるので、
+   * 自動では反映しない（利用者が確かめて、選んだときだけ外す）。
+   */
+  gone?: { days: number; count: number };
 }
 
 /** 対応する案件が 2 件以上あって、決められない日（dates は、その日だけ） */
@@ -472,6 +479,9 @@ const CANNOT_CREATE = (n: number): string =>
  *     1 件 … その案件の実績（更新）
  *     2 件以上 … 「この案件の実績にする」と決めている案件が 1 件だけなら、その案件。そうでなければ、決められない
  *     0 件 … 同じ開催（連続した開催日）の中に、案件のある日があれば、その案件の「会期の外の回答」。無ければ、新しい案件の候補
+ *
+ * 前にこの日報（同じスプレッドシート）で同期した案件は、この日報に、その案件の実績になる回答が 1 件も無くても、既存の案件の更新として出す
+ * （回答が削除された・直されたときに、前の実績を黙って残さない）。前の実績が外れることになる更新には、印（UpdateItem.gone）を付ける。
  */
 export function planReportImport(input: ImportInput): ImportPlan {
   const { rows, projects, venues, source, now } = input;
@@ -583,6 +593,32 @@ export function planReportImport(input: ImportInput): ImportPlan {
       gaps: listDates(dates[0], dates[dates.length - 1]).filter((d) => !have.has(d)),
       rows: b.groups.reduce((n, g) => n + g.rows, 0), joinPrev: null,
       kind: 'update', projectId: p.id, projectName: nameOf(p), outside, widenTo: outside.length > 0 ? reach : null, preview,
+    });
+  }
+
+  // ── 前にこの日報で同期した案件のうち、この取得に、その案件の実績になる回答が 1 件も無いもの ──
+  // 開催（回答のまとまり）からは見つからないので、ここで拾う（拾わないと、前の実績が案件に残ったまま、一覧が「未反映・競合なし」と出る）。
+  //   - 相手にするのは、同じ日報（スプレッドシート）で同期したことのある、進行中の案件だけ
+  //     （別の日報で同期した案件の実績を、この日報に回答が無いからといって、外さない）
+  //   - 会期が重なって決められない案件は、「決められない開催」として示している（ここでは扱わない）
+  //   - 会場・会期が決まっていないなど、同期そのものができない案件は、相手にしない（読み取れない回答で止まる案件は、止まった理由を示す）
+  const undecided = new Set(ambiguous.flatMap((a) => a.projects.map((x) => x.id)));
+  for (const p of active) {
+    const stored = p.reportSync;
+    if (!stored || buckets.has(p.id) || undecided.has(p.id)) continue;
+    if (!p.reportSource?.spreadsheetId || p.reportSource.spreadsheetId !== source.spreadsheetId) continue;
+    const auto = autoOf(p);
+    if (!auto.plan.ok && !auto.plan.issues?.length) continue;
+    const after = afterOf(p);
+    const preview: UpdateItem['preview'] = auto.plan.ok
+      ? { ok: true, totals: totalsOf(auto.plan.sync), changed: !!auto.change || syncShape(auto.plan.sync) !== syncShape(stored), period: auto.change?.to ?? null }
+      : { ok: false, message: auto.plan.message, issues: auto.plan.issues ?? [] };
+    const gone = auto.plan.ok && auto.plan.sync.days.length === 0 && stored.days.length > 0
+      ? { days: stored.days.length, count: stored.days.reduce((n, d) => n + d.count, 0) } : null;
+    updates.push({
+      id: `project:${p.id}`, key: `venue ${p.venueId}`, venueName: venueById.get(p.venueId)?.name ?? '',
+      runs: [], dates: [], startDate: after.startDate, endDate: after.endDate, gaps: [], rows: 0, joinPrev: null,
+      kind: 'update', projectId: p.id, projectName: nameOf(p), outside: [], widenTo: null, preview, ...(gone ? { gone } : {}),
     });
   }
 
