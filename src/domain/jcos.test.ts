@@ -1,12 +1,18 @@
 // JCOS 案件の収支（jcos.ts）のテスト。
-//   1. 手計算の値と比べる（受入例。Issue #88 の例を、材料原価 一律 220 円に直したもの）
+//   0. アルバイト代は、配置した日・人数だけ計上する（入れていない日は 0 人。オーナーの判断 2026-11-15）。
+//      受入例のうち、アルバイトが稼働している例は、その日に配置を入れてから計算する（staffed）
+//   1. 手計算の値と比べる（受入例。Issue #88 の例を、材料原価 220 円に直したもの）
 //   2. 独立した計算経路との突き合わせ（取引を 1 件ずつ台帳に書き出して集計する。厳密な分数で計算し、実装の作りとは別）
 //   3. 請求対象日数とアルバイト稼働日数の区別・予定と実績の区別・材料費の超過
 //   4. 汎用の試算・レイアウトとの分離（二重計上しない／パーツを増減しても粗利が変わらない）
 import { describe, expect, it } from 'vitest';
 import { JcosTerms, Project, ReportSync } from '../types';
 import { estimate } from './calc';
-import { actualsByDate, clearNotHeld, defaultJcos, hydrateJcos, isJcos, jcosDay, jcosEstimate, jcosExcluded, markNotHeld, projectMoney, splitEvenly, withJcosDay } from './jcos';
+import {
+  actualsByDate, clearNotHeld, defaultJcos, hydrateJcos, isJcos, jcosDay, jcosEstimate, jcosExcluded, markNotHeld, projectMoney, splitEvenly, staffDays, unitCostOf, withJcosDay,
+  withUnitCost,
+} from './jcos';
+import { contentKey } from './report';
 import { addPart, removeLastPart } from './layout';
 import { defaultPartTypes, duplicateProject, newProject, sampleData } from './seed';
 import { mkAssign, mkContent, mkData, mkProject, rng, withParts } from './testkit';
@@ -29,11 +35,18 @@ function sync(p: Pick<Project, 'venueId' | 'startDate' | 'endDate'>, days: [stri
   };
 }
 const D5 = ['2026-11-13', '2026-11-14', '2026-11-15', '2026-11-16', '2026-11-17'];
+/** アルバイトを、指定した日に n 人ずつ配置した条件（配置を入れない日は 0 人＝アルバイト代は付かない） */
+const staffed = (dates: string[], n = 1, t: JcosTerms = terms()): JcosTerms => dates.reduce((x, d) => withJcosDay(x, d, { partTimers: n }), t);
 
 // ── 1. 手計算の受入例 ────────────────────────────────────────
 describe('JCOS の収支: 手計算の受入例', () => {
-  it('1 日・実績 120 個: 請求 40,000 − 実費（アルバイト 15,000 ＋ 材料 120×220＝26,400）＝ 粗利 −1,400', () => {
+  it('アルバイトを配置していない日は、アルバイト代を計上しない（1 日・実績 120 個: 請求 40,000 − 材料 26,400 ＝ 粗利 13,600）', () => {
     const e = jcosEstimate(jp({ actualsManual: { '2026-11-13': 120 } }));
+    expect(e.current).toMatchObject({ billing: 40000, partTimerCost: 0, materialCost: 26400, cost: 26400, gross: 13600 });
+    expect([e.partTimerDays, e.days[0].partTimers, e.days[0].partTimerCost]).toEqual([0, 0, 0]);
+  });
+  it('1 日・アルバイト 1 人を配置・実績 120 個: 請求 40,000 − 実費（アルバイト 15,000 ＋ 材料 120×220＝26,400）＝ 粗利 −1,400', () => {
+    const e = jcosEstimate(jp({ jcos: staffed(['2026-11-13']), actualsManual: { '2026-11-13': 120 } }));
     expect(e.current).toMatchObject({
       billLabor: 30000, billMaterial: 10000, extraBilling: 0, billing: 40000,
       partTimerCost: 15000, materialCost: 26400, otherCost: 0, cost: 41400, gross: -1400, count: 120, materialOver: 16400,
@@ -41,15 +54,14 @@ describe('JCOS の収支: 手計算の受入例', () => {
     expect(e.current.marginPct).toBeCloseTo(-3.5, 10);
     expect(e.basis).toBe('actual');
   });
-  it('1 日・実績 0 個: 粗利 25,000（請求 40,000 − アルバイト 15,000）', () => {
-    const e = jcosEstimate(jp({ actualsManual: { '2026-11-13': 0 } }));
+  it('1 日・アルバイト 1 人を配置・実績 0 個: 粗利 25,000（請求 40,000 − アルバイト 15,000）', () => {
+    const e = jcosEstimate(jp({ jcos: staffed(['2026-11-13']), actualsManual: { '2026-11-13': 0 } }));
     expect(e.current).toMatchObject({ billing: 40000, cost: 15000, gross: 25000, materialCost: 0, materialOver: 0, count: 0 });
     expect(e.basis).toBe('actual');           // 0 個も「実績あり」（未入力とは区別する）
   });
   it('5 日請求・アルバイトは 3 日だけ・実績 62,58,70,55,65（計 310 個）: 請求 200,000 − 実費 113,200 ＝ 粗利 86,800', () => {
-    let t = terms();
-    t = withJcosDay(t, D5[1], { partTimers: 0 });
-    t = withJcosDay(t, D5[3], { partTimers: 0 });
+    const t = staffed([D5[0], D5[2], D5[4]]);          // 配置したのは 3 日だけ（残りの 2 日は、入れていない＝0 人）
+    expect(t.days).toEqual({ [D5[0]]: { partTimers: 1 }, [D5[2]]: { partTimers: 1 }, [D5[4]]: { partTimers: 1 } });
     const p = jp({ startDate: D5[0], endDate: D5[4], jcos: t });
     const e = jcosEstimate({ ...p, reportSync: sync(p, [[D5[0], 62], [D5[1], 58], [D5[2], 70], [D5[3], 55], [D5[4], 65]]) });
     expect([e.periodDays, e.billDays, e.partTimerDays]).toEqual([5, 5, 3]);
@@ -62,10 +74,10 @@ describe('JCOS の収支: 手計算の受入例', () => {
     expect(e.days.map((d) => d.materialOver)).toEqual([3640, 2760, 5400, 2100, 4300]);
     expect(e.days.reduce((s, d) => s + d.gross, 0)).toBe(86800);
   });
-  it('5 日・実績 80,78,82,57,83（計 380 個）・予備費の追加請求 20,000・その他実費 8,000: 粗利 53,400', () => {
+  it('5 日（毎日アルバイト 1 人を配置）・実績 80,78,82,57,83（計 380 個）・予備費の追加請求 20,000・その他実費 8,000: 粗利 53,400', () => {
     const p = jp({
       startDate: D5[0], endDate: D5[4],
-      jcos: terms({ extraBillings: [{ id: 'x1', name: '予備費', amount: 20000 }] }),
+      jcos: staffed(D5, 1, terms({ extraBillings: [{ id: 'x1', name: '予備費', amount: 20000 }] })),
       otherCosts: [{ id: 'o1', name: '追加レンタル', amount: 8000 }],
     });
     const e = jcosEstimate({ ...p, reportSync: sync(p, [[D5[0], 80], [D5[1], 78], [D5[2], 82], [D5[3], 57], [D5[4], 83]]) });
@@ -76,7 +88,7 @@ describe('JCOS の収支: 手計算の受入例', () => {
   });
   it('単価は案件ごとに変えられる（請求 35,000＋12,000／アルバイト 16,000／材料原価 250）', () => {
     const e = jcosEstimate(jp({
-      jcos: terms({ billLaborPerDay: 35000, billMaterialPerDay: 12000, partTimerPerDay: 16000, unitCost: 250 }),
+      jcos: staffed(['2026-11-13'], 1, terms({ billLaborPerDay: 35000, billMaterialPerDay: 12000, partTimerPerDay: 16000, unitCost: 250 })),
       actualsManual: { '2026-11-13': 40 },
     }));
     expect(e.current).toMatchObject({ billing: 47000, partTimerCost: 16000, materialCost: 10000, cost: 26000, gross: 21000, materialOver: 0 });
@@ -110,7 +122,7 @@ function datesOf(start: string, end: string): string[] {
  * 台帳方式の検算。取引（請求・支払い）を 1 件ずつ書き出し、最後に種類ごとに足す。
  * 実装は「日別の行を作って足す」作りなので、作りが違う。金額は厳密な分数で持ち、四捨五入の位置だけ仕様に合わせる。
  */
-function ledger(p: Project) {
+function ledger(p: Project, names: Record<string, string> = {}) {
   const t = p.jcos!;
   const dates = datesOf(p.startDate, p.endDate);
   const book: { kind: 'billLabor' | 'billMaterial' | 'extra' | 'partTimer' | 'material' | 'other'; yen: bigint }[] = [];
@@ -123,21 +135,51 @@ function ledger(p: Project) {
   }
   for (const x of t.extraBillings) book.push({ kind: 'extra', yen: yenOf(q(x.amount)) });
 
-  // 支払い: アルバイト代は 1 日ごと（人数 × 単価）
-  for (const d of dates) book.push({ kind: 'partTimer', yen: yenOf(mul(q(t.days[d]?.partTimers ?? 1), q(t.partTimerPerDay))) });
+  // 支払い: アルバイト代は 1 日ごと（配置した人数 × 単価）。人数を入れていない日は 0 人（計上しない）
+  for (const d of dates) book.push({ kind: 'partTimer', yen: yenOf(mul(q(t.days[d]?.partTimers ?? 0), q(t.partTimerPerDay))) });
 
-  // 支払い: 材料原価。その日の個数 ＝ 日報の実績 → 手入力 → 予定（均等割り）の順
-  const planned = p.contents.reduce((s, c) => s + c.plannedCount, 0);
-  const base = Math.floor(planned / dates.length), extra = planned - base * dates.length;
+  // 支払い: 材料原価。その日の個数 ＝ 日報の実績 → 手入力 → 予定の順。
+  //   - 日報の実績に、内容ごとの個数があれば、内容ごとに分ける。内容の記載が無かった分（合計との差）・手入力は、内容の分からない個数
+  //   - 予定は、内容（実施コンテンツ。names に名前があるもの）ごとに、開催する日へ 1 個ずつ順に配る
+  //     （前の内容が配り終えた次の日から続ける。実装の「均等に割って、端数をずらす」とは別の書き方）。名前の分からない内容は、まとめて 1 つ
+  //   - 原価は、内容ごとの指定 → 案件の標準。金額は、日ごとに、同じ原価の個数をまとめてから、円未満を四捨五入して 1 件
   const reportOk = !!p.reportSync && p.reportSync.venueId === p.venueId;
+  const norm1 = (label: string): string => label.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  const unitOf = (label: string): number => (label && t.unitCosts && Object.prototype.hasOwnProperty.call(t.unitCosts, norm1(label)) ? t.unitCosts[norm1(label)] : t.unitCost);
+  const held = dates.filter((d) => t.days[d]?.notHeld !== true);
+  const plannedOn = new Map<string, Map<string, number>>(held.map((d) => [d, new Map<string, number>()]));
+  const totals = new Map<string, number>();                       // 内容の名前（分からなければ ''）→ 予定個数
+  for (const c of p.contents) totals.set(names[c.contentId] ?? '', (totals.get(names[c.contentId] ?? '') ?? 0) + c.plannedCount);
+  let ptr = 0;
+  for (const [label, total] of totals) {
+    if (held.length === 0 || total <= 0) continue;
+    const base = Math.floor(total / held.length);
+    for (const d of held) plannedOn.get(d)!.set(label, base);
+    for (let k = 0; k < total - base * held.length; k += 1) {
+      const d = held[ptr % held.length];
+      plannedOn.get(d)!.set(label, plannedOn.get(d)!.get(label)! + 1);
+      ptr += 1;
+    }
+  }
   let count = 0n;
-  dates.forEach((d, i) => {
-    const fromReport = reportOk ? p.reportSync!.days.find((x) => x.date === d)?.count : undefined;
+  for (const d of dates) {
+    const day = reportOk ? p.reportSync!.days.find((x) => x.date === d) : undefined;
     const manual = p.actualsManual?.[d];
-    const n = fromReport ?? manual ?? base + (i < extra ? 1 : 0);
-    count += BigInt(n);
-    book.push({ kind: 'material', yen: yenOf(mul(q(n), q(t.unitCost))) });
-  });
+    const byUnit = new Map<number, number>();                     // 原価 → その日の個数
+    const put = (unit: number, n: number) => { if (n > 0) byUnit.set(unit, (byUnit.get(unit) ?? 0) + n); };
+    if (day) {
+      let rest = day.count;
+      for (const c of day.contents ?? []) { put(unitOf(c.label), c.count); rest -= c.count; }
+      put(t.unitCost, rest);
+      count += BigInt(day.count);
+    } else if (manual != null) {
+      put(t.unitCost, manual);
+      count += BigInt(manual);
+    } else {
+      for (const [label, n] of plannedOn.get(d) ?? []) { put(unitOf(label), n); count += BigInt(n); }
+    }
+    for (const [unit, n] of byUnit) book.push({ kind: 'material', yen: yenOf(mul(q(n), q(unit))) });
+  }
   for (const o of p.otherCosts) book.push({ kind: 'other', yen: yenOf(q(o.amount)) });
 
   const of = (k: string) => Number(book.filter((b) => b.kind === k).reduce((s, b) => s + b.yen, 0n));
@@ -152,9 +194,13 @@ function ledger(p: Project) {
 
 describe('JCOS の収支: 独立した計算経路（台帳方式）との突き合わせ', () => {
   it('手計算の受入例は、台帳方式でも同じ値になる', () => {
-    const p = jp({ startDate: D5[0], endDate: D5[4] });
+    const p = jp({ startDate: D5[0], endDate: D5[4], jcos: staffed(D5) });
     const withSync = { ...p, reportSync: sync(p, [[D5[0], 62], [D5[1], 58], [D5[2], 70], [D5[3], 55], [D5[4], 65]]) };
     expect(ledger(withSync)).toMatchObject({ billing: 200000, cost: 75000 + 68200, gross: 56800 });
+    // 配置を入れなければ、アルバイト代は付かない
+    const none = { ...withSync, jcos: terms() };
+    expect(ledger(none)).toMatchObject({ billing: 200000, partTimerCost: 0, cost: 68200, gross: 131800 });
+    expect(jcosEstimate(none).current).toMatchObject(ledger(none));
     expect(jcosEstimate(withSync).current).toMatchObject(ledger(withSync));
   });
 
@@ -168,28 +214,51 @@ describe('JCOS の収支: 独立した計算経路（台帳方式）との突き
         billLaborPerDay: int(0, 6) * 5000, billMaterialPerDay: int(0, 4) * 5000, partTimerPerDay: int(0, 4) * 5000, unitCost: int(0, 400),
         extraBillings: Array.from({ length: int(0, 2) }, (_, i) => ({ id: `x${i}`, name: '予備費', amount: int(0, 30) * 1000 })),
       });
+      // 内容ごとの原価（3 種類の内容のうち、いくつかにだけ指定する）
+      const LABELS = ['フラワーボトル', 'フラワーバッグ', 'ミニブーケ'];
+      for (const label of LABELS) if (r() < 0.4) t = withUnitCost(t, contentKey(label), int(0, 500));
       const manual: Record<string, number> = {};
-      const reported: [string, number][] = [];
+      const reported: ReportSync['days'] = [];
       for (const d of dates) {
         if (r() < 0.25) t = withJcosDay(t, d, { billed: false });
         if (r() < 0.4) t = withJcosDay(t, d, { partTimers: int(0, 3) });
+        if (r() < 0.1) t = markNotHeld(t, [d]);                          // 開催していない日（すでに設定のある日には、付かない）
         if (r() < 0.3) manual[d] = int(0, 150);
-        if (r() < 0.4) reported.push([d, int(0, 150)]);
+        if (r() < 0.4) {
+          // 日報の実績: 内容ごとの個数（0〜3 種類）と、内容の記載が無かった分
+          const parts = LABELS.filter(() => r() < 0.5).map((label) => ({ label, count: int(1, 60) }));
+          const blank = r() < 0.4 ? int(0, 40) : 0;
+          const count = parts.reduce((n0, c) => n0 + c.count, 0) + blank;
+          reported.push({ date: d, count, rows: 1, ...(parts.length > 0 ? { contents: parts } : {}) });
+        }
       }
+      // 実施コンテンツ（予定）: 1〜4 行。名前のあるコンテンツ・同じコンテンツの 2 行目・マスタに無いコンテンツ（名前が分からない）を混ぜる
+      const MASTER = [{ id: 'c-a', name: LABELS[0] }, { id: 'c-b', name: LABELS[1] }, { id: 'c-c', name: ' ' }];
+      const names: Record<string, string> = { 'c-a': LABELS[0], 'c-b': LABELS[1] };
+      const contents = Array.from({ length: int(1, 4) }, (_, i) => mkContent({ id: `pc${i}`, contentId: ['c-a', 'c-b', 'c-c', 'c-gone'][int(0, 3)], plannedCount: int(0, 300) }));
       const base = jp({
-        startDate: dates[0], endDate: dates[dates.length - 1], jcos: t, actualsManual: manual,
-        contents: [mkContent({ plannedCount: int(0, 600) }), mkContent({ id: 'pc2', plannedCount: int(0, 200) })],
+        startDate: dates[0], endDate: dates[dates.length - 1], jcos: t, actualsManual: manual, contents,
         otherCosts: Array.from({ length: int(0, 2) }, (_, i) => ({ id: `o${i}`, name: '実費', amount: int(0, 20) * 500 })),
       });
-      const p = r() < 0.7 ? { ...base, reportSync: sync(base, reported) } : base;
-      const e = jcosEstimate(p);
-      expect(e.current, `案件 ${k}`).toMatchObject(ledger(p));
+      const p = r() < 0.7 ? { ...base, reportSync: { ...sync(base, []), days: reported } } : base;
+      // コンテンツの一覧（名前）を渡した計算。案件の一覧は渡さない（会期が重なる案件の扱いは、別のテスト）
+      const e = jcosEstimate(p, { projects: [p], venues: mkData().venues, contents: MASTER.map((m) => ({ ...m, price: 0, materials: [], memo: '' })) });
+      expect(e.current, `案件 ${k}`).toMatchObject(ledger(p, names));
+      // 予定の日ごとの個数は、内容で分ける前（全体をまとめて、開催する日で均等に割る）と同じ
+      const heldN = e.days.filter((d) => !d.notHeld).length;
+      expect(e.days.filter((d) => !d.notHeld).map((d) => d.plannedCount), `案件 ${k} の予定の割り方`).toEqual(splitEvenly(e.plannedCount, heldN));
+      // 内容ごとの指定が無ければ、内容で分ける前（名前を渡さない計算）と、同じ金額
+      if (!t.unitCosts) expect(e.current, `案件 ${k}（指定なし）`).toEqual(jcosEstimate(p).current);
       // 日別の合計と会期の合計が合う
       const t0 = e.current;
       expect(e.days.reduce((s, d) => s + d.billing, 0) + t0.extraBilling).toBe(t0.billing);
       expect(e.days.reduce((s, d) => s + d.cost, 0) + t0.otherCost).toBe(t0.cost);
       expect(e.days.reduce((s, d) => s + d.gross, 0) + t0.extraBilling - t0.otherCost).toBe(t0.gross);
       expect(e.days.reduce((s, d) => s + d.count, 0)).toBe(t0.count);
+      // 内容ごとの内訳を足すと、材料原価・個数の合計になる
+      expect(e.materials.reduce((s, m) => s + m.cost, 0)).toBe(t0.materialCost);
+      expect(e.materials.reduce((s, m) => s + m.count, 0)).toBe(t0.count);
+      expect(e.days.every((d) => d.materials.reduce((s, m) => s + m.cost, 0) === d.materialCost)).toBe(true);
     }
   });
 
@@ -216,45 +285,279 @@ describe('JCOS の収支: 独立した計算経路（台帳方式）との突き
   });
 });
 
+// ── 2.5 内容ごとの材料原価（Version 5.1） ─────────────────────────
+describe('内容ごとの材料原価（220 円は、フラワーボトルの初期値。内容ごとに変えられる）', () => {
+  const BOTTLE = 'フラワーボトル';
+  const BAG = 'フラワーバッグ';
+  const base = jp({ startDate: D5[0], endDate: D5[1], contents: [mkContent({ plannedCount: 0 })] });
+  const withDays = (days: ReportSync['days'], t: JcosTerms = terms()): Project => ({ ...base, jcos: t, reportSync: { ...sync(base, []), days } });
+  const day0 = { date: D5[0], count: 50, rows: 2, contents: [{ label: BAG, count: 20 }, { label: BOTTLE, count: 30 }] };
+
+  it('指定が無ければ、どの内容も、案件の標準（初期値 220 円）で計算する（内容で分ける前と、同じ金額）', () => {
+    const e = jcosEstimate(withDays([day0]));
+    expect(e.current).toMatchObject({ count: 50, materialCost: 50 * 220 });
+    expect(e.uniformUnitCost).toBe(220);
+    expect(e.materials.map((m) => [m.label, m.count, m.unitCost, m.custom, m.cost])).toEqual([[BOTTLE, 30, 220, false, 6600], [BAG, 20, 220, false, 4400]]);
+    // 内容の内訳が無い実績（以前の版で同期したもの）と、同じ金額
+    expect(jcosEstimate(withDays([{ date: D5[0], count: 50, rows: 2 }])).current).toEqual(e.current);
+  });
+  it('内容ごとに原価を変えると、その内容の個数にだけ、その原価が掛かる（ほかの内容・請求・アルバイト代は変わらない）', () => {
+    const before = jcosEstimate(withDays([day0])).current;
+    const e = jcosEstimate(withDays([day0], withUnitCost(terms(), contentKey(BAG), 350)));
+    expect(e.current.materialCost).toBe(30 * 220 + 20 * 350);
+    expect(e.current).toMatchObject({ billing: before.billing, partTimerCost: before.partTimerCost, count: 50, gross: before.gross - 20 * (350 - 220) });
+    expect(e.uniformUnitCost).toBeNull();
+    expect(e.materials.map((m) => [m.label, m.count, m.unitCost, m.custom, m.cost])).toEqual([[BOTTLE, 30, 220, false, 6600], [BAG, 20, 350, true, 7000]]);
+    expect(e.days[0].materials.map((m) => [m.label, m.cost])).toEqual([[BAG, 7000], [BOTTLE, 6600]]);
+    expect(e.days[0]).toMatchObject({ materialCost: 13600, materialOver: 3600 });
+  });
+  it('案件の標準を変えると、原価を決めていない内容にだけ効く（決めてある内容は、そのまま）', () => {
+    const e = jcosEstimate(withDays([day0], withUnitCost(terms({ unitCost: 200 }), contentKey(BAG), 350)));
+    expect(e.materials.map((m) => [m.label, m.unitCost, m.custom])).toEqual([[BOTTLE, 200, false], [BAG, 350, true]]);
+    expect(e.current.materialCost).toBe(30 * 200 + 20 * 350);
+  });
+  it('内容の記載が無かった回答の個数（合計との差）と、手入力の実績は、案件の標準で計算する（内訳では「内容の指定なし」として、最後に出す）', () => {
+    const p = { ...withDays([{ date: D5[0], count: 50, rows: 3, contents: [{ label: BAG, count: 20 }] }], withUnitCost(terms({ unitCost: 200 }), contentKey(BAG), 350)), actualsManual: { [D5[1]]: 10 } };
+    const e = jcosEstimate(p);
+    expect(e.days.map((d) => d.materialCost)).toEqual([20 * 350 + 30 * 200, 10 * 200]);
+    expect(e.materials.map((m) => [m.key, m.label, m.count, m.unitCost, m.custom])).toEqual([[contentKey(BAG), BAG, 20, 350, true], ['', '', 40, 200, false]]);
+  });
+  it('内容の名前は、全角/半角・空白・英字の大小をそろえて見分ける', () => {
+    const t = withUnitCost(terms(), contentKey('Flower Bag'), 300);
+    const e = jcosEstimate(withDays([{ date: D5[0], count: 7, rows: 2, contents: [{ label: 'ＦＬＯＷＥＲ　ＢＡＧ', count: 4 }, { label: 'flowerbag', count: 3 }] }], t));
+    expect(e.materials.map((m) => [m.count, m.unitCost])).toEqual([[7, 300]]);
+    expect(unitCostOf(t, contentKey('flower  bag'))).toBe(300);
+    expect(unitCostOf(t, contentKey(BOTTLE))).toBe(220);
+    expect(unitCostOf(t, '')).toBe(220);
+  });
+  it('予定個数にも、内容ごとの原価を使う（実施コンテンツの名前で見分ける。内容ごとに、開催する日で均等に割る）', () => {
+    const p = jp({
+      startDate: D5[0], endDate: D5[1], jcos: withUnitCost(terms(), contentKey(BAG), 350),
+      contents: [mkContent({ id: 'pc1', contentId: 'c-bottle', plannedCount: 100 }), mkContent({ id: 'pc2', contentId: 'c-bag', plannedCount: 41 })],
+    });
+    const data = mkData({ contents: [{ id: 'c-bottle', name: BOTTLE, price: 0, materials: [], memo: '' }, { id: 'c-bag', name: BAG, price: 0, materials: [], memo: '' }] });
+    const e = jcosEstimate(p, { ...data, projects: [p] });
+    expect(e.days.map((d) => [d.plannedCount, d.materialCost])).toEqual([[50 + 21, 50 * 220 + 21 * 350], [50 + 20, 50 * 220 + 20 * 350]]);
+    expect(e.planned).toMatchObject({ count: 141, materialCost: 100 * 220 + 41 * 350 });
+    expect(e.materials.map((m) => [m.label, m.plannedCount, m.actualCount, m.cost])).toEqual([[BOTTLE, 100, 0, 22000], [BAG, 41, 0, 14350]]);
+    // コンテンツの一覧を渡さない計算（名前が分からない）は、案件の標準でまとめて計算する
+    expect(jcosEstimate(p).planned.materialCost).toBe(141 * 220);
+    // 一覧・見出しの金額（projectMoney）も、内容ごとの原価で計算する
+    expect(projectMoney(p, { ...data, projects: [p] }).cost).toBe(e.current.cost);
+  });
+  it('実績のある日は実績の内訳、無い日は予定の内訳で計算する（内訳に、実績の個数と、予定で計算した個数を分けて持つ）', () => {
+    const p = jp({
+      startDate: D5[0], endDate: D5[1], jcos: withUnitCost(terms(), contentKey(BAG), 350),
+      contents: [mkContent({ id: 'pc1', contentId: 'c-bag', plannedCount: 40 })],
+    });
+    const data = mkData({ contents: [{ id: 'c-bag', name: BAG, price: 0, materials: [], memo: '' }] });
+    const synced = { ...p, reportSync: { ...sync(p, []), days: [{ date: D5[0], count: 25, rows: 1, contents: [{ label: BAG, count: 25 }] }] } };
+    const e = jcosEstimate(synced, { ...data, projects: [synced] });
+    expect(e.basis).toBe('mixed');
+    expect(e.materials).toEqual([{ key: contentKey(BAG), label: BAG, count: 45, unitCost: 350, cost: 45 * 350, actualCount: 25, plannedCount: 20, custom: true }]);
+    expect(e.current.materialCost).toBe(45 * 350);
+    expect(e.planned.materialCost).toBe(40 * 350);
+  });
+  it('内訳の合計が、その日の個数を超えているとき（保存データの不整合）は、内訳を使わない（その日の個数 × 案件の標準）', () => {
+    const e = jcosEstimate(withDays([{ date: D5[0], count: 10, rows: 1, contents: [{ label: BAG, count: 30 }] }], withUnitCost(terms(), contentKey(BAG), 350)));
+    expect([e.current.count, e.current.materialCost]).toEqual([10, 2200]);
+    // 個数は「内容の指定なし」の 10 個だけ（原価を決めてあるバッグは、個数 0 の行として残る）
+    expect(e.materials.map((m) => [m.key, m.count, m.cost])).toEqual([[contentKey(BAG), 0, 0], ['', 10, 2200]]);
+  });
+  it('予定個数を内容ごとに割っても、日ごとの合計は、全体をまとめて割ったときと同じ（端数が、初めの日に寄らない）', () => {
+    const master = (rows: [string, string][]) => mkData({ contents: rows.map(([id, name]) => ({ id, name, price: 0, materials: [], memo: '' })) });
+    // 3 日・3 つの内容が 1 個ずつ → 日ごとに 1 個ずつ（[3,0,0] にしない）
+    const three = jp({ startDate: D5[0], endDate: D5[2], contents: ['a', 'b', 'c'].map((x) => mkContent({ id: `pc-${x}`, contentId: `c-${x}`, plannedCount: 1 })) });
+    const d3 = master([['c-a', 'A'], ['c-b', 'B'], ['c-c', 'C']]);
+    const e3 = jcosEstimate(three, { ...d3, projects: [three] });
+    expect(e3.days.map((d) => d.plannedCount)).toEqual([1, 1, 1]);
+    expect(e3.days.map((d) => d.materials.map((m) => m.label))).toEqual([['A'], ['B'], ['C']]);
+    // 5 日・201 個 ＋ 103 個 → 日ごとの合計は [61,61,61,61,60]（304 個を 5 日で割ったとき）。内容ごとの合計は、元の個数のまま
+    const two = jp({ startDate: D5[0], endDate: D5[4], contents: [mkContent({ id: 'pc1', contentId: 'c-a', plannedCount: 201 }), mkContent({ id: 'pc2', contentId: 'c-b', plannedCount: 103 })] });
+    const d2 = master([['c-a', BOTTLE], ['c-b', BAG]]);
+    const e2 = jcosEstimate(two, { ...d2, projects: [two] });
+    expect(e2.days.map((d) => d.plannedCount)).toEqual(splitEvenly(304, 5));
+    expect(e2.days.map((d) => d.plannedCount)).toEqual([61, 61, 61, 61, 60]);
+    expect(e2.materials.map((m) => [m.label, m.plannedCount])).toEqual([[BOTTLE, 201], [BAG, 103]]);
+    // 一部の日に実績が入っても、内容ごとの指定が無ければ、内容で分ける前（名前を渡さない計算）と、同じ金額
+    const mixed = { ...two, actualsManual: { [D5[0]]: 10 } };
+    expect(jcosEstimate(mixed, { ...d2, projects: [mixed] }).current).toEqual(jcosEstimate(mixed).current);
+    const mixed3 = { ...three, actualsManual: { [D5[0]]: 0 } };
+    expect(jcosEstimate(mixed3, { ...d3, projects: [mixed3] }).current).toEqual(jcosEstimate(mixed3).current);
+    expect(jcosEstimate(mixed3, { ...d3, projects: [mixed3] }).current.materialCost).toBe(2 * 220);
+  });
+  it('同じコンテンツの行が 2 つあれば、まとめる。マスタに無い・名前が空のコンテンツは、内容の分からない個数として、標準で計算する', () => {
+    const data = mkData({ contents: [{ id: 'c-bag', name: BAG, price: 0, materials: [], memo: '' }, { id: 'c-blank', name: '  ', price: 0, materials: [], memo: '' }] });
+    const p = jp({
+      startDate: D5[0], endDate: D5[1], jcos: withUnitCost(terms(), contentKey(BAG), 350),
+      contents: [
+        mkContent({ id: 'pc1', contentId: 'c-bag', plannedCount: 10 }), mkContent({ id: 'pc2', contentId: 'c-bag', plannedCount: 6 }),
+        mkContent({ id: 'pc3', contentId: 'c-blank', plannedCount: 4 }), mkContent({ id: 'pc4', contentId: 'c-gone', plannedCount: 2 }),
+      ],
+    });
+    const e = jcosEstimate(p, { ...data, projects: [p] });
+    expect(e.materials.map((m) => [m.key, m.count, m.unitCost])).toEqual([[contentKey(BAG), 16, 350], ['', 6, 220]]);
+    expect(e.current.materialCost).toBe(16 * 350 + 6 * 220);
+    expect(e.days.map((d) => d.plannedCount)).toEqual([11, 11]);
+  });
+  it('開催していない日には、どの内容の予定個数も割り振らない（開催する日だけで、内容ごとに割る）', () => {
+    const data = mkData({ contents: [{ id: 'c-bottle', name: BOTTLE, price: 0, materials: [], memo: '' }, { id: 'c-bag', name: BAG, price: 0, materials: [], memo: '' }] });
+    const contents = [mkContent({ id: 'pc1', contentId: 'c-bottle', plannedCount: 5 }), mkContent({ id: 'pc2', contentId: 'c-bag', plannedCount: 3 })];
+    const p = jp({ startDate: D5[0], endDate: D5[2], contents, jcos: markNotHeld(withUnitCost(terms(), contentKey(BAG), 350), [D5[1]]) });
+    const e = jcosEstimate(p, { ...data, projects: [p] });
+    expect(e.days.map((d) => [d.plannedCount, d.materialCost])).toEqual([[4, 3 * 220 + 1 * 350], [0, 0], [4, 2 * 220 + 2 * 350]]);
+    // 開催する日が 1 日も無いときは、どの日にも付かない（内容の行は、個数 0 で残る）
+    const none = { ...p, jcos: markNotHeld(withUnitCost(terms(), contentKey(BAG), 350), D5.slice(0, 3)) };
+    const e0 = jcosEstimate(none, { ...data, projects: [none] });
+    expect([e0.current.count, e0.current.materialCost, e0.materials.map((m) => [m.label, m.count])]).toEqual([0, 0, [[BAG, 0], [BOTTLE, 0]]]);
+  });
+  it('いまの計算で個数が 0 の内容も、内訳に残す（予定の内容・原価を決めてある内容）。決めた原価を見られて、外せる。個数のある行だけで「同じ原価か」を判定する', () => {
+    const data = mkData({ contents: [{ id: 'c-bag', name: BAG, price: 0, materials: [], memo: '' }] });
+    const k = contentKey(BAG);
+    const p = jp({ startDate: D5[0], endDate: D5[0], jcos: withUnitCost(terms(), k, 350), contents: [mkContent({ id: 'pc1', contentId: 'c-bag', plannedCount: 40 })] });
+    // 日報の内容の書き方が、実施コンテンツの名前と違う（別の内容として数えられる）。どの日にも実績が入ったので、予定の「バッグ」は、個数 0
+    const synced = { ...p, reportSync: { ...sync(p, []), days: [{ date: D5[0], count: 25, rows: 1, contents: [{ label: '花の袋づくり', count: 25 }] }] } };
+    const e = jcosEstimate(synced, { ...data, projects: [synced] });
+    expect(e.materials.map((m) => [m.label, m.count, m.unitCost, m.custom, m.cost])).toEqual([['花の袋づくり', 25, 220, false, 5500], [BAG, 0, 350, true, 0]]);
+    expect(e.uniformUnitCost).toBe(220);                                             // 個数のある行は、どれも 220 円
+    expect([e.current.materialCost, e.planned.materialCost]).toEqual([5500, 40 * 350]);   // 決めた原価は、予定だけで計算した金額に効いている
+    // 指定を外すと、標準に戻る（予定の内容なので、行は残る）
+    const cleared = { ...synced, jcos: withUnitCost(synced.jcos!, k, null) };
+    expect(jcosEstimate(cleared, { ...data, projects: [cleared] }).materials.map((m) => [m.label, m.count, m.unitCost, m.custom])).toEqual([['花の袋づくり', 25, 220, false], [BAG, 0, 220, false]]);
+    // 予定にも実績にも無い内容の原価だけが残っているとき: キーを名前の代わりにして出す。外すと、行ごと無くなる
+    const orphan = jp({ jcos: withUnitCost(terms(), 'むかしの内容', 300), actualsManual: { '2026-11-13': 5 } });
+    expect(jcosEstimate(orphan).materials.map((m) => [m.key, m.label, m.count, m.custom])).toEqual([['むかしの内容', 'むかしの内容', 0, true], ['', '', 5, false]]);
+    expect(jcosEstimate({ ...orphan, jcos: withUnitCost(orphan.jcos!, 'むかしの内容', null) }).materials.map((m) => m.key)).toEqual(['']);
+  });
+  it('同じ原価の内容は、その日の個数をまとめてから四捨五入する（指定が無ければ、内容が分かれていても、内容で分ける前と 1 円も違わない）', () => {
+    // 標準 217.8 円・3 個 ＋ 4 個: まとめて 7 × 217.8 ＝ 1,524.6 → 1,525 円（内容ごとに丸めると 653 ＋ 871 ＝ 1,524 円になってしまう）
+    const t = terms({ unitCost: 217.8 });
+    const split = jcosEstimate(withDays([{ date: D5[0], count: 7, rows: 2, contents: [{ label: BAG, count: 3 }, { label: BOTTLE, count: 4 }] }], t));
+    const whole = jcosEstimate(withDays([{ date: D5[0], count: 7, rows: 2 }], t));
+    expect([split.current.materialCost, whole.current.materialCost]).toEqual([1525, 1525]);
+    expect(split.current).toEqual(whole.current);
+    // 内訳の行は、合計に合うように配る（足すと、合計と一致する）
+    expect(split.days[0].materials.map((m) => m.cost).reduce((a, b) => a + b, 0)).toBe(1525);
+    // 653.4 ＋ 871.2: 切り捨てた 653 ＋ 871 ＝ 1,524 に、端数の大きいバッグ（.4）へ 1 円を足す
+    expect(split.days[0].materials.map((m) => [m.label, m.cost])).toEqual([[BAG, 654], [BOTTLE, 871]]);
+    // 原価が違う内容は、別々に四捨五入する
+    const diff = jcosEstimate(withDays([{ date: D5[0], count: 7, rows: 2, contents: [{ label: BAG, count: 3 }, { label: BOTTLE, count: 4 }] }], withUnitCost(t, contentKey(BAG), 220.5)));
+    expect(diff.days[0].materials.map((m) => [m.label, m.cost])).toEqual([[BAG, 662], [BOTTLE, 871]]);
+  });
+  it('内容の名前が、オブジェクトがもともと持つ名前（constructor など）でも、原価の指定と取り違えない', () => {
+    const e = jcosEstimate(withDays([{ date: D5[0], count: 5, rows: 1, contents: [{ label: 'constructor', count: 5 }] }]));
+    expect(e.materials.map((m) => [m.label, m.unitCost, m.custom, m.cost])).toEqual([['constructor', 220, false, 1100]]);
+    expect(unitCostOf(terms(), 'constructor')).toBe(220);
+    const set = withUnitCost(terms(), 'constructor', 300);
+    expect(unitCostOf(set, 'constructor')).toBe(300);
+  });
+  it('小数の原価でも、日ごと・内容ごとに円未満を四捨五入する', () => {
+    const t = withUnitCost(terms({ unitCost: 100.4 }), contentKey(BAG), 220.5);
+    const d = (date: string) => ({ date, count: 6, rows: 2, contents: [{ label: BAG, count: 3 }] });
+    const e = jcosEstimate(withDays([d(D5[0]), d(D5[1])], t));
+    // バッグ 3 個 × 220.5 ＝ 661.5 → 662 ／ 内容の指定なし 3 個 × 100.4 ＝ 301.2 → 301（日ごと）
+    expect(e.days.map((x) => x.materialCost)).toEqual([963, 963]);
+    expect(e.current.materialCost).toBe(1926);
+  });
+  it('原価の指定を外すと、案件の標準に戻る。内容の指定なし（空のキー）は、案件の標準そのものを変える', () => {
+    const k = contentKey(BAG);
+    const set = withUnitCost(terms(), k, 350);
+    expect(set.unitCosts).toEqual({ [k]: 350 });
+    expect(withUnitCost(set, k, 0).unitCosts).toEqual({ [k]: 0 });                   // 0 円も、指定として持つ
+    const cleared = withUnitCost(set, k, null);
+    expect('unitCosts' in cleared).toBe(false);
+    expect(unitCostOf(cleared, k)).toBe(220);
+    expect(withUnitCost(set, k, -1).unitCosts).toBeUndefined();                      // マイナス・数でない値は、指定を外す
+    expect(withUnitCost(terms(), '', 250)).toMatchObject({ unitCost: 250 });
+    expect(withUnitCost(terms(), '', null).unitCost).toBe(220);                      // 空欄では、案件の標準は変えない
+    expect(set.unitCost).toBe(220);                                                  // 内容ごとの指定は、案件の標準を変えない
+  });
+  it('保存してあった内容ごとの原価は、読み込んでも残る（数でないもの・マイナス・空のキーは外す）。複製しても引き継ぐ', () => {
+    const k = contentKey(BAG);
+    const t = hydrateJcos({ ...terms(), unitCosts: { [k]: 350, bad: 'x', neg: -5, '': 99, zero: 0 } })!;
+    expect(t.unitCosts).toEqual({ [k]: 350, zero: 0 });
+    expect('unitCosts' in hydrateJcos({ ...terms() })!).toBe(false);
+    expect('unitCosts' in hydrateJcos({ ...terms(), unitCosts: 'x' })!).toBe(false);
+    const copy = duplicateProject(jp({ jcos: withUnitCost(terms(), k, 350) }));
+    expect(copy.jcos?.unitCosts).toEqual({ [k]: 350 });
+  });
+  it('内容ごとの原価を足しても、汎用の試算（estimate）の結果は変わらない（JCOS 以外の案件の計算は、そのまま）', () => {
+    const data = mkData();
+    const generic = mkProject({ contents: [mkContent({ plannedCount: 120, sparePct: 10 })] });
+    const e0 = estimate(generic, data);
+    const withTerms = { ...generic, jcos: { ...withUnitCost(terms(), contentKey(BAG), 350), enabled: false } };
+    expect(estimate(withTerms, data)).toEqual(e0);
+    expect(projectMoney(withTerms, data)).toEqual({ jcos: false, revenue: e0.revenue, cost: e0.totalCost, profit: e0.profit });
+  });
+});
+
 // ── 3. 日数・予定と実績・超過 ───────────────────────────────────
 describe('請求対象日数とアルバイト稼働日数は別々に数える', () => {
   const base = jp({ startDate: D5[0], endDate: D5[4] });
-  it('何も変えなければ、会期の日数ぶん請求し、毎日アルバイト 1 人', () => {
+  it('何も変えなければ、会期の日数ぶん請求し、アルバイトは 0 人（配置していない日に、アルバイト代を自動では計上しない）', () => {
     const e = jcosEstimate(base);
-    expect([e.periodDays, e.billDays, e.partTimerDays]).toEqual([5, 5, 5]);
-    expect(e.current).toMatchObject({ billing: 200000, partTimerCost: 75000 });
+    expect([e.periodDays, e.billDays, e.partTimerDays]).toEqual([5, 5, 0]);
+    expect(e.current).toMatchObject({ billing: 200000, partTimerCost: 0 });
+    expect(e.days.map((d) => [d.partTimers, d.partTimerCost])).toEqual(D5.map(() => [0, 0]));
+  });
+  it('アルバイト代は、配置した日・人数に応じて計上する（2 日に 1 人ずつ → 30,000 円。毎日 1 人 → 75,000 円）', () => {
+    const two = jcosEstimate({ ...base, jcos: staffed([D5[0], D5[3]]) });
+    expect([two.partTimerDays, two.current.partTimerCost]).toEqual([2, 30000]);
+    expect(two.days.map((d) => d.partTimerCost)).toEqual([15000, 0, 0, 15000, 0]);
+    const all = jcosEstimate({ ...base, jcos: staffed(D5) });
+    expect([all.partTimerDays, all.current.partTimerCost]).toEqual([5, 75000]);
   });
   it('請求しない日を作っても、アルバイトの稼働は変わらない', () => {
-    const e = jcosEstimate({ ...base, jcos: withJcosDay(terms(), D5[2], { billed: false }) });
+    const e = jcosEstimate({ ...base, jcos: withJcosDay(staffed(D5), D5[2], { billed: false }) });
     expect([e.billDays, e.partTimerDays]).toEqual([4, 5]);
     expect(e.current).toMatchObject({ billLabor: 120000, billMaterial: 40000, billing: 160000, partTimerCost: 75000 });
     expect(e.days[2]).toMatchObject({ billed: false, billing: 0, partTimers: 1, partTimerCost: 15000, gross: -15000 });
   });
   it('アルバイトが稼働しない日・2 人の日を作っても、請求は変わらない', () => {
-    let t = withJcosDay(terms(), D5[0], { partTimers: 0 });
+    let t = withJcosDay(staffed(D5), D5[0], { partTimers: 0 });
     t = withJcosDay(t, D5[1], { partTimers: 2 });
     const e = jcosEstimate({ ...base, jcos: t });
     expect([e.billDays, e.partTimerDays]).toEqual([5, 5]);     // 0＋2＋1＋1＋1
     expect(e.days.map((d) => d.partTimerCost)).toEqual([0, 30000, 15000, 15000, 15000]);
     expect(e.current.billing).toBe(200000);
   });
-  it('日ごとの設定は、既定（請求する・1 人）に戻すとデータから消える', () => {
+  it('日ごとの設定は、既定（請求する・0 人）に戻すとデータから消える。1 人以上の配置は、データに残る', () => {
     let t = withJcosDay(terms(), D5[0], { billed: false, partTimers: 2 });
     expect(t.days).toEqual({ [D5[0]]: { billed: false, partTimers: 2 } });
     t = withJcosDay(t, D5[0], { billed: true });
     expect(t.days).toEqual({ [D5[0]]: { partTimers: 2 } });
     t = withJcosDay(t, D5[0], { partTimers: 1 });
+    expect(t.days).toEqual({ [D5[0]]: { partTimers: 1 } });
+    t = withJcosDay(t, D5[0], { partTimers: 0 });
     expect(t.days).toEqual({});
-    expect(jcosDay(t, D5[0])).toEqual({ billed: true, partTimers: 1, notHeld: false });
+    expect(jcosDay(t, D5[0])).toEqual({ billed: true, partTimers: 0, notHeld: false });
+  });
+  it('以前の版で保存した「0 人」の設定は、そのまま 0 人として読む。人数の無い日も 0 人（以前の版では 1 人として計算していた）', () => {
+    const t = hydrateJcos({ ...terms(), days: { [D5[0]]: { partTimers: 0 }, [D5[1]]: { billed: false } } })!;
+    expect([jcosDay(t, D5[0]).partTimers, jcosDay(t, D5[1]).partTimers, jcosDay(t, D5[2]).partTimers]).toEqual([0, 0, 0]);
+  });
+  it('「開催する日すべてに 1 人ずつ入れる」: 配置の無い日にだけ入れる（すでに配置のある日・開催していない日は、変えない。請求しない日にも入れられる）', () => {
+    let t = withJcosDay(terms(), D5[1], { partTimers: 2 });                     // 11/14 は、すでに 2 人
+    t = withJcosDay(t, D5[2], { billed: false });                              // 11/15 は、請求しない日（開催はしている）
+    t = markNotHeld(t, [D5[3]]);                                               // 11/16 は、開催していない日
+    const all = staffDays(t, D5);
+    expect(D5.map((d) => jcosDay(all, d).partTimers)).toEqual([1, 2, 1, 0, 1]);
+    expect(jcosDay(all, D5[3])).toEqual({ billed: false, partTimers: 0, notHeld: true });
+    expect(jcosDay(all, D5[2])).toEqual({ billed: false, partTimers: 1, notHeld: false });
+    expect(staffDays(all, D5)).toBe(all);                                       // もう一度押しても、変わらない
+    expect(staffDays(t, [])).toBe(t);
+    const e = jcosEstimate({ ...base, jcos: all });
+    expect([e.partTimerDays, e.current.partTimerCost]).toEqual([5, 75000]);
   });
   it('会期の外の日に残った設定は、計算に入らない（会期を変えたあとの残り）', () => {
     const t = withJcosDay(terms(), '2026-12-25', { billed: false, partTimers: 5 });
-    expect(jcosEstimate({ ...base, jcos: t }).current).toMatchObject({ billing: 200000, partTimerCost: 75000 });
+    expect(jcosEstimate({ ...base, jcos: t }).current).toMatchObject({ billing: 200000, partTimerCost: 0 });
   });
 });
 
 describe('予定個数と実績個数を区別する', () => {
-  const base = jp({ startDate: D5[0], endDate: D5[4], contents: [mkContent({ plannedCount: 300 })] });
+  // 毎日アルバイト 1 人を配置した案件
+  const base = jp({ startDate: D5[0], endDate: D5[4], contents: [mkContent({ plannedCount: 300 })], jcos: staffed(D5) });
   it('実績が無い間は、予定個数（300 個を 5 日で均等割り＝60 個/日）で見込みを出す', () => {
     const e = jcosEstimate(base);
     expect(e.basis).toBe('planned');
@@ -278,7 +581,7 @@ describe('予定個数と実績個数を区別する', () => {
     expect(e.basis).toBe('actual');
     expect(e.current.count).toBe(50 + 51 + 52 + 53 + 54);
   });
-  it('予定個数は、複数のコンテンツの合計（製品の種類では分けない）。割り切れない端数は前の日から 1 個ずつ', () => {
+  it('予定個数は、複数のコンテンツの合計（内容の名前が分からないときは、まとめて日数で割る）。割り切れない端数は前の日から 1 個ずつ', () => {
     const e = jcosEstimate({ ...base, contents: [mkContent({ plannedCount: 200 }), mkContent({ id: 'pc2', plannedCount: 103 })] });
     expect(e.plannedCount).toBe(303);
     expect(e.days.map((d) => d.plannedCount)).toEqual([61, 61, 61, 60, 60]);
@@ -385,7 +688,7 @@ describe('レイアウト・汎用の試算の項目は、JCOS の収支に入�
     otherCosts: [{ id: 'o1', name: '印刷費', amount: 12000 }],
   });
   const withLayout = { ...generic, layout: addPart(addPart(generic.layout, table), chair) };
-  const jcos = { ...withLayout, jcos: terms() };
+  const jcos = { ...withLayout, jcos: staffed(D5) };          // 毎日アルバイト 1 人を配置
 
   it('JCOS 案件の請求・実費は、JCOS の条件・個数・その他実費だけで決まる', () => {
     const e = jcosEstimate(jcos);
@@ -467,9 +770,9 @@ describe('案件の複製・サンプル', () => {
 describe('データが欠けていても落ちない', () => {
   it('jcos が無い案件・項目の欠けた jcos でも、標準の条件で計算する', () => {
     const p = mkProject({ startDate: D5[0], endDate: D5[0], contents: [mkContent({ plannedCount: 10 })] });
-    expect(jcosEstimate(p).current).toMatchObject({ billing: 40000, partTimerCost: 15000, materialCost: 2200 });
+    expect(jcosEstimate(p).current).toMatchObject({ billing: 40000, partTimerCost: 0, materialCost: 2200 });
     const partial = { ...p, jcos: { enabled: true } as unknown as JcosTerms };
-    expect(jcosEstimate(partial).current).toMatchObject({ billing: 40000, partTimerCost: 15000, materialCost: 2200 });
+    expect(jcosEstimate(partial).current).toMatchObject({ billing: 40000, partTimerCost: 0, materialCost: 2200 });
   });
   it('会期が未入力の案件は、0 日として計算する（追加の請求・その他実費だけが残る）', () => {
     const p = jp({ startDate: '', endDate: '', jcos: terms({ extraBillings: [{ id: 'x', name: '予備費', amount: 5000 }] }), otherCosts: [{ id: 'o', name: '実費', amount: 2000 }] });
@@ -583,7 +886,7 @@ describe('開催していない日（日報に合わせて会期を広げたと�
     expect(markNotHeld(set, [D5[0]])).toBe(set);
   });
   it('開催していない日は、請求にもアルバイト代にも入らない（すべての日を開催した日として扱わない）', () => {
-    const p = jp({ startDate: D5[0], endDate: D5[4], jcos: markNotHeld(terms(), [D5[2]]) });
+    const p = jp({ startDate: D5[0], endDate: D5[4], jcos: markNotHeld(staffed([D5[0], D5[1], D5[3], D5[4]]), [D5[2]]) });
     const e = jcosEstimate({ ...p, reportSync: sync(p, [[D5[0], 10], [D5[1], 10], [D5[3], 10], [D5[4], 10]]) });
     expect([e.periodDays, e.heldDays, e.billDays, e.partTimerDays]).toEqual([5, 4, 4, 4]);
     expect([e.current.billing, e.current.partTimerCost, e.current.materialCost, e.current.gross]).toEqual([160000, 60000, 8800, 91200]);
@@ -592,7 +895,7 @@ describe('開催していない日（日報に合わせて会期を広げたと�
     expect(e.days.map((d) => d.notHeld)).toEqual([false, false, true, false, false]);
   });
   it('開催していない日には、予定個数を割り振らない（予定の材料原価が、その日に付かない）。予定個数の合計は変わらない', () => {
-    const p = jp({ startDate: D5[0], endDate: D5[3], contents: [mkContent({ plannedCount: 120 })], jcos: markNotHeld(terms(), [D5[2]]) });
+    const p = jp({ startDate: D5[0], endDate: D5[3], contents: [mkContent({ plannedCount: 120 })], jcos: markNotHeld(staffed([D5[0], D5[1], D5[3]]), [D5[2]]) });
     const e = jcosEstimate(p);
     expect(e.days.map((d) => [d.plannedCount, d.materialCost, d.billing, d.partTimerCost, d.gross])).toEqual([
       [40, 8800, 40000, 15000, 16200], [40, 8800, 40000, 15000, 16200], [0, 0, 0, 0, 0], [40, 8800, 40000, 15000, 16200],
@@ -607,20 +910,21 @@ describe('開催していない日（日報に合わせて会期を広げたと�
     const e = jcosEstimate(p);
     expect([e.heldDays, e.current.billing, e.current.cost, e.current.count, e.basis]).toEqual([0, 0, 0, 0, 'planned']);
   });
-  it('その日の回答が日報に入ったら、印を外す（請求する・アルバイト 1 人に戻る）。印の無い日・利用者が決めた日は、変えない', () => {
+  it('その日の回答が日報に入ったら、印を外す（請求する・アルバイト 0 人＝未配置に戻る）。印の無い日・利用者が決めた日は、変えない', () => {
     const t = markNotHeld(terms({ days: { [D5[0]]: { billed: false, partTimers: 0 } } }), [D5[2], D5[3]]);
     const cleared = clearNotHeld(t, [D5[0], D5[2], D5[4]]);
     expect(cleared.days).toEqual({ [D5[0]]: { billed: false, partTimers: 0 }, [D5[3]]: { billed: false, partTimers: 0, notHeld: true } });
-    expect(jcosDay(cleared, D5[2])).toEqual({ billed: true, partTimers: 1, notHeld: false });
+    expect(jcosDay(cleared, D5[2])).toEqual({ billed: true, partTimers: 0, notHeld: false });
     expect(clearNotHeld(cleared, [D5[0], D5[2]])).toBe(cleared);                     // 外すものが無ければ、同じものを返す
   });
   it('利用者が、その日の請求・アルバイトの人数を変えたら、印は外れる（開催した日として扱う）', () => {
     const t = markNotHeld(terms(), [D5[2]]);
     const billed = withJcosDay(t, D5[2], { billed: true });
-    expect(billed.days).toEqual({ [D5[2]]: { partTimers: 0 } });
-    const staffed = withJcosDay(t, D5[2], { partTimers: 1 });
-    expect(staffed.days).toEqual({ [D5[2]]: { billed: false } });
-    expect(jcosDay(staffed, D5[2]).notHeld).toBe(false);
+    expect(billed.days).toEqual({});                                                  // 請求する・0 人（既定）＝開催した日
+    expect(jcosDay(billed, D5[2])).toEqual({ billed: true, partTimers: 0, notHeld: false });
+    const placed = withJcosDay(t, D5[2], { partTimers: 1 });
+    expect(placed.days).toEqual({ [D5[2]]: { billed: false, partTimers: 1 } });
+    expect(jcosDay(placed, D5[2]).notHeld).toBe(false);
   });
   it('開催していない日に、実績（手入力）が入っているときは、その日も「実績が要る日」に数える（日数の表示が、実績のある日数より少なくならない）', () => {
     const p = jp({ startDate: D5[0], endDate: D5[2], jcos: markNotHeld(terms(), [D5[2]]), actualsManual: { [D5[0]]: 10, [D5[2]]: 5 } });

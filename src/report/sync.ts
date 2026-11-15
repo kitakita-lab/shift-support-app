@@ -77,7 +77,7 @@ export async function runReportSync({ project, projects, venues, source, period 
  */
 export function applySync(p: Project, outcome: Extract<SyncOutcome, { ok: true }>): Project {
   const next: Project = { ...p, reportSync: outcome.sync, reportSource: outcome.source };
-  // 「開催していない日」としてあった日に、回答が入っていたら、印を外す（開催した日＝請求する・アルバイト 1 人に戻る）
+  // 「開催していない日」としてあった日に、回答が入っていたら、印を外す（開催した日＝請求する日に戻る。アルバイトは、配置を入れるまで 0 人）
   if (next.jcos) next.jcos = clearNotHeld(next.jcos, outcome.sync.days.map((d) => d.date));
   const c = outcome.period;
   if (!c || p.startDate !== c.from.startDate || p.endDate !== c.from.endDate) return next;

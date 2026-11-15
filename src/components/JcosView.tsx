@@ -1,7 +1,8 @@
 // JCOS 案件の収支（試算シート）。請求（売上）と実費（こちらの支払い）を分けて見せる。
-// 計算は domain/jcos.ts。ここは表示と、日ごとの入力（請求する／しない・アルバイトの人数・実績個数の手入力）だけ。
+// 計算は domain/jcos.ts。ここは表示と、日ごとの入力（請求する／しない・配置したアルバイトの人数・実績個数の手入力）、
+// 内容ごとの材料原価の入力だけ。
 import { Estimate } from '../domain/calc';
-import { Actual, JcosEstimate, Tally, clearNotHeld, jcosExcluded, withJcosDay } from '../domain/jcos';
+import { Actual, JcosEstimate, JcosMaterialSummary, Tally, clearNotHeld, jcosExcluded, staffDays, unitCostOf, withJcosDay, withUnitCost } from '../domain/jcos';
 import { shortDate, yen } from '../domain/util';
 import { Project } from '../types';
 import NumInput from './NumInput';
@@ -36,7 +37,7 @@ export default function JcosView({ project: p, j, generic, onChange }: Props) {
     const n = v === '' ? null : Number(v);
     if (n == null || !Number.isFinite(n) || n < 0) delete next[date];
     else next[date] = n;
-    // 「開催なし」の日に実績を入れたら、開催した日として扱う（印を外す。請求する・アルバイト 1 人に戻る）
+    // 「開催なし」の日に実績を入れたら、開催した日として扱う（印を外す。請求する日に戻る。アルバイトは、配置を入れるまで 0 人）
     const entered = n != null && Number.isFinite(n) && n >= 0;
     return { ...x, actualsManual: next, ...(entered && x.jcos ? { jcos: clearNotHeld(x.jcos, [date]) } : {}) };
   });
@@ -47,16 +48,36 @@ export default function JcosView({ project: p, j, generic, onChange }: Props) {
       ? `実績 ${j.actualDays} 日分（${j.actualCount} 個）＋ 残り ${Math.max(0, j.heldDays - j.actualDays)} 日は予定個数で計算`
       : j.periodDays === 0 ? '会期（開始日・終了日）が未入力です' : `予定個数（${j.plannedCount} 個）で計算した見込み。実績はまだありません`;
   const plannedOnly = j.planned.count - j.days.filter((d) => d.actual).reduce((s, d) => s + d.plannedCount, 0);
+  // アルバイトを、まだ 1 日も配置していないとき（アルバイト代は、配置した日・人数だけ計上する。自動では計上しない）
+  const openDays = j.days.filter((d) => !d.notHeld && d.partTimers === 0).map((d) => d.date);
+  const staffAll = () => onChange((x) => (x.jcos ? { ...x, jcos: staffDays(x.jcos, openDays) } : x));
+  // 内容ごとの材料原価（空欄にすると、その内容の指定を外して、案件の標準に戻す）
+  const setUnit = (key: string, v: string) => onChange((x) => {
+    if (!x.jcos) return x;
+    const n = v.trim() === '' ? null : Number(v);
+    return { ...x, jcos: withUnitCost(x.jcos, key, n != null && Number.isFinite(n) && n >= 0 ? n : null) };
+  });
+  // 材料原価の式: どの内容も同じ原価なら「原価 × 個数」、内容ごとに違えば、内訳を見てもらう
+  const unit = j.uniformUnitCost;
+  const materialFormula = unit == null
+    ? '内容ごとの原価 × 個数（下の「材料費」の内訳）'
+    : j.basis === 'planned'
+      ? `${yen(unit)} × 予定 ${t.count} 個`
+      : j.basis === 'actual' ? `${yen(unit)} × 実績 ${t.count} 個` : `${yen(unit)} ×（実績 ${j.actualCount} 個 ＋ 予定 ${plannedOnly} 個）`;
+  const countText = (m: JcosMaterialSummary): string => {
+    const fmt = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+    if (m.count <= 0) return '—';                  // いまの計算では、個数が無い内容（予定の内容で、どの日にも実績が入っている・原価だけ決めてある）
+    if (m.actualCount > 0 && m.plannedCount > 0) return `実績 ${fmt(m.actualCount)} ＋ 予定 ${fmt(m.plannedCount)}`;
+    return m.actualCount > 0 ? `実績 ${fmt(m.actualCount)}` : `予定 ${fmt(m.plannedCount)}`;
+  };
 
   const rows: [string, number, string, string][] = [
     ['請求：人件費', t.billLabor, `${yen(terms.billLaborPerDay)} × 請求 ${j.billDays} 日`, ''],
     ['請求：材料費', t.billMaterial, `${yen(terms.billMaterialPerDay)} × 請求 ${j.billDays} 日`, ''],
     ['請求：追加（予備費など）', t.extraBilling, '基本情報の「追加の請求」の合計', ''],
     ['請求 計（売上）', t.billing, '', 'sum'],
-    ['実費：アルバイト代', t.partTimerCost, `${yen(terms.partTimerPerDay)} × 稼働 ${j.partTimerDays} 人日`, ''],
-    ['実費：材料原価', t.materialCost, j.basis === 'planned'
-      ? `${yen(terms.unitCost)} × 予定 ${t.count} 個`
-      : j.basis === 'actual' ? `${yen(terms.unitCost)} × 実績 ${t.count} 個` : `${yen(terms.unitCost)} ×（実績 ${j.actualCount} 個 ＋ 予定 ${plannedOnly} 個）`, ''],
+    ['実費：アルバイト代', t.partTimerCost, `${yen(terms.partTimerPerDay)} × 配置 ${j.partTimerDays} 人日${j.partTimerDays === 0 ? '（配置した日・人数を、日別の表で入れると計上します）' : ''}`, ''],
+    ['実費：材料原価', t.materialCost, materialFormula, ''],
     ['実費：その他', t.otherCost, '基本情報の「その他実費」の合計（入力したものだけ）', ''],
     ['実費 計', t.cost, '', 'sum'],
     ['粗利（管理上）', t.gross, '請求 計 − 実費 計', 'total'],
@@ -103,10 +124,38 @@ export default function JcosView({ project: p, j, generic, onChange }: Props) {
         <div className="panel__title">材料費：請求と原価</div>
         <div className="matbox__row">
           <span>請求 <b>{yen(t.billMaterial)}</b></span>
-          <span>原価 <b>{yen(t.materialCost)}</b>（{t.count} 個 × {yen(terms.unitCost)}）</span>
+          <span>原価 <b>{yen(t.materialCost)}</b>（{unit == null ? `${t.count} 個・内容ごとの原価` : `${t.count} 個 × ${yen(unit)}`}）</span>
           {t.materialOver > 0
             ? <span className="neg">超過 <b data-testid="jcos-over">{yen(t.materialOver)}</b>（自己負担）</span>
             : <span>請求の範囲内（残り <b data-testid="jcos-over">{yen(t.billMaterial - t.materialCost)}</b>）</span>}
+        </div>
+        {j.materials.length > 0 && (
+          <div className="grid-wrap">
+            <table className="grid matgrid" data-testid="jcos-materials">
+              <thead><tr><th>内容</th><th>個数</th><th>原価（1 個あたり）</th><th>原価 計</th></tr></thead>
+              <tbody>
+                {j.materials.map((m) => (
+                  <tr key={m.key || ' none'} data-testid="jcos-content" data-key={m.key} data-custom={m.custom ? '1' : '0'}>
+                    <td className="is-ro" data-label="内容"><div className="grid__ro">{m.key ? m.label : '内容の指定なし'}</div></td>
+                    <td className="is-ro" data-label="個数"><div className="grid__ro num">{countText(m)}</div></td>
+                    <td data-label="原価（1 個あたり）">
+                      {m.key ? (
+                        <NumInput
+                          value={m.custom ? String(m.unitCost) : ''} placeholder={`標準 ${unitCostOf(terms, '')}`} style={{ textAlign: 'right' }}
+                          aria-label={`${m.label} の材料原価（1 個あたり）`} onValue={(v) => setUnit(m.key, v)}
+                        />
+                      ) : <div className="grid__ro num">{yen(m.unitCost)}（標準）</div>}
+                    </td>
+                    <td className="is-ro" data-label="原価 計"><div className="grid__ro num">{yen(m.cost)}</div></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="panel__hint">
+          {`材料原価は、内容（日報の「イベント内容」・実施コンテンツ）ごとに変えられます。空欄の内容は、この案件の標準（${yen(unitCostOf(terms, ''))}。基本情報の「材料原価」）で計算します。`
+            + '標準の初期値 220 円は、フラワーボトルの原価です。'}
         </div>
       </div>
 
@@ -130,7 +179,13 @@ export default function JcosView({ project: p, j, generic, onChange }: Props) {
         )}
       </div>
 
-      <h3>日別<small>「請求」のチェックと「アルバイト」の人数は、日ごとに変えられます。実績個数は、日報の同期で入ります（同期できないときは手入力）。「開催なし」の日は、請求・アルバイト代・予定個数が付きません</small></h3>
+      <h3>日別<small>「請求」のチェックと「アルバイト」の人数は、日ごとに変えられます。アルバイト代は、配置した日・人数だけ計上します（人数を入れていない日は 0 人）。実績個数は、日報の同期で入ります（同期できないときは手入力）。「開催なし」の日は、請求・アルバイト代・予定個数が付きません</small></h3>
+      {j.partTimerDays === 0 && openDays.length > 0 && (
+        <p className="hint" data-testid="jcos-nostaff">
+          アルバイトは、どの日にも配置されていません（アルバイト代 0 円）。配置した日があれば、下の表で人数を入れてください。{' '}
+          <button className="cellbtn cellbtn--wide" onClick={staffAll} data-testid="jcos-staff-all">開催する {openDays.length} 日すべてに 1 人ずつ入れる</button>
+        </p>
+      )}
       {j.days.length === 0 ? <p className="hint">基本情報で会期（開始日・終了日）を入力すると、日別の表が表示されます。</p> : (
         <div className="grid-wrap">
           <table className="grid daygrid" data-testid="jcos-days">

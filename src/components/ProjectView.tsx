@@ -243,7 +243,7 @@ export default function ProjectView({ project: p, data, space, current, onChange
                     <Field label="請求：人件費（1日あたり）">{jcosNum('billLaborPerDay')}</Field>
                     <Field label="請求：材料費（1日あたり）">{jcosNum('billMaterialPerDay')}</Field>
                     <Field label="支払い：アルバイト代（1人・1日）">{jcosNum('partTimerPerDay')}</Field>
-                    <Field label="支払い：材料原価（1個あたり・暫定）">{jcosNum('unitCost')}</Field>
+                    <Field label="支払い：材料原価（1個あたり・標準）">{jcosNum('unitCost')}</Field>
                   </>
                 ) : (
                   <>
@@ -259,12 +259,14 @@ export default function ProjectView({ project: p, data, space, current, onChange
             {jcosOn && (
               <p className="hint" data-testid="jcos-note">
                 JCOS 案件：JCOS への<b>請求</b>（人件費・材料費）と、こちらの<b>支払い</b>（アルバイト代・材料原価・その他実費）を分けて、粗利を計算します。
-                金額はこの案件だけの設定で、いつでも変えられます。請求する日・アルバイトの稼働日・実績個数は「試算」の日別の表で入力します。
+                金額はこの案件だけの設定で、いつでも変えられます。請求する日・アルバイトを配置した日と人数・実績個数は「試算」の日別の表で入力します。
+                アルバイト代は、配置した日・人数だけ計上します（人数を入れていない日は 0 人）。
+                材料原価の標準（初期値 220 円＝フラワーボトル）は、内容ごとに「試算」の材料費で変えられます。
                 固定売上・会場費・スタッフの時給・材料マスタ・レイアウトの備品費は、この計算には入りません（入力値は残っています）。
               </p>
             )}
 
-            <h3>実施コンテンツ{jcosOn && <small>予定個数の合計を、会期の見込みに使います（製品の種類では分けません）</small>}</h3>
+            <h3>実施コンテンツ{jcosOn && <small>予定個数を、会期の見込みに使います（内容ごとの材料原価は、「試算」の材料費で変えられます）</small>}</h3>
             <Grid
               rows={p.contents} cols={pcColsShown} rowKey={(c) => c.id} deletable
               onChange={(rows) => set({ contents: rows })}

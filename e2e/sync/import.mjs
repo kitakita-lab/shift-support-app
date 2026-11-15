@@ -31,8 +31,8 @@ const baseRows = () => [
 ];
 const NAMES = ['EVENT-冬を待つ花あそび', 'EVENT-夏の花あそび', 'EVENT-敬老の日', `${MINATO}（9/11〜9/12）`, `${EAST}（8/1〜8/3）`];
 const hikariRows = (second = 99) => [answer('2026-11-13', HIKARI, 30, { groups: 17, people: 29 }), answer('2026-11-14', HIKARI, second, { groups: 52, people: 121 })];
-/** JCOS の粗利（請求 4 万円/日 − アルバイト 1.5 万円/日 − 220 円 × 個数。実装を使わずに計算） */
-const gross = (days, count) => 40000 * days - 15000 * days - 220 * count;
+/** JCOS の粗利（請求 4 万円/日 − 220 円 × 個数。アルバイト代は、配置した日・人数を入れたときだけ計上する＝日報から作った案件では 0 円。実装を使わずに計算） */
+const gross = (days, count) => 40000 * days - 220 * count;
 
 // ── 画面操作 ────────────────────────────────────────────────
 const list = async (page) => { await tab(page, '案件'); if (await page.locator('.pv__head').count()) await page.getByRole('button', { name: '← 案件一覧' }).click(); };
@@ -146,7 +146,7 @@ add('I1', '日報から新規案件を作成できる: 「日報から案件を�
   ok((await status(a)).includes('作成 5 件') && (await status(a)).includes('未反映・競合なし'), `作成後の表示: ${await status(a)}`);
   // 収支: 実績個数で、粗利が出る
   await openProject(a, 'EVENT-冬を待つ花あそび');
-  eq(await jcos(a), { billing: 80000, cost: 30000 + 129 * 220, gross: gross(2, 129), actual: 129, basis: 'actual' }, '作った案件の収支');
+  eq(await jcos(a), { billing: 80000, cost: 129 * 220, gross: gross(2, 129), actual: 129, basis: 'actual' }, '作った案件の収支');
   ok((await a.locator('[data-testid="jcos-people"]').innerText()).replace(/\s+/g, ' ').includes('組数 69・人数 150'), '試算に、参加組数・参加人数が出ること');
   // 取得は 1 回（3 回の問い合わせ）だけ。読み取りだけ・利用者の認証つき
   eq(sheets.calls.length, 3, '日報への問い合わせの数');
@@ -216,7 +216,7 @@ add('I4', '会場と会期で照合する。イベント名が空欄でも、案
   eq((await projects()).length, 1, '案件の数（増えていない）');
   ok((await status(a)).includes('既存の案件 1 件（更新 1 件）'), `表示: ${await status(a)}`);
   await openProject(a, '冬の開催（予定）');
-  eq(await jcos(a), { billing: 200000, cost: 75000 + 129 * 220, gross: gross(5, 129), actual: 129, basis: 'mixed' }, '既存の案件の収支（5 日のうち 2 日が実績）');
+  eq(await jcos(a), { billing: 200000, cost: 129 * 220, gross: gross(5, 129), actual: 129, basis: 'mixed' }, '既存の案件の収支（5 日のうち 2 日が実績）');
 });
 
 add('I5', '再同期で、実績が二重に入らない（一覧からの取得を繰り返しても、案件の「日報を同期」を押しても、同じ）', async ({ device: mk }) => {
@@ -254,7 +254,7 @@ add('I6', '日報の修正・削除が反映される: 個数を直した回答�
   eq((await projects()).length, 5, '案件の数（増えていない）');
   ok((await status(a)).includes('更新 2 件'), `表示: ${await status(a)}`);
   await openProject(a, 'EVENT-冬を待つ花あそび');
-  eq(await jcos(a), { billing: 80000, cost: 30000 + 120 * 220, gross: gross(2, 120), actual: 120, basis: 'actual' }, '修正のあとの収支');
+  eq(await jcos(a), { billing: 80000, cost: 120 * 220, gross: gross(2, 120), actual: 120, basis: 'actual' }, '修正のあとの収支');
 });
 
 add('I7', '連続していない開催日: 1 日あいた開催は、別々の候補になる。「前の開催と同じ案件にする」を選ぶと 1 件になり、間の日は開催していない日（請求しない・アルバイト 0 人）になる。あとからその日の回答が入れば、開催した日に戻る', async ({ device: mk }) => {
@@ -273,16 +273,16 @@ add('I7', '連続していない開催日: 1 日あいた開催は、別々の�
   eq([docs[0].startDate, docs[0].endDate, days(docs[0]), docs[0].jcos.days], ['2026-11-13', '2026-11-17', [['2026-11-13', 10], ['2026-11-14', 12], ['2026-11-16', 9], ['2026-11-17', 8]], { '2026-11-15': { billed: false, partTimers: 0, notHeld: true } }], '作られた案件（会期・実績・開催していない日）');
   await openProject(a, `${CENTER}（11/13〜11/17）`);
   // 開催した 4 日すべてに実績があるので、「全日が実績」（開催していない日は、実績が無くてよい）
-  eq(await jcos(a), { billing: 160000, cost: 60000 + 39 * 220, gross: gross(4, 39), actual: 39, basis: 'actual' }, '収支（開催した 4 日分だけ）');
+  eq(await jcos(a), { billing: 160000, cost: 39 * 220, gross: gross(4, 39), actual: 39, basis: 'actual' }, '収支（開催した 4 日分だけ）');
   const gap = (await a.locator('[data-testid="jcos-day-2026-11-15"]').innerText()).replace(/\s+/g, ' ');
   ok(gap.includes('開催なし') && gap.includes('請求しない') && gap.includes('0人'), `間の日の表示: ${gap}`);
-  // あとから、間の日（11/15）の回答が日報に入ったら、次の取得で、開催した日に戻る（請求する・アルバイト 1 人）
+  // あとから、間の日（11/15）の回答が日報に入ったら、次の取得で、開催した日に戻る（請求する日になる）
   sheets.rows = [...sheets.rows, answer('2026-11-15', CENTER, 20)];
   await importNow(a);
   const filled = await serverProjects((xs) => days(xs[0]).length === 5);
   eq(filled[0].jcos.days, {}, '間の日の回答が入ったあとの、日ごとの設定（開催していない日の印が外れる）');
   await openProject(a, `${CENTER}（11/13〜11/17）`);
-  eq(await jcos(a), { billing: 200000, cost: 75000 + 59 * 220, gross: gross(5, 59), actual: 59, basis: 'actual' }, '間の日の回答が入ったあとの収支（5 日分）');
+  eq(await jcos(a), { billing: 200000, cost: 59 * 220, gross: gross(5, 59), actual: 59, basis: 'actual' }, '間の日の回答が入ったあとの収支（5 日分）');
 });
 
 add('I8', '同じ会場の別の案件を、誤って 1 つにしない: 会期が重なる案件が 2 件あるときは、どちらにも入れずに確認を求める（新しい案件も作らない）', async ({ device: mk }) => {
@@ -373,7 +373,7 @@ add('I11', '開催中の案件: 日報から作った案件は、次の日の回
   await until(() => a.locator('[data-testid="report-bar"]').getAttribute('data-busy'), (b) => b === '0', 10000);
   const third = await serverProjects((xs) => xs[0]?.endDate === '2026-11-15');
   eq([third.length, days(third[0]).length, third[0].name], [1, 3, `${HIKARI}（11/13〜11/15）`], '案件の「日報を同期」でも、会期が伸びる（案件名も合わせる）');
-  eq(await jcos(a), { billing: 120000, cost: 45000 + 170 * 220, gross: gross(3, 170), actual: 170, basis: 'actual' }, '収支（3 日分）');
+  eq(await jcos(a), { billing: 120000, cost: 170 * 220, gross: gross(3, 170), actual: 170, basis: 'actual' }, '収支（3 日分）');
 });
 
 add('I12', '会期を手で決めた案件は、自動では広げない: 会期の外の回答は「取り込んでいません」と示し、利用者が選んだときだけ、会期を広げて取り込む（一覧でも、案件の画面でも）', async ({ device: mk }) => {
@@ -652,7 +652,7 @@ add('I19', '会場の書き方が日によって違うとき: 登録済みの別
   const docs = await serverProjects((xs) => xs.length === 1 && !!xs[0].reportSync);
   eq([days(docs[0]), docs[0].venueId, (await venues()).length], [[['2026-11-13', 30], ['2026-11-14', 99], ['2026-11-15', 12]], vs[0].id, 1], '作られた案件（3 日分）と、会場の数');
   await openProject(a, `${HIKARI}（11/13〜11/15）`);
-  eq(await jcos(a), { billing: 120000, cost: 45000 + 141 * 220, gross: gross(3, 141), actual: 141, basis: 'actual' }, '収支');
+  eq(await jcos(a), { billing: 120000, cost: 141 * 220, gross: gross(3, 141), actual: 141, basis: 'actual' }, '収支');
 });
 
 add('I20', '数日しか離れていない、同じ会場の 2 つの開催を、別々の案件として作る: 作った直後に「未反映」や「会期の外の回答」と表示されない。同じイベント名でも、案件名で見分けられる。先に 1 件だけ作ったときは、残りを作ったあとで、先の案件の記録も合わせ直される', async ({ device: mk }) => {
@@ -711,7 +711,7 @@ add('I22', '開催予定として手で作った案件（計算方法は「汎�
   await openProject(a, '冬の開催（予定・汎用）');
   await a.locator('[data-testid="calc-mode"] button', { hasText: 'JCOS案件' }).click();
   await a.waitForSelector('[data-testid="report-bar"]');
-  eq(await jcos(a), { billing: 80000, cost: 30000 + 129 * 220, gross: gross(2, 129), actual: 129, basis: 'actual' }, '切り替えたあとの収支');
+  eq(await jcos(a), { billing: 80000, cost: 129 * 220, gross: gross(2, 129), actual: 129, basis: 'actual' }, '切り替えたあとの収支');
   await list(a);
   eq(await a.locator('[data-testid="import-generic"]').count(), 0, '切り替えたあとは、説明は出ない');
 });
@@ -921,11 +921,48 @@ add('I31', '案件の回答が、日報から 1 件も無くなったとき: 前
   ok(after.includes('更新 1 件') && after.includes('未反映・競合なし'), `外したあとのまとめ: ${after}`);
   // 収支: 実績が無くなったので、予定（個数 0）に戻る
   await openProject(a, name);
-  eq(await jcos(a), { billing: 80000, cost: 30000, gross: 50000, actual: 0, basis: 'planned' }, '外したあとの収支');
+  eq(await jcos(a), { billing: 80000, cost: 0, gross: 80000, actual: 0, basis: 'planned' }, '外したあとの収支');
   // もう一度取得しても、同じ（変更なし。確認も求めない）
   await importNow(a);
   eq(await until(() => updateStates(a), (xs) => xs.length === 2 && xs.every((x) => x === 'done'), 8000), ['done', 'done'], 'もう一度取得したあと');
   ok((await status(a)).includes('未反映・競合なし'), `もう一度取得したあとのまとめ: ${await status(a)}`);
+});
+
+add('I32', '日報から作った案件の収支: アルバイト代は、自動では計上しない（0 人）。配置した日・人数を入れると、その分だけ計上される。日報の内容ごとの個数が入り、内容ごとに材料原価を変えられる（取り直しても、配置と原価は残る）', async ({ device: mk }) => {
+  const BOTTLE = 'フラワーボトル';
+  const BAG = 'フラワーバッグ';
+  const { a } = await prepare(mk, [
+    answer('2026-11-13', HIKARI, 30, { content: BOTTLE }), answer('2026-11-13', HIKARI, 12, { content: BAG }), answer('2026-11-14', HIKARI, 99, { content: BOTTLE }),
+  ]);
+  await importNow(a, SHEET_URL);
+  await createAll(a);
+  const name = `${HIKARI}（11/13〜11/14）`;
+  const made = await serverProjects((xs) => xs.length === 1 && !!xs[0].reportSync);
+  eq([made[0].jcos.days, made[0].jcos.unitCosts ?? null], [{}, null], '作った案件の、日ごとの設定と、内容ごとの原価（どちらも空。アルバイトの人数を、推測で入れない）');
+  eq(made[0].reportSync.days.map((d) => [d.date, d.count, d.contents]), [
+    ['2026-11-13', 42, [{ label: BAG, count: 12 }, { label: BOTTLE, count: 30 }]], ['2026-11-14', 99, [{ label: BOTTLE, count: 99 }]],
+  ], '日別の、内容ごとの個数');
+  await openProject(a, name);
+  eq(await jcos(a), { billing: 80000, cost: 141 * 220, gross: 80000 - 141 * 220, actual: 141, basis: 'actual' }, '作った直後の収支（アルバイト代 0 円・どの内容も標準 220 円）');
+  ok((await a.locator('[data-testid="jcos-nostaff"]').innerText()).includes('どの日にも配置されていません'), 'アルバイトを配置していないことの表示');
+  const contentRows = a.locator('[data-testid="jcos-content"]');
+  const rowsText = () => contentRows.evaluateAll((els) => els.map((e) => [...e.querySelectorAll('td')].map((td) => (td.querySelector('input')?.value ?? td.innerText).replace(/\s+/g, ' ').trim())));
+  eq(await rowsText(), [[BOTTLE, '実績 129', '', '¥28,380'], [BAG, '実績 12', '', '¥2,640']], '内容ごとの内訳（指定なし）');
+  // バッグの原価を 350 円にして、11/13 にアルバイトを 1 人配置する
+  await contentRows.nth(1).locator('input').fill('350');
+  await a.locator('[data-testid="jcos-day-2026-11-13"]').getByRole('button', { name: /アルバイトを増やす/ }).click();
+  const cost = 15000 + 129 * 220 + 12 * 350;
+  eq(await jcos(a), { billing: 80000, cost, gross: 80000 - cost, actual: 141, basis: 'actual' }, '配置 1 人日・バッグ 350 円のあとの収支（請求は変わらない）');
+  eq(await rowsText(), [[BOTTLE, '実績 129', '', '¥28,380'], [BAG, '実績 12', '350', '¥4,200']], '内容ごとの内訳（バッグだけ 350 円）');
+  const saved = await serverProjects((xs) => xs[0]?.jcos?.days?.['2026-11-13']?.partTimers === 1 && !!xs[0].jcos.unitCosts);
+  eq([saved[0].jcos.days, Object.values(saved[0].jcos.unitCosts)], [{ '2026-11-13': { partTimers: 1 } }, [350]], '保存された、配置と原価');
+  // 取り直しても、配置と原価は残る（日報が同じなら「変更なし」。同期は、実績だけを置き換える）
+  await importNow(a);
+  eq(await until(() => updateStates(a), (xs) => xs.join() === 'done', 8000), ['done'], '取り直したあとの行の状態');
+  const again = await projects();
+  eq([again[0].jcos.days, Object.values(again[0].jcos.unitCosts)], [{ '2026-11-13': { partTimers: 1 } }, [350]], '取り直したあとの、配置と原価');
+  await openProject(a, name);
+  eq((await jcos(a)).cost, cost, '取り直したあとの実費');
 });
 
 await runFile('「日報から案件を作成・更新」の確認（Firebase エミュレータ ＋ 差し替えの日報）');

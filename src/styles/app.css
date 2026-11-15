@@ -255,6 +255,12 @@ ul.plain { margin: 4px 0; padding-left: 18px; }
 .card__note { color: var(--sub); font-size: 11px; }
 .matbox__row { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: baseline; }
 .matbox--over { border-color: #f2b8b5; background: #fff8f7; }
+/* 材料原価の内訳（内容ごとの個数・原価）。原価は、内容ごとに入力できる */
+.matgrid { margin-top: 8px; }
+.matgrid th:nth-child(2) { width: 170px; }
+.matgrid th:nth-child(3) { width: 140px; }
+.matgrid th:nth-child(4) { width: 120px; }
+.matgrid .grid__ro { overflow: visible; white-space: normal; }
 .tag--on { background: #d7f0df; color: #0b5c2e; }
 
 .daygrid th:nth-child(1) { width: 96px; }
@@ -413,6 +419,20 @@ ul.plain { margin: 4px 0; padding-left: 18px; }
   .daygrid tfoot td:first-child { order: 1; grid-column: 1 / -1; border-top: none; }
   .daygrid tfoot td[data-label='粗利'] { order: 7; }
   .daygrid tfoot td[data-label='材料原価'] { order: 6; }
+
+  /* 材料原価の内訳も、内容 1 つ＝1 枚のカードにする（内容の名前を上に、個数・原価・計を下に並べる） */
+  .matgrid, .matgrid tbody { display: block; width: 100%; }
+  .matgrid thead { display: none; }
+  .matgrid tr { display: grid; grid-template-columns: 1fr; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+  .matgrid td {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; height: auto; min-height: 42px;
+    border: none; border-top: 1px solid var(--line); padding: 2px 8px; background: #fff !important; box-shadow: none !important;
+  }
+  .matgrid td::before { content: attr(data-label); flex: none; color: var(--sub); font-size: 11px; white-space: nowrap; }
+  .matgrid td .grid__ro { padding: 0; text-align: right; }
+  .matgrid td[data-label='内容'] { border-top: none; background: var(--head) !important; font-weight: 700; }
+  .matgrid td[data-label='内容']::before { content: none; }
+  .matgrid td input { width: 120px; min-width: 0; text-align: right; border: 1px solid #dadce0; border-radius: 4px; background: #fff; }
   .daygrid tfoot td[data-label='アルバイト'] { order: 3; grid-column: 1 / -1; }
   .daygrid tfoot td[data-label='請求'] { order: 2; grid-column: 1 / -1; }
 

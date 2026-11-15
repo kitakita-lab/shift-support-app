@@ -170,18 +170,19 @@ async function prepare(mk, opts = {}) {
   await jcosProject(a, { name: '秋の花まつり', venue: CENTER, start: '2026-11-13', end: '2026-11-15' });
   return { A, a, sheets };
 }
-// 11/13〜11/15（3 日）・請求 40,000/日・アルバイト 15,000/日・材料原価 220/個・予定 0 個のときの粗利（実装を使わずに計算）
-const gross = (count) => 40000 * 3 - 15000 * 3 - count * 220;
+// 11/13〜11/15（3 日）・請求 40,000/日・材料原価 220/個・予定 0 個のときの粗利（実装を使わずに計算）。
+// アルバイト代は、配置した日・人数を入れたときだけ計上する（ここでは入れていないので、0 円）
+const gross = (count) => 40000 * 3 - count * 220;
 
 // ── 確認項目 ────────────────────────────────────────────────
 add('R1', '最初の同期: URL を貼って「日報を同期」を 1 回押すと、会場＋会期が一致する回答だけが日別の実績になり、粗利が実績で計算される', async ({ device: mk }) => {
   const { a, sheets } = await prepare(mk);
   eq((await status(a)).trim(), 'まだ同期していません', '同期前の表示');
-  eq(await jcos(a), { billing: 120000, cost: 45000, gross: gross(0), actual: 0, basis: 'planned' }, '同期前の収支');
+  eq(await jcos(a), { billing: 120000, cost: 0, gross: gross(0), actual: 0, basis: 'planned' }, '同期前の収支');
   await syncNow(a, SHEET_URL);
   const st = await status(a);
   ok(/最終同期 \d+\/\d+ \d\d:\d\d・2 日分 120 個（取り込み 2 件／読んだ回答 6 件）/.test(st), `同期後の表示: ${st}`);
-  eq(await jcos(a), { billing: 120000, cost: 45000 + 120 * 220, gross: gross(120), actual: 120, basis: 'mixed' }, '同期後の収支（実績 62＋58 個）');
+  eq(await jcos(a), { billing: 120000, cost: 120 * 220, gross: gross(120), actual: 120, basis: 'mixed' }, '同期後の収支（実績 62＋58 個）');
   const text = await detail(a);
   ok(text.includes('11/13(金) 62 個') && text.includes('11/14(土) 58 個'), `取り込んだ実績の表示: ${text}`);
   ok(text.includes('テスト回答 1 件は除きました'), `テスト回答の表示: ${text}`);
@@ -243,12 +244,12 @@ add('R4', '日報が修正・削除・追加されたら、次の同期で実績
     answer(serial('2026-11-15'), CENTER, 6),                       // 同じ日にもう 1 件（合算）
   ].map((r, i) => (i === 1 ? r.map(() => '') : r));
   await syncNow(a);
-  eq(await jcos(a), { billing: 120000, cost: 45000 + 120 * 220, gross: gross(120), actual: 120, basis: 'mixed' }, '修正後の収支（70 ＋ 50 個）');
+  eq(await jcos(a), { billing: 120000, cost: 120 * 220, gross: gross(120), actual: 120, basis: 'mixed' }, '修正後の収支（70 ＋ 50 個）');
   eq(days(await until(() => projectDoc('秋の花まつり'), (p) => p?.reportSync?.days?.[0]?.count === 70)), [['2026-11-13', 70, 1], ['2026-11-15', 50, 2]], '共有データの実績');
   ok((await detail(a)).includes('11/15(日) 50 個（2 件の合計）'), `複数の回答を合算した日の表示: ${await detail(a)}`);
   sheets.rows = [];                                                // 回答がすべて消えた
   await syncNow(a);
-  eq(await jcos(a), { billing: 120000, cost: 45000, gross: gross(0), actual: 0, basis: 'planned' }, '回答がすべて消えたあと');
+  eq(await jcos(a), { billing: 120000, cost: 0, gross: gross(0), actual: 0, basis: 'planned' }, '回答がすべて消えたあと');
 });
 
 add('R5', '同期に失敗したときは、前回の実績を消さずに残し、失敗の内容を表示する（通信エラー・権限なし・API が無効・認証切れ・見出しの不一致・見出しの重複）', async ({ device: mk }) => {
@@ -424,7 +425,7 @@ add('R10', '「この端末だけのデータ」の案件でも、ログイン�
   ok((await status(a)).includes('2 日分 145 個'), `同期後の表示: ${await status(a)}`);
   // 5 日・予定 300 個（60 個/日）・その他実費 22,000: 実績 81＋64、残り 3 日は予定 180 個
   const count = 81 + 64 + 180;
-  eq(await jcos(a), { billing: 200000, cost: 75000 + count * 220 + 22000, gross: 200000 - (75000 + count * 220 + 22000), actual: 145, basis: 'mixed' }, '同期後の収支');
+  eq(await jcos(a), { billing: 200000, cost: count * 220 + 22000, gross: 200000 - (count * 220 + 22000), actual: 145, basis: 'mixed' }, '同期後の収支');
   await sleep(1500);
   eq((await admin.list(`${T}/wsProjects`)).length, 0, '共有データの案件（増えていないこと）');
   eq(sheets.calls.length, 3, '問い合わせの数');
@@ -471,8 +472,8 @@ add('R11', '「この案件の実績にする」を取り消したあとの同�
   // 一覧の粗利も、同じ数え方（元の案件: 3 日・10 個／相手の案件: 2 日・140 個）
   await a.getByRole('button', { name: '← 案件一覧' }).click();
   const rowText = async (name) => (await a.locator('.grid tbody tr', { has: a.locator('td', { hasText: new RegExp(`^${name}$`) }) }).innerText()).replace(/\s+/g, ' ');
-  ok((await rowText('秋の花まつり')).includes(`¥${(40000 * 3 - 15000 * 3 - 10 * 220).toLocaleString('ja-JP')}（粗利）`), `元の案件の一覧の粗利: ${await rowText('秋の花まつり')}`);
-  ok((await rowText('週末フェア')).includes(`¥${(40000 * 2 - 15000 * 2 - 140 * 220).toLocaleString('ja-JP')}（粗利）`), `相手の案件の一覧の粗利: ${await rowText('週末フェア')}`);
+  ok((await rowText('秋の花まつり')).includes(`¥${(40000 * 3 - 10 * 220).toLocaleString('ja-JP')}（粗利）`), `元の案件の一覧の粗利: ${await rowText('秋の花まつり')}`);
+  ok((await rowText('週末フェア')).includes(`¥${(40000 * 2 - 140 * 220).toLocaleString('ja-JP')}（粗利）`), `相手の案件の一覧の粗利: ${await rowText('週末フェア')}`);
 });
 
 add('R12', '日報に読み取れない回答があるときは、取り込みを中止して前回の実績を残し、どの回答（開催日・日報の行）のどの項目が、なぜ読み取れないかを表示する。この案件のものでない回答では止まらない。日報を直すと取り込める', async ({ device: mk }) => {
@@ -558,7 +559,7 @@ add('R12', '日報に読み取れない回答があるときは、取り込み�
   await a.evaluate((t) => { window.__kkl.sheetsToken = () => t; }, TOKEN);
   await syncNow(a);
   eq([await a.locator('[data-testid="report-error"]').count(), await a.locator('[data-testid="report-issues"]').count()], [0, 0], '直したあとの、失敗の表示');
-  eq(await jcos(a), { billing: 120000, cost: 45000 + 200 * 220, gross: gross(200), actual: 200, basis: 'actual' }, '直したあとの収支（62 ＋ 58 ＋ 80 個）');
+  eq(await jcos(a), { billing: 120000, cost: 200 * 220, gross: gross(200), actual: 200, basis: 'actual' }, '直したあとの収支（62 ＋ 58 ＋ 80 個）');
   eq(days(await until(() => projectDoc('秋の花まつり'), (p) => p?.reportSync?.days?.length === 3, 10000)), [['2026-11-13', 62, 1], ['2026-11-14', 58, 1], ['2026-11-15', 80, 1]], '共有データの実績');
 });
 
@@ -572,7 +573,7 @@ add('R13', '最初の同期が、読み取れない回答で止まったとき: 
   const list = (await a.locator('[data-testid="report-issues"]').innerText()).replace(/\s+/g, ' ');
   ok(list.includes('日報の 3 行目') && list.includes('開催日：11/14(土)') && list.includes('数字以外の文字（空白・区切りを含む）'), `読み取れない回答の表示: ${list}`);
   eq((await status(a)).trim(), 'まだ同期していません', '同期の表示');
-  eq(await jcos(a), { billing: 120000, cost: 45000, gross: gross(0), actual: 0, basis: 'planned' }, '止まったあとの収支（予定のまま。6258 個として取り込んでいないこと）');
+  eq(await jcos(a), { billing: 120000, cost: 0, gross: gross(0), actual: 0, basis: 'planned' }, '止まったあとの収支（予定のまま。6258 個として取り込んでいないこと）');
   await sleep(1000);
   const stopped = await projectDoc('秋の花まつり');
   eq([stopped?.reportSync ?? null, stopped?.reportSource ?? null], [null, null], '共有データ（同期の結果も、日報の場所も、書いていないこと）');

@@ -2,8 +2,8 @@
 // 重点: 失敗したときに、案件の実績（前回の同期結果）を消さない・書き換えない。
 import { describe, expect, it } from 'vitest';
 import { emptyLayout } from '../domain/layout';
-import { jcosEstimate, defaultJcos } from '../domain/jcos';
-import { RawReportRow, venueKey } from '../domain/report';
+import { jcosEstimate, defaultJcos, withJcosDay, withUnitCost } from '../domain/jcos';
+import { RawReportRow, contentKey, venueKey } from '../domain/report';
 import { mkContent, mkProject } from '../domain/testkit';
 import { Project, ReportSource, Venue } from '../types';
 import { ReportError, ReportErrorCode } from './sheets';
@@ -48,6 +48,25 @@ describe('日報の同期: 成功したとき', () => {
     expect(out).toMatchObject({ ok: true, source: SOURCE });
     const keys = [venueKey(VENUE.name)];
     if (out.ok) expect(out.sync.days).toEqual([{ date: '2026-11-13', count: 62, rows: 1, keys }, { date: '2026-11-14', count: 58, rows: 1, keys }]);
+  });
+  it('同期は、実績だけを置き換える。請求・支払いの条件（日ごとの請求・配置したアルバイトの人数・材料原価の標準・内容ごとの原価・追加の請求）は、変えない', async () => {
+    const BAG = 'フラワーバッグ';
+    let t = withUnitCost({ ...defaultJcos(), unitCost: 200, extraBillings: [{ id: 'x1', name: '予備費', amount: 5000 }] }, contentKey(BAG), 350);
+    t = withJcosDay(t, '2026-11-13', { partTimers: 2 });
+    t = withJcosDay(t, '2026-11-15', { billed: false });
+    const store = { p: { ...P, jcos: t, actualsManual: { '2026-11-15': 7 } } };
+    const withContent = (date: string, count: number, content: string): RawReportRow => ({ ...row(date, count), content });
+    await syncInto(store, deps({ rows: async () => [withContent('2026/11/13', 62, BAG), withContent('2026/11/14', 58, 'フラワーボトル')] }));
+    expect(store.p.jcos).toEqual(t);
+    expect(store.p.actualsManual).toEqual({ '2026-11-15': 7 });
+    // 日別に、内容ごとの個数が入り、内容ごとの原価で計算される（バッグ 62 個 × 350 ＋ ボトル 58 個 × 200 ＋ 手入力 7 個 × 200）
+    expect(store.p.reportSync!.days.map((d) => d.contents)).toEqual([[{ label: BAG, count: 62 }], [{ label: 'フラワーボトル', count: 58 }]]);
+    const j = jcosEstimate(store.p);
+    expect([j.current.materialCost, j.partTimerDays, j.billDays, j.current.extraBilling]).toEqual([62 * 350 + 58 * 200 + 7 * 200, 2, 2, 5000]);
+    // もう一度同期しても、同じ（条件も、金額も）
+    const before = jcosEstimate(store.p).current;
+    await syncInto(store, deps({ rows: async () => [withContent('2026/11/13', 62, BAG), withContent('2026/11/14', 58, 'フラワーボトル')] }));
+    expect([store.p.jcos, jcosEstimate(store.p).current]).toEqual([t, before]);
   });
   it('結果を案件に書くと、粗利が実績で計算される。もう一度同期しても同じ（二重計上しない）', async () => {
     const store = { p: P };
@@ -285,7 +304,7 @@ describe('日報の同期: 利用者が選んだ会期へ広げて取り込む',
   const far = [row('2026/11/13', 62), row('2026/11/14', 58), row('2026/11/16', 40)];
   const widen = (d: SyncDeps, project: Project, period: { startDate: string; endDate: string }) =>
     runReportSync({ project, projects: [project], venues: [VENUE], source: SOURCE, period }, d);
-  it('広げた会期で取り込み、回答の無い日（間の日）は、請求しない・アルバイト 0 人にする', async () => {
+  it('広げた会期で取り込み、回答の無い日（間の日）は、開催していない日（請求しない・アルバイト 0 人）にする', async () => {
     const out = await widen(deps({ rows: async () => far }), MANUAL, { startDate: '2026-11-13', endDate: '2026-11-16' });
     expect(out).toMatchObject({ ok: true, period: { to: { startDate: '2026-11-13', endDate: '2026-11-16' }, notHeld: ['2026-11-15'] } });
     if (!out.ok) return;
@@ -294,7 +313,7 @@ describe('日報の同期: 利用者が選んだ会期へ広げて取り込む',
     expect([next.startDate, next.endDate, next.reportPeriod]).toEqual(['2026-11-13', '2026-11-16', undefined]);
     expect(next.jcos!.days).toEqual({ '2026-11-15': { billed: false, partTimers: 0, notHeld: true } });
     const j = jcosEstimate(next);
-    expect([j.periodDays, j.heldDays, j.billDays, j.partTimerDays, j.actualDays, j.actualCount, j.basis]).toEqual([4, 3, 3, 3, 3, 160, 'actual']);
+    expect([j.periodDays, j.heldDays, j.billDays, j.partTimerDays, j.actualDays, j.actualCount, j.basis]).toEqual([4, 3, 3, 0, 3, 160, 'actual']);
     // 次の日の回答が増えても、自動では伸びない（会期のすぐ外の回答として示す）
     const store = { p: next };
     const again = await syncInto(store, deps({ rows: async () => [...far, row('2026/11/17', 9)] }));
@@ -307,16 +326,16 @@ describe('日報の同期: 利用者が選んだ会期へ広げて取り込む',
     const out = await widen(deps({ rows: async () => far }), auto, { startDate: '2026-11-13', endDate: '2026-11-16' });
     expect(out.ok && applySync(auto, out).reportPeriod).toEqual({ startDate: '2026-11-13', endDate: '2026-11-16' });
   });
-  it('「開催していない日」としてあった日に、あとから回答が入ったら、同期のときに印を外す（請求する・アルバイト 1 人に戻る）', async () => {
+  it('「開催していない日」としてあった日に、あとから回答が入ったら、同期のときに印を外す（請求する日に戻る。アルバイトは、配置を入れるまで 0 人）', async () => {
     const out = await widen(deps({ rows: async () => far }), MANUAL, { startDate: '2026-11-13', endDate: '2026-11-16' });
     if (!out.ok) throw new Error('unexpected');
     const store = { p: applySync(MANUAL, out) };
-    expect(jcosEstimate(store.p).current.gross).toBe(3 * 40000 - 3 * 15000 - 160 * 220);
+    expect(jcosEstimate(store.p).current.gross).toBe(3 * 40000 - 160 * 220);
     // 11/15 の回答が、あとから日報に入った
     await syncInto(store, deps({ rows: async () => [...far, row('2026/11/15', 20)] }));
     expect(store.p.jcos!.days).toEqual({});
     const j = jcosEstimate(store.p);
-    expect([j.billDays, j.partTimerDays, j.actualCount, j.current.gross]).toEqual([4, 4, 180, 4 * 40000 - 4 * 15000 - 180 * 220]);
+    expect([j.billDays, j.partTimerDays, j.actualCount, j.current.gross]).toEqual([4, 0, 180, 4 * 40000 - 180 * 220]);
     // 利用者が決めた「請求しない」の日（印の無い日）は、回答が入っても変えない
     const manualDay: Project = { ...MANUAL, endDate: '2026-11-14', jcos: { ...defaultJcos(), days: { '2026-11-14': { billed: false } } } };
     const kept = { p: manualDay };

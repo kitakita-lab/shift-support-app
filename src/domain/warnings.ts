@@ -109,7 +109,7 @@ export function projectWarnings(p: Project, data: AppData): Warning[] {
   // ── JCOS 案件: 条件と、日報の同期で確認が必要なもの ──
   if (jcos) {
     const t = p.jcos!;
-    if (num(t.unitCost) <= 0) add('jcos:unitCost', '材料原価（1 個あたり）が 0 円以下です。材料原価が 0 円で計算されます。');
+    if (num(t.unitCost) <= 0) add('jcos:unitCost', '材料原価の標準（1 個あたり）が 0 円以下です。原価を決めていない内容の材料原価が、0 円で計算されます。');
     if (num(t.billLaborPerDay) < 0 || num(t.billMaterialPerDay) < 0 || num(t.partTimerPerDay) < 0) add('jcos:terms', 'JCOS 案件の金額にマイナスの値があります。');
     const sync = p.reportSync;
     if (sync) {

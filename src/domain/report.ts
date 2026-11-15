@@ -42,6 +42,11 @@ const OTHER_VENUE = 'その他';
 export function venueKey(s: unknown): string {
   return String(s ?? '').normalize('NFKC').replace(/\s+/g, '').toLowerCase();
 }
+/**
+ * 内容の名前（日報の「イベント内容」・実施コンテンツの名前）を見分けるキー。会場名と同じそろえ方（全角/半角・空白・英字の大小だけ）。
+ * 内容ごとの材料原価（JcosTerms.unitCosts）のキーにも使う。空なら ''（内容の分からない個数）。
+ */
+export const contentKey = (label: unknown): string => venueKey(label);
 
 export type ColumnMap = Record<ReportField, number | null>;
 export type ColumnResult =
@@ -663,10 +668,15 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
     rowsUsed += 1;
     const label = text(r.content);
     if (label) {
-      const c = contents.get(venueKey(label)) ?? { label, rows: 0, count: 0 };
+      const key = contentKey(label);
+      const c = contents.get(key) ?? { label, rows: 0, count: 0 };
       c.rows += 1;
       c.count += count;
-      contents.set(venueKey(label), c);
+      contents.set(key, c);
+      // 日別にも、内容ごとの個数を持つ（内容ごとの材料原価の計算に使う。内容の記載が無い回答の個数は、入れない）
+      const list = d.contents ?? (d.contents = []);
+      const e = list.find((x) => contentKey(x.label) === key);
+      if (e) e.count += count; else list.push({ label, count });
     }
   });
 
@@ -683,6 +693,8 @@ export function planReportSync({ project: p, projects, venues, rows, now }: Sync
   for (const d of days.values()) {
     if (d.groups === undefined) delete d.groupsBlank;
     if (d.people === undefined) delete d.peopleBlank;
+    // 内容の並びは、回答の順にも、端末の言語の設定にも依らない（そろえた名前の、文字コードの順。同じ日報なら、どの端末で読んでも同じ結果）
+    d.contents?.sort((a, b) => { const x = contentKey(a.label), y = contentKey(b.label); return x < y ? -1 : x > y ? 1 : 0; });
   }
   const sync: ReportSync = {
     at: now,
@@ -893,10 +905,16 @@ export function hydrateReportSync(v: unknown): ReportSync | undefined {
     venueId: str(s.venueId),
     startDate: str(s.startDate),
     endDate: str(s.endDate),
-    days: list(s.days).filter((d) => typeof d.date === 'string').map((d) => ({
-      date: d.date as string, count: n(d.count), rows: n(d.rows), ...(Array.isArray(d.keys) ? { keys: strs(d.keys) } : {}),
-      ...opt(d, 'groups'), ...opt(d, 'groupsBlank'), ...opt(d, 'people'), ...opt(d, 'peopleBlank'),
-    })),
+    days: list(s.days).filter((d) => typeof d.date === 'string').map((d) => {
+      // 内容ごとの個数（Version 5.1）: 名前と、0 以上の個数がそろっているものだけ
+      const dc = list(d.contents).filter((c) => typeof c.label === 'string' && c.label !== '' && typeof c.count === 'number' && Number.isFinite(c.count) && c.count >= 0)
+        .map((c) => ({ label: c.label as string, count: c.count as number }));
+      return {
+        date: d.date as string, count: n(d.count), rows: n(d.rows), ...(Array.isArray(d.keys) ? { keys: strs(d.keys) } : {}),
+        ...opt(d, 'groups'), ...opt(d, 'groupsBlank'), ...opt(d, 'people'), ...opt(d, 'peopleBlank'),
+        ...(dc.length > 0 ? { contents: dc } : {}),
+      };
+    }),
     rowsRead: n(s.rowsRead),
     rowsUsed: n(s.rowsUsed),
     tests: n(s.tests),
