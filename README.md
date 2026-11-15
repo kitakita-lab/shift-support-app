@@ -16,14 +16,16 @@ JCOS 案件では、請求と実費を分けた粗利（日別・会期）を、
 ```bash
 npm install
 npm run dev      # 開発サーバー
-npm test         # 単体テスト（試算・警告・レイアウト・版数・図の指紋・PDF・サンプルデータ・同期の計算部分と、模擬環境での同期の本体）
+npm test         # 単体テスト（試算・警告・レイアウト・版数・図の指紋・PDF・サンプルデータ・同期の計算部分と、模擬環境での同期の本体・共有データの場所の決め方）
 npm run build    # 型チェック + ビルド
 node e2e/verify.mjs      # 実ブラウザ（Chromium）での動作確認。playwright が必要（スクリプト先頭の説明を参照）
 node e2e/v4.mjs          # 同（Version 4 で追加: スマホ幅の表示・数値入力・JCOS 案件の収支・元に戻す・保存）
+node e2e/guard.mjs       # 同（Version 5.2 で追加: 検証用のビルドが、本番のデータにつながらないこと。実際に vite build を走らせる）
 node e2e/sync/run.mjs    # 共有データの同期・移行・権限・日報の同期・日報からの案件作成の確認（Firebase エミュレータ上）。Java・firebase-tools・playwright が必要
 ```
 
 Firebase の設定（`.env`。`.env.example` 参照）が無い場合は、ブラウザ内（localStorage）だけで動く。
+手元から実際の Firebase につなぐときは、`VITE_TEAM_ID` に、通常とは別のチーム名が必ず要る（無いと、ビルドは失敗し、アプリは Firebase を起動しない。下の「プレビュー環境」）。
 まず触ってみるには「データ」タブ →「サンプルデータを読み込む」。案件が 2 件入る（デモと、ラソラ札幌 11/13〜17 の土台。数値はすべて仮置き）。
 
 ## データの置き場所
@@ -63,10 +65,14 @@ Firebase の設定（`.env`。`.env.example` 参照）が無い場合は、ブ�
   先に始めた同期の結果が、あとから届いて、新しい実績を上書きすることはない（2 台の端末がほぼ同時に同期した場合の扱いは、設計書 6.2 の表）。
 - 同期を使い始めるには、アプリの外での設定が要る: Firebase のプロジェクト（Google Cloud）で **Google Sheets API を有効にする**／最初の同期で **Google の確認画面を許可する**／
   ログインするアカウントが **日報を閲覧できること**。日報の URL は、最初の 1 回だけアプリに貼る（リポジトリには入れない）。
-- プレビュー環境は、既定では本番と同じ Firebase プロジェクト・同じチーム名につながる。プレビューで試すときは、プレビュー環境だけに `VITE_TEAM_ID`（本番と違うチーム名）を設定して、
-  共有データに触れないビルド（検証用のビルド）にする（「この端末だけのデータ」での同期はできる）。検証用のビルドは、画面上部に「検証用ビルド（共有データの場所: …）」と表示し、
-  ビルドの記録に `[kkl] VITE_TEAM_ID=…` と出す。これは誤操作を防ぐための分け方で、権限の境界ではない（権限は Firestore のルールが決める）。
-  Google でログインするには、その URL のドメインを Firebase の認証の「承認済みドメイン」に足す必要がある（設計書 6.4）。
+- プレビュー環境は、本番と同じ Firebase プロジェクトにつながる。共有データの場所（チーム名）は、ビルドの条件で決まる（設計書 8 章）:
+  - **通常のチーム（本番のデータ）につながるのは、本番のビルドだけ**（Vercel の Production。`VERCEL_ENV=production`）。
+  - 本番ではないビルド（Vercel の Preview・手元）は、`VITE_TEAM_ID` に、通常とは別のチーム名（Preview 環境には `kkl-preview` を設定済み）が必ず要る。
+    無い・通常のチーム名・使えない形のときは、**ビルドが失敗し、アプリは Firebase を起動しない**（通常のチームには、切り替えない）。
+  - 検証用のビルドは、画面上部に「検証用ビルド（共有データの場所: …）」と表示し、ビルドの記録に `[kkl] VITE_TEAM_ID=…` と出す（「この端末だけのデータ」での同期はできる）。
+  - これは誤操作を防ぐための仕組みで、権限の境界ではない（権限は Firestore のルールが決める。現在のルールは、ログインしていれば、通常のチームを読み書きできる）。
+  - Google でログインするには、その URL のドメインを Firebase の認証の「承認済みドメイン」に足す必要がある。足すのは、検証専用のブランチ（`claude/guard-test`）のドメインだけにする（設計書 8.5・8.6）。
+  - 開発サーバー（`npm run dev`）は、`VERCEL_ENV=production` が付いていても、本番として扱わない（手元から、本番のデータにはつながない）。
 - 同期しなくても、試算の日別の表に実績個数を手入力できる。
 
 ## 構成
@@ -79,7 +85,7 @@ src/
   report/             日報の同期（googleToken=読み取り専用の認証, sheets=Google Sheets API の読み取り, sync=同期の流れ, syncJob=案件ごとの同期の重なりの制御,
                       importJob=案件一覧からの取得, records=端末に置く記録）
   store/              データの置き場所（localData=この端末だけ, sharedSession=共有データの同期, remote=Firestore 入出力,
-                      sharedLogic=同期の計算, outbox=未送信の控え, paths=Firestore 上の場所, notices=お知らせ, useAppData=画面との接続,
+                      sharedLogic=同期の計算, outbox=未送信の控え, paths=Firestore 上の場所, team=共有データの場所の決め方（本番のデータにつながるのは本番のビルドだけ）, notices=お知らせ, useAppData=画面との接続,
                       sessionTestkit=同期のテスト用の模擬環境）
   export/             pdf=配置図の PDF 出力, download=ファイルの保存
   components/         Grid（表計算風グリッド）, NumInput（数値欄）, LayoutEditor, LayoutSvg, ProjectView, JcosView（JCOS 案件の試算）,
@@ -87,6 +93,7 @@ src/
   **/*.test.ts        単体テスト（domain/testkit.ts はテスト用の部品）
 e2e/verify.mjs        実ブラウザでの動作確認（npm test には含めない）
 e2e/v4.mjs            同（Version 4 で追加した確認）
+e2e/guard.mjs         同（Version 5.2 で追加した確認: 検証用のビルドの安全停止）
 e2e/sync/             共有データの同期・移行・ルール・日報の同期・日報からの案件作成の確認（エミュレータ上。実際の Firebase・Google にはつながない）
 firestore.rules       現在のルール（変更していない）
 firestore.v3.rules    メンバー制のルール案（未デプロイ）

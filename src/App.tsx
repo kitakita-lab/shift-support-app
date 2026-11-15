@@ -15,6 +15,7 @@ import { duplicateProject, newProject, newVenue, sampleData } from './domain/see
 import { genId, listDates, localDate, shortDate, yen } from './domain/util';
 import { projectWarnings } from './domain/warnings';
 import { isFirebaseConfigured } from './firebase';
+import { TEAM_GUARD } from './store/paths';
 import { isEmptyData } from './store/localData';
 import { MigrationReport } from './store/sharedLogic';
 import { downloadJson, hydrateData, useAppData } from './store/useAppData';
@@ -193,7 +194,7 @@ export default function App() {
     }
   };
   const syncLabel = !isFirebaseConfigured
-    ? 'この端末に保存（Firebase 未設定）'
+    ? TEAM_GUARD.ok ? 'この端末に保存（Firebase 未設定）' : 'この端末に保存（共有データは停止中）'
     : !user ? 'この端末に保存（未ログイン）'
     : onShared ? sharedLabel()
     : `この端末に保存${shared.unsent > 0 ? `／共有: 未送信 ${shared.unsent} 件` : ''}`;

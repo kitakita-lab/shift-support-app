@@ -17,7 +17,7 @@ import { isJcos, jcosEstimate } from '../domain/jcos';
 import { latestReportSource, parseSheetUrl } from '../domain/report';
 import { CreateItem, ImportItem, ImportPlan, ImportTotals, UpdateItem, dateRanges, importCreates, planReportImport, reportRuns, withSameVenue } from '../domain/reportImport';
 import { shortDate } from '../domain/util';
-import { isFirebaseConfigured } from '../firebase';
+import { firebaseOffReason, isFirebaseConfigured } from '../firebase';
 import { forgetSheetsToken, requestSheetsToken } from '../report/googleToken';
 import {
   abandonFetch, claimAutoApply, clearFetched, fetchFailure, fetchKey, fetchRunningSince, fetchSession, fetchedReport, fetchesVersion, isFetchRunning,
@@ -453,7 +453,7 @@ export default function ReportImport({ data, scope, live, getProject, updateProj
 
       {!canSync && (
         <p className="rimport__hint" data-testid="import-login">
-          {isFirebaseConfigured ? '日報から案件を作るには、Google でのログインが必要です（画面右上）。' : 'この環境では、日報の取得は使えません（Firebase が未設定）。'}
+          {isFirebaseConfigured ? '日報から案件を作るには、Google でのログインが必要です（画面右上）。' : `この環境では、日報の取得は使えません（${firebaseOffReason}）。`}
           ログインしなくても、「＋ 新しい案件」で手で作れます。
         </p>
       )}

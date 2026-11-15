@@ -9,7 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { contestedReportDays, findReportSource, openOutside, parseSheetUrl, rivalClaimedDates, syncStaleness, unmatchedGaps, usableReportDays, venueKey, widenTarget } from '../domain/report';
 import { dateRanges, totalsOf } from '../domain/reportImport';
 import { shortDate } from '../domain/util';
-import { isFirebaseConfigured } from '../firebase';
+import { firebaseOffReason, isFirebaseConfigured } from '../firebase';
 import { forgetSheetsToken, requestSheetsToken } from '../report/googleToken';
 import { lastFailure, loadSource, recordSyncResult } from '../report/records';
 import { fetchReportRows } from '../report/sheets';
@@ -248,7 +248,7 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
     return (
       <div className="reportbar" data-testid="report-bar" data-busy="0">
         <p className="reportbar__hint" data-testid="report-login">
-          日報の同期：{isFirebaseConfigured ? 'Google でログインすると使えます（画面右上）。' : 'この環境では使えません（Firebase が未設定）。'}実績個数は、試算の「日別」の表に手入力もできます。
+          日報の同期：{isFirebaseConfigured ? 'Google でログインすると使えます（画面右上）。' : `この環境では使えません（${firebaseOffReason}）。`}実績個数は、試算の「日別」の表に手入力もできます。
         </p>
       </div>
     );
@@ -273,7 +273,7 @@ export default function ReportBar({ project: p, data, scope, current, onChange, 
       )}
       {!canSync && (
         <p className="reportbar__hint" data-testid="report-login">
-          日報の同期には、Google でのログインが必要です（画面右上）。ログインしなくても、試算の「日別」の表に実績個数を手入力できます。
+          {isFirebaseConfigured ? '日報の同期には、Google でのログインが必要です（画面右上）。' : `日報の同期は、この環境では使えません（${firebaseOffReason}）。`}ログインしなくても、試算の「日別」の表に実績個数を手入力できます。
         </p>
       )}
       {canSync && needsSource && (
