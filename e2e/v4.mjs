@@ -59,7 +59,20 @@ async function openProject(page, what = '11/13') {
 }
 async function setup(page) { await loadSample(page); await openProject(page); }
 const back = (page) => page.getByRole('button', { name: '← 案件一覧' }).click();
-const toJcos = (page) => page.locator('[data-testid="calc-mode"] button', { hasText: 'JCOS案件' }).click();
+/** 収支の計算方法を「JCOS案件」にするだけ（アルバイトは、どの日にも配置していない＝0 人のまま） */
+const toJcosBare = (page) => page.locator('[data-testid="calc-mode"] button', { hasText: 'JCOS案件' }).click();
+/**
+ * JCOS 案件にして、開催する日すべてに、アルバイトを 1 人ずつ配置する（基本情報のシートに戻る）。
+ * アルバイト代は、配置した日・人数だけ計上される（配置を入れなければ 0 円。J1 で確かめる）。すでに配置してあれば、何もしない。
+ */
+async function toJcos(page) {
+  await toJcosBare(page);
+  await sheet(page, '試算');
+  await page.waitForSelector('[data-testid="jcos-view"]');
+  const all = page.locator('[data-testid="jcos-staff-all"]');
+  if (await all.count()) await all.click();
+  await sheet(page, '基本情報');
+}
 const toGeneric = (page) => page.locator('[data-testid="calc-mode"] button', { hasText: '汎用' }).click();
 const headProfit = (page) => page.locator('.pv__profit').innerText().then((t) => t.replace(/\s+/g, ' ').trim());
 /** JCOS の試算の数値（請求 計・実費 計・粗利・実績個数・予定だけの粗利・材料費の超過／残り） */
@@ -117,8 +130,11 @@ const phone = { phone: true };
 // サンプルの案件（ラソラ札幌 11/13〜17・5 日・予定 300 個・その他費用 22,000 円）を JCOS 案件にしたときの値。
 // 実装（domain/jcos.ts）を使わずに、条件から計算する
 const BILL_DAY = 30000 + 10000, PART = 15000, UNIT = 220, DAYS = 5, PLANNED = 300, OTHER = 22000;
+// J0 … 毎日アルバイト 1 人を配置したとき ／ J00 … アルバイトを配置していないとき（アルバイト代は、自動では計上しない）
 const J0 = { billing: BILL_DAY * DAYS, cost: PART * DAYS + PLANNED * UNIT + OTHER };
 J0.gross = J0.billing - J0.cost;                                   // 200,000 − 163,000 ＝ 37,000
+const J00 = { billing: BILL_DAY * DAYS, cost: PLANNED * UNIT + OTHER };
+J00.gross = J00.billing - J00.cost;                                // 200,000 − 88,000 ＝ 112,000
 const D = ['2026-11-13', '2026-11-14', '2026-11-15', '2026-11-16', '2026-11-17'];
 
 // P. スマホ幅の表示 ─────────────────────────────────────────
@@ -324,14 +340,26 @@ add('N5', 'PC（マウス）では、これまでどおり、クリックして�
 });
 
 // J. JCOS 案件の収支 ─────────────────────────────────────────
-add('J1', '収支の計算方法を JCOS 案件にすると、請求と実費を分けた粗利になる（請求 200,000 − 実費 163,000 ＝ 37,000）', async ({ page }) => {
+add('J1', '収支の計算方法を JCOS 案件にすると、請求と実費を分けた粗利になる。アルバイト代は、配置した日・人数だけ計上する（配置前: 請求 200,000 − 実費 88,000 ＝ 112,000 ／ 毎日 1 人を配置: 実費 163,000・粗利 37,000）', async ({ page }) => {
   await setup(page);
   ok((await headProfit(page)) === '利益 ¥66,850', `切り替え前: ${await headProfit(page)}`);
-  await toJcos(page);
-  eq(await headProfit(page), `粗利（管理上） ¥${J0.gross.toLocaleString('ja-JP')}`, '見出しの表示');
+  await toJcosBare(page);
+  eq(await headProfit(page), `粗利（管理上） ¥${J00.gross.toLocaleString('ja-JP')}`, '見出しの表示（アルバイトを配置する前）');
   eq([await kv(page, '請求：人件費').inputValue(), await kv(page, '請求：材料費').inputValue(), await kv(page, '支払い：アルバイト代').inputValue(), await kv(page, '支払い：材料原価').inputValue()],
     ['30000', '10000', '15000', '220'], 'JCOS の条件の初期値');
   eq(await page.locator('table.kv tr', { hasText: '固定売上' }).count(), 0, 'JCOS 案件では、固定売上の欄を出さない');
+  // アルバイトを配置していない間は、アルバイト代を計上しない（どの日も 0 人）
+  const bare = await jcos(page);
+  eq([bare.billing, bare.cost, bare.gross], [J00.billing, J00.cost, J00.gross], '配置する前の請求・実費・粗利（アルバイト代 0 円）');
+  const nostaff = page.locator('[data-testid="jcos-nostaff"]');
+  ok((await nostaff.innerText()).includes('どの日にも配置されていません'), `配置していないことの表示: ${await nostaff.innerText()}`);
+  ok((await page.locator('.cards').innerText()).replace(/\s+/g, ' ').includes('アルバイト 0 人日'), '人日の表示（0 人日）');
+  eq(await dayRow(page, D[0]).locator('td[data-label="アルバイト"]').innerText().then((t) => t.replace(/\s+/g, '')), '−0人＋¥0', '日別の表（0 人・0 円）');
+  // 「開催する 5 日すべてに 1 人ずつ入れる」で、毎日 1 人を配置する
+  await page.locator('[data-testid="jcos-staff-all"]').click();
+  eq(await nostaff.count(), 0, '配置したあとは、案内を出さない');
+  await sheet(page, '基本情報');
+  eq(await headProfit(page), `粗利（管理上） ¥${J0.gross.toLocaleString('ja-JP')}`, '見出しの表示（毎日 1 人を配置）');
   const j = await jcos(page);
   eq([j.billing, j.cost, j.gross, j.basis, j.actual], [J0.billing, J0.cost, J0.gross, 'planned', 0], '請求・実費・粗利');
   eq(j.over, PLANNED * UNIT - 10000 * DAYS, '材料費の超過（原価 66,000 − 請求 50,000）');
@@ -473,7 +501,44 @@ add('J7', 'JCOS 案件を複製すると、条件（単価・追加の請求）�
   await page.waitForSelector('.sheettabs');
   eq(await kv(page, '支払い：材料原価').inputValue(), '250', '複製先の材料原価');
   const j = await jcos(page);
-  eq([j.basis, j.actual, j.billing, j.cost], ['planned', 0, J0.billing, PART * DAYS + PLANNED * 250 + OTHER], '複製先の収支（実績なし・全日請求）');
+  eq([j.basis, j.actual, j.billing, j.cost], ['planned', 0, J0.billing, PLANNED * 250 + OTHER], '複製先の収支（実績なし・全日請求・アルバイトの配置なし＝日ごとの設定は引き継がない）');
+  eq(await page.locator('[data-testid="jcos-nostaff"]').count(), 1, '複製先は、アルバイトを配置していない状態から始まる');
+});
+
+add('J9', '材料原価は、内容ごとに変えられる（220 円は標準の初期値。変えた内容にだけ効き、空欄に戻すと標準に戻る）。内容の分からない個数（手入力の実績）は、標準で計算する', async ({ page }) => {
+  await setup(page);
+  await toJcos(page);
+  await sheet(page, '試算');
+  const rows = page.locator('[data-testid="jcos-content"]');
+  const cells = async () => (await rows.evaluateAll((els) => els.map((e) => [e.getAttribute('data-custom'), ...[...e.querySelectorAll('td')].map((td) => (td.querySelector('input')?.value ?? td.innerText).replace(/\s+/g, ' ').trim())])));
+  // サンプルの実施コンテンツは「フラワーボトル」（予定 300 個）。指定が無いので、標準（220 円）で計算している
+  eq(await cells(), [['0', 'フラワーボトル', '予定 300', '', '¥66,000']], '内訳（指定なし）');
+  eq(await rows.first().locator('input').getAttribute('placeholder'), '標準 220', '空欄のときの表示');
+  // フラワーボトルの原価を 250 円にすると、その分だけ実費が増える（請求・アルバイト代は変わらない）
+  await rows.first().locator('input').fill('250');
+  let j = await jcos(page);
+  eq([j.billing, j.cost], [J0.billing, J0.cost + PLANNED * 30], '内容の原価を変えたあとの請求・実費');
+  eq(await cells(), [['1', 'フラワーボトル', '予定 300', '250', '¥75,000']], '内訳（250 円）');
+  // 手入力の実績（内容が分からない個数）は、標準の原価で計算する（内訳には「内容の指定なし」として出る）
+  await dayRow(page, D[0]).locator('input[aria-label*="実績個数"]').fill('80');
+  j = await jcos(page);
+  eq(j.cost, PART * DAYS + 80 * UNIT + 240 * 250 + OTHER, '実績 80 個（標準 220 円）＋ 予定 240 個（フラワーボトル 250 円）');
+  eq(await cells(), [['1', 'フラワーボトル', '予定 240', '250', '¥60,000'], ['0', '内容の指定なし', '実績 80', '¥220（標準）', '¥17,600']], '内訳（実績と予定）');
+  ok((await page.locator('.jcos__summary').innerText()).replace(/\s+/g, ' ').includes('内容ごとの原価 × 個数'), '計算式の表示（原価が内容ごとに違うとき）');
+  // 標準（基本情報）を変えても、原価を決めてある内容には効かない
+  await sheet(page, '基本情報');
+  eq(await kv(page, '支払い：材料原価').inputValue(), '220', '標準は、内容ごとの指定では変わらない');
+  await kv(page, '支払い：材料原価').fill('200');
+  j = await jcos(page);
+  eq(j.cost, PART * DAYS + 80 * 200 + 240 * 250 + OTHER, '標準を 200 円にしたあと');
+  // 再読み込みしても残る。空欄に戻すと、標準に戻る
+  await page.reload();
+  await openProject(page);
+  eq((await jcos(page)).cost, j.cost, '再読み込み後');
+  await rows.first().locator('input').fill('');
+  j = await jcos(page);
+  eq(j.cost, PART * DAYS + (80 + 240) * 200 + OTHER, '指定を外したあと（どちらも標準 200 円）');
+  eq((await cells()).map((r) => r[0]), ['0', '0'], '指定の印');
 });
 
 add('J8', 'ログインしていないときは、日報の同期のボタンを出さず、手入力できることを案内する', async ({ page }) => {
