@@ -187,6 +187,8 @@ h2 small, h3 small { font-weight: 400; color: var(--sub); margin-left: 10px; fon
 .spacebar__warn { background: #fde2e1; color: #a50e0e; border-radius: 10px; padding: 0 8px; font-weight: 700; white-space: nowrap; }
 /* 検証用のビルドの目印（通常のビルドには出ない） */
 .spacebar__env { background: #fff; color: #a50e0e; border: 1px solid #a50e0e; border-radius: 10px; padding: 0 8px; font-weight: 700; }
+/* 安全のために、ログインと共有データを止めているとき（検証用のチーム名が無い・使えない形のビルド） */
+.spacebar__env--blocked { background: #a50e0e; color: #fff; flex-basis: 100%; padding: 4px 10px; }
 .spacebar .seg button { padding: 2px 12px; }
 .spacebar--local .seg button.is-on { background: #fff; border-color: var(--warn-line); color: #7a5200; }
 .notices { list-style: none; margin: 0 0 10px; padding: 0; }

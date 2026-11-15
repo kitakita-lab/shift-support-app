@@ -3,7 +3,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { AppStore, Notice, Space } from '../store/useAppData';
 import { Member, SharedSession, SharedView, effectiveOwners } from '../store/sharedSession';
 import { MigrationReport, isValidMemberEmail, normalizeEmail } from '../store/sharedLogic';
-import { DEFAULT_TEAM_ID, IS_VERIFY_BUILD, TEAM_ID } from '../store/paths';
+import { DEFAULT_TEAM_ID, IS_VERIFY_BUILD, TEAM_GUARD, TEAM_ID } from '../store/paths';
+import { BLOCK_TEXT } from '../store/team';
 
 // ── 置き場所の帯（いまどちらのデータを見ているかを、常に表示する） ──────────────
 export function SpaceBar({ store, signedIn, configured }: { store: AppStore; signedIn: boolean; configured: boolean }) {
@@ -12,12 +13,17 @@ export function SpaceBar({ store, signedIn, configured }: { store: AppStore; sig
   const shown = space === 'local' ? 'local' : shared.phase === 'ready' ? 'shared' : 'none';
   const pick = (s: Space) => () => store.setSpace(s);
   return (
-    <div className={`spacebar spacebar--${space}`} data-testid="space" data-space={shown} data-phase={shared.phase}>
+    <div className={`spacebar spacebar--${space}`} data-testid="space" data-space={shown} data-phase={shared.phase} data-team={TEAM_ID}>
       {IS_VERIFY_BUILD && (
         <span
           className="spacebar__env" data-testid="env-team" data-team={TEAM_ID}
           title={`検証用のビルドです。共有データの場所は「${TEAM_ID}」で、通常の共有データ（${DEFAULT_TEAM_ID}）は読み書きしません。`}
         >検証用ビルド（共有データの場所: {TEAM_ID}）</span>
+      )}
+      {!TEAM_GUARD.ok && (
+        <span className="spacebar__env spacebar__env--blocked" data-testid="env-blocked" data-reason={TEAM_GUARD.reason} role="alert">
+          {`安全のため、ログインと共有データを止めています（${BLOCK_TEXT[TEAM_GUARD.reason]}）。本番のデータには、つないでいません。`}
+        </span>
       )}
       <span className="spacebar__label">表示中のデータ</span>
       {signedIn ? (
@@ -35,7 +41,9 @@ export function SpaceBar({ store, signedIn, configured }: { store: AppStore; sig
             ? 'このブラウザの中だけに保存されます。共有データには反映されません（サンプルや下書きはこちら）。'
             : configured
               ? 'このブラウザの中だけに保存されます。ログインすると、チームの共有データを使えます。'
-              : 'このブラウザの中だけに保存されます。'}
+              : !TEAM_GUARD.ok
+                ? 'このブラウザの中だけに保存されます（この端末だけのデータは、使えます）。'
+                : 'このブラウザの中だけに保存されます。'}
       </span>
       {space === 'shared' && shared.phase === 'ready' && !shared.enforced && (
         <span className="spacebar__warn" title="現在は、Google アカウントでログインできる人なら誰でも共有データを読み書きできます。「メンバー」タブを参照してください。">⚠ メンバー制 未適用</span>
