@@ -7,7 +7,7 @@ import { RawReportRow, contentKey, venueKey } from '../domain/report';
 import { mkContent, mkProject } from '../domain/testkit';
 import { Project, ReportSource, Venue } from '../types';
 import { ReportError, ReportErrorCode } from './sheets';
-import { MAX_ISSUES_SHOWN, SyncDeps, SyncOutcome, applySync, failureIsCurrent, failureOf, hydrateFailure, runReportSync } from './sync';
+import { MAX_ISSUES_SHOWN, SyncDeps, SyncOutcome, applySync, clearMessage, clearedBySync, failureIsCurrent, failureOf, hydrateFailure, runReportSync } from './sync';
 
 const VENUE: Venue = { id: 'v1', name: '北街モール（中央広場）', feeFixed: 0, feePerDay: 0, feeRatePct: 0, memo: '', template: emptyLayout() };
 const SOURCE: ReportSource = { spreadsheetId: 'sheet-1', gid: null };
@@ -198,6 +198,173 @@ describe('日報の同期: 日報に読み取れない回答があるときは�
   });
 });
 
+// ── Version 5.3: 前回の実績が、すべて外れることになる結果は、利用者が確かめるまで書かない ─────────────
+describe('日報の同期: この案件の回答が、日報から 1 件も無くなったときは、書かずに止めて、確認を求める', () => {
+  const OTHER = '北街モール（東口前）';
+  /** この案件の回答が 1 件も無い日報（どれも、回答そのものは読み取れる） */
+  const emptied: [string, RawReportRow[]][] = [
+    ['回答が 1 件も無い日報', []],
+    ['この案件の回答だけが、削除された（ほかの会場の回答は、残っている）', [row('2026/11/13', 33, OTHER), row('2026/11/14', 7, OTHER)]],
+    ['会場名が、別の書き方に直された', [row('2026/11/13', 62, '北街モール'), row('2026/11/14', 58, '北街モール')]],
+    ['開催日が、会期から離れた日に直された', [row('2026/12/20', 62), row('2026/12/21', 58)]],
+    ['開催日が、会期のすぐ外の日に直された', [row('2026/11/16', 62), row('2026/11/17', 58)]],
+  ];
+  for (const [name, rows] of emptied) {
+    it(`${name}: 前回の実績（2 日・120 個）と粗利は、そのまま。外れることになる実績を返す`, async () => {
+      const store = { p: P };
+      await syncInto(store, deps());
+      const before = JSON.stringify(store.p);
+      const profit = jcosEstimate(store.p).current.gross;
+      const out = await syncInto(store, deps({ rows: async () => rows }));
+      expect(out).toMatchObject({ ok: false, code: 'confirm-clear', clear: { days: 2, count: 120 } });
+      if (!out.ok) expect(out.message).toBe(clearMessage({ days: 2, count: 120 }));
+      expect(JSON.stringify(store.p)).toBe(before);
+      expect(jcosEstimate(store.p).current.gross).toBe(profit);
+      // もう一度押しても、同じ（何度押しても、確かめるまでは外れない）
+      expect(await syncInto(store, deps({ rows: async () => rows }))).toMatchObject({ ok: false, code: 'confirm-clear' });
+      expect(JSON.stringify(store.p)).toBe(before);
+    });
+  }
+  it('確認の文は、外れることになる日数・個数と、起きる理由（回答の削除・会場名や開催日の修正・会場マスタや案件の変更）を示す。認証は捨てない', async () => {
+    const d = deps({ rows: async () => [] });
+    const out = await run(d, { ...P, reportSync: (await run(deps()) as Extract<SyncOutcome, { ok: true }>).sync });
+    expect(d.log).toEqual(['token']);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      for (const part of ['1 件もありません', '2 日・キット 120 個', '外していません', '削除された', '会場マスタの会場名・別名', '「前回の実績を外す」']) expect(out.message).toContain(part);
+    }
+  });
+  it('利用者が「前回の実績を外す」を押したとき（allowClear）だけ、日報のとおりに書く（実績 0 日・収支は予定に戻る）。そのあとの同期は、止まらない', async () => {
+    const store = { p: P };
+    await syncInto(store, deps());
+    const cleared = await runReportSync({ project: store.p, projects: [store.p], venues: [VENUE], source: SOURCE, allowClear: true }, deps({ rows: async () => [] }));
+    expect(cleared.ok).toBe(true);
+    if (cleared.ok) store.p = applySync(store.p, cleared);
+    expect([store.p.reportSync!.days, jcosEstimate(store.p).basis, jcosEstimate(store.p).actualCount]).toEqual([[], 'planned', 0]);
+    // 前回の実績が 0 日になったあとは、回答が無いままでも、確認は求めない（外れるものが無い）
+    expect((await syncInto(store, deps({ rows: async () => [] }))).ok).toBe(true);
+    // 回答が戻れば、ふつうに取り込む
+    expect((await syncInto(store, deps())).ok).toBe(true);
+    expect(jcosEstimate(store.p).actualCount).toBe(120);
+  });
+  it('allowClear は、「外してよい」というだけ。回答があれば、ふつうの同期と同じ結果になる（実績は外れない）', async () => {
+    const store = { p: P };
+    await syncInto(store, deps());
+    const out = await runReportSync({ project: store.p, projects: [store.p], venues: [VENUE], source: SOURCE, allowClear: true }, deps());
+    expect(out.ok && out.sync.days.map((x) => [x.date, x.count])).toEqual([['2026-11-13', 62], ['2026-11-14', 58]]);
+  });
+  it('回答が一部だけ無くなった場合（残りの回答がある）は、止めない。日報のとおりに置き換える', async () => {
+    const store = { p: P };
+    await syncInto(store, deps());
+    expect((await syncInto(store, deps({ rows: async () => [row('2026/11/14', 58)] }))).ok).toBe(true);
+    expect(store.p.reportSync!.days.map((x) => [x.date, x.count])).toEqual([['2026-11-14', 58]]);
+  });
+  it('まだ同期していない案件・前回の実績が 0 日の案件は、回答が無くても止めない（外れるものが無い）', async () => {
+    const first = await run(deps({ rows: async () => [] }));
+    expect(first.ok && first.sync.days).toEqual([]);
+    const store = { p: P };
+    await syncInto(store, deps({ rows: async () => [row('2026/11/13', 33, OTHER)] }));
+    expect(store.p.reportSync!.days).toEqual([]);
+    expect((await syncInto(store, deps({ rows: async () => [] }))).ok).toBe(true);
+  });
+  it('会場マスタの別名を消して、照合が切れたときも止まる（自動で外すと、気づかないうちに実績が消える）。別名を戻して同期すると、元どおり', async () => {
+    const alias: Venue = { ...VENUE, reportNames: ['北街モール'] };
+    const rows = [row('2026/11/13', 62, '北街モール'), row('2026/11/14', 58, '北街モール')];
+    const sync = (project: Project, venues: Venue[]) => runReportSync({ project, projects: [project], venues, source: SOURCE }, deps({ rows: async () => rows }));
+    const a = await sync(P, [alias]);
+    expect(a.ok).toBe(true);
+    const synced = a.ok ? applySync(P, a) : P;
+    expect(jcosEstimate(synced, { projects: [synced], venues: [alias] }).actualCount).toBe(120);
+    expect(await sync(synced, [VENUE])).toMatchObject({ ok: false, code: 'confirm-clear', clear: { days: 2, count: 120 } });
+    const b = await sync(synced, [alias]);
+    expect(b.ok && b.sync.days.map((x) => [x.date, x.count])).toEqual([['2026-11-13', 62], ['2026-11-14', 58]]);
+  });
+  it('日報から決めた会期の案件でも止まる。会期も、案件名も、変えない', async () => {
+    const AUTO: Project = { ...P, name: `${VENUE.name}（11/13〜11/14）`, startDate: '2026-11-13', endDate: '2026-11-14', reportPeriod: { startDate: '2026-11-13', endDate: '2026-11-14' } };
+    const store = { p: AUTO };
+    await syncInto(store, deps());
+    const before = JSON.stringify(store.p);
+    expect(await syncInto(store, deps({ rows: async () => [row('2026/11/13', 33, OTHER)] }))).toMatchObject({ ok: false, code: 'confirm-clear', clear: { days: 2, count: 120 } });
+    expect(JSON.stringify(store.p)).toBe(before);
+  });
+  it('回答が日報に残っていて、行き先が決まっていない・相手の案件に決まった、というだけのときは、止めない（保留の日・相手の案件が決めた日）', async () => {
+    const store = { p: P };
+    await syncInto(store, deps());
+    // あとから、同じ会場・同じ会期の案件ができた → どちらの実績か決まらないので、保留になる（回答は、日報に残っている）
+    const rival = mkProject({ id: 'p2', name: '相手の案件', venueId: 'v1', startDate: '2026-11-13', endDate: '2026-11-15', jcos: defaultJcos(), assignments: [] });
+    const held = await runReportSync({ project: store.p, projects: [store.p, rival], venues: [VENUE], source: SOURCE }, deps());
+    expect(held.ok && [held.sync.days.length, held.sync.held.map((h) => h.date)]).toEqual([0, ['2026-11-13', '2026-11-14']]);
+    // 相手の案件が「自分の実績にする」と決めた → この案件の結果からは外れる（相手の案件のもの）
+    const claimed = { ...rival, reportClaims: ['2026-11-13', '2026-11-14'] };
+    const theirs = await runReportSync({ project: store.p, projects: [store.p, claimed], venues: [VENUE], source: SOURCE }, deps());
+    expect(theirs.ok && [theirs.sync.days.length, theirs.sync.skipped.map((x) => x.reason)]).toEqual([0, ['other-project']]);
+  });
+  it('保留の日・相手の案件の日があっても、それとは関係の無い日の実績が、すべて外れるなら、止める（事前の点検の指摘）', async () => {
+    // 前回の実績は 11/13・11/14。そのあと、11/15 だけ会期が重なる案件ができ、11/13・11/14 の回答は、日報から消えた（11/15 の回答は、保留になる）
+    const store = { p: P };
+    await syncInto(store, deps());
+    const before = JSON.stringify(store.p);
+    const rival = mkProject({ id: 'p2', name: '相手の案件', venueId: 'v1', startDate: '2026-11-15', endDate: '2026-11-16', jcos: defaultJcos(), assignments: [] });
+    const rows = [row('2026/11/15', 40)];
+    const out = await runReportSync({ project: store.p, projects: [store.p, rival], venues: [VENUE], source: SOURCE }, deps({ rows: async () => rows }));
+    expect(out).toMatchObject({ ok: false, code: 'confirm-clear', clear: { days: 2, count: 120 } });
+    expect(JSON.stringify(store.p)).toBe(before);
+    // 相手の案件が、11/15 を自分の実績と決めている場合も、同じ（11/13・11/14 が外れる理由には、ならない）
+    const claimed = { ...rival, reportClaims: ['2026-11-15'] };
+    expect(await runReportSync({ project: store.p, projects: [store.p, claimed], venues: [VENUE], source: SOURCE }, deps({ rows: async () => rows })))
+      .toMatchObject({ ok: false, code: 'confirm-clear', clear: { days: 2, count: 120 } });
+    // 前回の実績の一部の日だけが、保留になった場合も、残りの日（11/13）の回答が消えていれば、止める
+    const half = mkProject({ id: 'p3', name: '相手の案件 2', venueId: 'v1', startDate: '2026-11-14', endDate: '2026-11-14', jcos: defaultJcos(), assignments: [] });
+    expect(await runReportSync({ project: store.p, projects: [store.p, half], venues: [VENUE], source: SOURCE }, deps({ rows: async () => [row('2026/11/14', 58)] })))
+      .toMatchObject({ ok: false, code: 'confirm-clear', clear: { days: 2, count: 120 } });
+  });
+  it('確認を求めた同期が読んだ日報の場所を、記録に持つ（「前回の実績を外す」は、同じ日報を読み直す。開き直したあとでも）', async () => {
+    const store = { p: P };
+    await syncInto(store, deps());
+    const other: ReportSource = { spreadsheetId: 'sheet-2', gid: 7 };
+    const out = await run(deps({ rows: async () => [] }), store.p, other);
+    expect(out).toMatchObject({ ok: false, code: 'confirm-clear', clear: { days: 2, count: 120, source: other } });
+    if (!out.ok) {
+      const f = failureOf(out, '2026-11-14T10:00:00.000Z', store.p.reportSync!.at);
+      expect(f.clear).toEqual({ days: 2, count: 120, source: other });
+      expect(hydrateFailure(JSON.parse(JSON.stringify(f)))).toEqual(f);
+    }
+    // 場所の形が合わない記録は、場所だけを捨てる（確認そのものは、出す）
+    for (const junk of [null, 'x', {}, { spreadsheetId: '' }, { spreadsheetId: 5 }, []]) {
+      expect(hydrateFailure({ at: 't', message: 'm', clear: { days: 2, count: 120, source: junk } })).toEqual({ at: 't', message: 'm', clear: { days: 2, count: 120 } });
+    }
+    expect(hydrateFailure({ at: 't', message: 'm', clear: { days: 2, count: 120, source: { spreadsheetId: 's', gid: 'x' } } })!.clear).toEqual({ days: 2, count: 120, source: { spreadsheetId: 's', gid: null } });
+  });
+  it('clearedBySync: 外れることになる日数・個数。前回の結果の形が壊れていても、落ちない', () => {
+    const next = (over: Partial<Extract<SyncOutcome, { ok: true }>['sync']> = {}) => ({
+      at: 't', venueId: 'v1', startDate: '2026-11-13', endDate: '2026-11-15', days: [], rowsRead: 0, rowsUsed: 0, tests: 0, skipped: [], held: [], unmatched: [], ...over,
+    });
+    const day = (date: string, count: number) => ({ date, count, rows: 1 });
+    const stored = next({ days: [day('2026-11-13', 62), day('2026-11-14', 58)] });
+    expect(clearedBySync(stored, next())).toEqual({ days: 2, count: 120 });
+    expect(clearedBySync(stored, next({ days: [day('2026-11-13', 1)] }))).toBeNull();
+    // 前回の実績のあった日が、どれも、保留の日か、相手の案件が決めた日 → 回答は日報に残っている。確認は求めない
+    const held = (date: string) => ({ date, count: 60, rows: 1, others: ['相手'] });
+    expect(clearedBySync(stored, next({ held: [held('2026-11-13'), held('2026-11-14')] }))).toBeNull();
+    expect(clearedBySync(stored, next({ skipped: [{ reason: 'other-project', rows: 2, dates: ['2026-11-13', '2026-11-14'] }] }))).toBeNull();
+    expect(clearedBySync(stored, next({ held: [held('2026-11-13')], skipped: [{ reason: 'other-project', rows: 1, dates: ['2026-11-14'] }] }))).toBeNull();
+    // 1 日でも、説明のつかない日（保留でも、相手の案件の日でもない）が外れるなら、確認を求める
+    expect(clearedBySync(stored, next({ held: [held('2026-11-13')] }))).toEqual({ days: 2, count: 120 });
+    expect(clearedBySync(stored, next({ skipped: [{ reason: 'other-project', rows: 1, dates: ['2026-11-13'] }] }))).toEqual({ days: 2, count: 120 });
+    expect(clearedBySync(stored, next({ held: [held('2026-11-16')] }))).toEqual({ days: 2, count: 120 });      // 関係の無い日の保留
+    // 読み取れない回答の印（以前の版の結果にだけ残る）は、説明にならない
+    expect(clearedBySync(stored, next({ skipped: [{ reason: 'bad-count', rows: 2, dates: ['2026-11-13', '2026-11-14'] }] }))).toEqual({ days: 2, count: 120 });
+    // 会場名の違う回答・会期のすぐ外の回答が残っていても、この案件の実績になる回答は無い → 確認を求める
+    expect(clearedBySync(stored, next({ unmatched: [{ venue: 'ほか', rows: 1, count: 3, dates: ['2026-11-13'] }], outside: [{ date: '2026-11-16', rows: 1, count: 5 }] }))).toEqual({ days: 2, count: 120 });
+    expect(clearedBySync(undefined, next())).toBeNull();
+    expect(clearedBySync(next(), next())).toBeNull();
+    expect(clearedBySync({ ...stored, days: 'x' as unknown as typeof stored.days }, next())).toBeNull();
+    expect(clearedBySync({ ...stored, days: [{ date: '2026-11-13', count: Number.NaN, rows: 1 }, day('2026-11-14', 58)] }, next())).toEqual({ days: 2, count: 58 });
+    // 個数が整数でない・マイナスの記録は、合計に入れない（記録の「個数」が、0 以上の整数のままになる＝読み直しても、確認のボタンが出る）
+    expect(clearedBySync({ ...stored, days: [day('2026-11-13', 1.5), day('2026-11-14', -3), day('2026-11-15', 7)] }, next())).toEqual({ days: 3, count: 7 });
+  });
+});
+
 describe('同期できなかったときの記録（この端末に置いて、画面に出す）', () => {
   const issue = (n: number) => ({ row: n, date: '2026-11-15', items: [{ field: 'キットの使用数', reason: '「キットの使用数」が空欄です' }] });
   const AT = '2026-11-14T09:00:00.000Z';
@@ -210,6 +377,17 @@ describe('同期できなかったときの記録（この端末に置いて、�
     const few = failureOf({ ok: false, code: 'bad-rows', message: 'm', issues: [issue(2)] }, AT, '');
     expect(few).toEqual({ at: AT, message: 'm', base: '', issues: [issue(2)] });
     expect(failureOf({ ok: false, code: 'network', message: '通信できません' }, AT, BASE)).toEqual({ at: AT, message: '通信できません', base: BASE });
+  });
+  it('前回の実績が、すべて外れることになるので止めたときは、外れることになる実績を持つ（画面は、これを見て「前回の実績を外す」を出す）。読み直しても同じ', () => {
+    const f = failureOf({ ok: false, code: 'confirm-clear', message: 'm', clear: { days: 2, count: 120 } }, AT, BASE);
+    expect(f).toEqual({ at: AT, message: 'm', base: BASE, clear: { days: 2, count: 120 } });
+    expect(hydrateFailure(JSON.parse(JSON.stringify(f)))).toEqual(f);
+    // ふつうの失敗には、付かない
+    expect('clear' in failureOf({ ok: false, code: 'network', message: 'x' }, AT, BASE)).toBe(false);
+    // 形の合わないものは、捨てる（「前回の実績を外す」を、根拠なしに出さない）
+    for (const junk of [null, 'x', 5, [], {}, { days: 0, count: 0 }, { days: -1, count: 3 }, { days: 1.5, count: 3 }, { days: 2 }, { days: '2', count: 120 }, { days: 2, count: -1 }]) {
+      expect(hydrateFailure({ at: AT, message: 'm', clear: junk })).toEqual({ at: AT, message: 'm' });
+    }
   });
   it('保存した記録は、読み直しても同じ', () => {
     const f = failureOf({ ok: false, code: 'bad-rows', message: 'm', issues: [issue(2), { row: 5, date: null, items: [{ field: '開催日', reason: '「開催日」が空欄です' }] }] }, AT, BASE);

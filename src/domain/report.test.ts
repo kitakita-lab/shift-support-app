@@ -9,6 +9,7 @@ import {
   isBlankRow, isTestRow, openOutside, parseReportCount, parseReportDate, parseReportTally, parseSheetUrl, periodLabel, planProjectSync, planReportSync, renamedForPeriod, reportVenue,
   rivalClaimedDates, syncStaleness,
   tallyProblem, unmatchedGaps, usableReportDays, venueKey, venueKeys, venueProblem, venueReportDates, widenTarget, contentKey,
+  aliasEvidence, checkAlias, classifyUnmatched, looseVenueKey, registeredElsewhere, rivalVenue, shownStatus, withVenueAlias, REPORT_LAG_DAYS,
 } from './report';
 import { rng } from './testkit';
 import { mkProject } from './testkit';
@@ -48,6 +49,263 @@ const ROWS: RawReportRow[] = [
   row('2026/11/15', CENTER, '70', '', '別のイベント名 '),                              // イベント名が違う・末尾に空白
   row('2026/11/18', CENTER, '55'),                                                    // 会期の翌日
 ];
+
+// ── 会場の「別の書き方」かどうか（別名を勧める根拠） ─────────────────
+// 実機での確認（2026-11-16）で見つかった問題: 同じ日に、別の会場で開催した回答に、「別名として登録して同期」が出ていた。
+// 同じ日・同じ会期、というだけでは、別名の候補にしない。会場名は、どれも架空のもの。
+describe('会場の別の書き方だと言える根拠（aliasEvidence）', () => {
+  const center = mkVenue('v-center', CENTER);
+  it('記号・括弧だけが違う名前は、表記ゆれ（variant）', () => {
+    for (const name of ['北街モール【中央広場】', '北街モール・中央広場', '北街モール-中央広場', '北街モール/中央広場', '「北街モール」中央広場']) {
+      expect(aliasEvidence(name, center), name).toBe('variant');
+    }
+  });
+  it('片方が、もう片方から文字を省いた形は、略称・書き足し（short）', () => {
+    for (const name of ['北街モール', '北街モール1F 中央広場', '中央広場', '北街モール（中央広場）特設会場', '北街中央広場']) {
+      expect(aliasEvidence(name, center), name).toBe('short');
+    }
+  });
+  it('名前に共通点が無い会場・文字を省いた形でない会場は、根拠なし（同じ建物の、別の場所も）', () => {
+    for (const name of [EAST, '南港アウトレット ゲート前', 'みなと市場', '北街モール（東口前）特設会場', '中央公園広場', '東街モール（中央広場）']) {
+      expect(aliasEvidence(name, center), name).toBeNull();
+    }
+  });
+  it('短すぎる名前（2 文字以下）は、多くの会場名に含まれるので、根拠にしない', () => {
+    for (const name of ['北街', '広場', '中', '（）', '']) expect(aliasEvidence(name, center), name).toBeNull();
+    expect(aliasEvidence('モール', center)).toBe('short');     // 3 文字からは、候補（登録の前に、利用者が確かめる）
+  });
+  it('すでに一致する名前（会場名・登録済みの別名。全角/半角・空白・英字の大小だけの違い）は、候補ではない', () => {
+    for (const name of [CENTER, '北街モール(中央広場)', ' 北街モール （中央広場） ']) expect(aliasEvidence(name, center), name).toBeNull();
+    const withAlias = mkVenue('v-center', CENTER, ['KITA MALL 1F']);
+    expect(aliasEvidence('kita mall 1f', withAlias)).toBeNull();
+  });
+  it('登録済みの別名との比較でも、同じように見る', () => {
+    const withAlias = mkVenue('v-center', CENTER, ['KITA MALL 1F']);
+    expect(aliasEvidence('KITA-MALL 1F', withAlias)).toBe('variant');
+    expect(aliasEvidence('KITA MALL', withAlias)).toBe('short');
+    expect(aliasEvidence('SOUTH PORT OUTLET', withAlias)).toBeNull();
+  });
+  it('会場が無いとき・名前が空のときは、根拠なし', () => {
+    expect(aliasEvidence('北街モール', undefined)).toBeNull();
+    expect(aliasEvidence(null, center)).toBeNull();
+    expect(looseVenueKey('北街モール（中央広場）')).toBe('北街モール中央広場');
+  });
+});
+
+describe('別名として登録してよいか（checkAlias。登録する直前に通す）', () => {
+  const SOUTH = '南港アウトレット ゲート前';
+  const master = [mkVenue('v-center', CENTER, ['北街モール1F']), mkVenue('v-east', EAST), mkVenue('v-south', SOUTH, ['南港アウトレット'])];
+  it('ほかの会場として登録済みの名前（会場名・別名）は、登録させない（別の会場の実績が混ざる）', () => {
+    for (const name of [SOUTH, '南港アウトレット  ゲート前', '南港アウトレット', EAST, '北街モール(東口前)']) {
+      const c = checkAlias(name, 'v-center', master);
+      expect(c.ok, name).toBe(false);
+      expect(!c.ok && c.reason, name).toBe('other-venue');
+    }
+    expect(registeredElsewhere(SOUTH, 'v-center', master)?.id).toBe('v-south');
+    expect(registeredElsewhere(SOUTH, 'v-south', master)).toBeNull();        // 自分の会場の名前は、「ほかの会場」ではない
+    expect(registeredElsewhere('', 'v-center', master)).toBeNull();
+  });
+  it('この会場の名前・登録済みの別名・空の名前・無い会場は、登録しない', () => {
+    expect(checkAlias(CENTER, 'v-center', master)).toEqual({ ok: false, reason: 'already' });
+    expect(checkAlias('北街モール1f', 'v-center', master)).toEqual({ ok: false, reason: 'already' });
+    expect(checkAlias('  ', 'v-center', master)).toEqual({ ok: false, reason: 'empty' });
+    expect(checkAlias('北街モール', 'v-none', master)).toEqual({ ok: false, reason: 'no-venue' });
+  });
+  it('この会場の別の書き方だと言える根拠があり、ほかの会場には当たらない名前だけ、登録できる', () => {
+    expect(checkAlias('北街モール・中央広場', 'v-center', master)).toEqual({ ok: true, evidence: 'variant' });
+    expect(checkAlias('中央広場', 'v-center', master)).toEqual({ ok: true, evidence: 'short' });
+    expect(checkAlias('北街モール1F 中央広場', 'v-center', master)).toEqual({ ok: true, evidence: 'short' });
+  });
+  it('根拠の無い名前は、登録しない（登録するなら、「会場」タブで、意図して入れる）', () => {
+    expect(checkAlias('駅前ひろば', 'v-center', master)).toEqual({ ok: false, reason: 'no-evidence' });
+    expect(checkAlias('北街', 'v-center', master)).toEqual({ ok: false, reason: 'no-evidence' });          // 短すぎる名前
+  });
+  it('ほかの登録済みの会場にも、同じか、より強い根拠がある名前は、登録しない（同じ施設の、別の場所。どの会場の回答か、決められない）', () => {
+    // 「北街モール」は、中央広場にも、東口前にも、略称として当たる
+    const c = checkAlias('北街モール', 'v-center', master);
+    expect(c).toMatchObject({ ok: false, reason: 'ambiguous' });
+    expect(!c.ok && c.other?.id).toBe('v-east');
+    expect(checkAlias('北街モール', 'v-east', master)).toMatchObject({ ok: false, reason: 'ambiguous' });   // 東口前の側から見ても、同じ
+    expect(rivalVenue('北街モール', 'v-center', master, 'short')?.id).toBe('v-east');
+    // 東口前が登録されていなければ、中央広場の略称として登録できる
+    expect(checkAlias('北街モール', 'v-center', master.filter((v) => v.id !== 'v-east'))).toEqual({ ok: true, evidence: 'short' });
+    // 記号だけが違う名前（強い根拠）は、ほかの会場に、略称としてだけ当たっても、登録できる
+    const annex = [...master, mkVenue('v-annex', '北街モール（中央広場）別館')];
+    expect(checkAlias('北街モール・中央広場', 'v-center', annex)).toEqual({ ok: true, evidence: 'variant' });
+    expect(rivalVenue('北街モール・中央広場', 'v-center', annex, 'variant')).toBeNull();
+    // 記号だけが違う名前が、2 つの会場に当たるとき（会場マスタの重複）は、登録しない
+    const twin = [...master, mkVenue('v-twin', '北街モール 中央広場')];
+    expect(checkAlias('北街モール・中央広場', 'v-center', twin)).toMatchObject({ ok: false, reason: 'ambiguous' });
+  });
+  it('書き込み（withVenueAlias）: 登録してよい名前だけ、その会場の別名に足す。足せないときは、会場マスタを変えない', () => {
+    const okay = withVenueAlias(master, 'v-center', ' 北街モール・中央広場 ');
+    expect(okay.ok && okay.venues.find((v) => v.id === 'v-center')!.reportNames).toEqual(['北街モール1F', '北街モール・中央広場']);
+    expect(okay.ok && okay.venues.filter((v) => v.id !== 'v-center')).toEqual(master.filter((v) => v.id !== 'v-center'));   // ほかの会場は、そのまま
+    expect(master.find((v) => v.id === 'v-center')!.reportNames).toEqual(['北街モール1F']);                                 // 元の一覧は、書き換えない
+    for (const [name, reason] of [[SOUTH, 'other-venue'], ['南港アウトレット', 'other-venue'], ['駅前ひろば', 'no-evidence'], ['北街モール', 'ambiguous'], [CENTER, 'already'], ['  ', 'empty']] as const) {
+      const r = withVenueAlias(master, 'v-center', name);
+      expect(r.ok, name).toBe(false);
+      expect(!r.ok && r.check.reason, name).toBe(reason);
+    }
+    expect(withVenueAlias(master, 'v-none', '北街モール')).toMatchObject({ ok: false, check: { reason: 'no-venue' } });
+  });
+});
+
+describe('会場名が一致しなかった回答の分け方（classifyUnmatched）', () => {
+  const SOUTH = '南港アウトレット ゲート前';
+  const master = [mkVenue('v-center', CENTER), mkVenue('v-east', EAST), mkVenue('v-south', SOUTH)];
+  const names = (v: { venue: string }[]) => v.map((u) => u.venue);
+  it('実機で見つかった場面: 同じ日に、登録済みの別の会場の回答がある → 別名の候補にしない・確認も求めない', () => {
+    // この案件（中央広場）は、4 日とも実績がある。最終日に、別の会場（南港）でも開催していた
+    // （会場名・日付・個数は、架空のもの）
+    const p = mkProject({ id: 'p1', name: '秋の花まつり', venueId: 'v-center', startDate: '2026-10-06', endDate: '2026-10-09' });
+    const s = plan([
+      row('2026/10/06', CENTER, '61'), row('2026/10/07', CENTER, '47'), row('2026/10/08', CENTER, '52'), row('2026/10/09', CENTER, '58'),
+      row('2026/10/09', 'その他', '6', SOUTH),
+    ], { project: p, venues: master });
+    expect(dayList(s)).toEqual([['2026-10-06', 61, 1], ['2026-10-07', 47, 1], ['2026-10-08', 52, 1], ['2026-10-09', 58, 1]]);   // 別の会場の 6 個は、入らない
+    expect(s.unmatched).toEqual([{ venue: SOUTH, rows: 1, count: 6, dates: ['2026-10-09'] }]);
+    const view = classifyUnmatched(s, master);
+    expect(view.candidates).toEqual([]);
+    expect(view.others).toEqual([{ venue: SOUTH, rows: 1, count: 6, dates: ['2026-10-09'], registered: true, gap: false }]);
+    expect(unmatchedGaps(s, master)).toEqual([]);
+  });
+  it('登録済みの別の会場は、この案件の実績が無い日の回答でも、別名の候補にしない', () => {
+    const s = plan([row('2026/11/13', CENTER, '62'), row('2026/11/14', 'その他', '40', SOUTH), row('2026/11/15', EAST, '33')], { venues: master });
+    const view = classifyUnmatched(s, master);
+    expect(view.candidates).toEqual([]);
+    expect(view.others.map((u) => [u.venue, u.registered, u.gap])).toEqual([[EAST, true, true], [SOUTH, true, true]]);
+    expect(unmatchedGaps(s, master)).toEqual([]);
+  });
+  it('名前に共通点の無い、未登録の会場名は、別名の候補にしない（実績の無い日の回答なら、知らせるだけ）', () => {
+    const only = [mkVenue('v-center', CENTER)];
+    const s = plan([row('2026/11/13', CENTER, '62'), row('2026/11/13', 'その他', '7', SOUTH), row('2026/11/14', 'その他', '40', '駅前ひろば')], { venues: only });
+    const view = classifyUnmatched(s, only);
+    expect(view.candidates).toEqual([]);
+    expect(view.others.map((u) => [u.venue, u.registered, u.gap]).sort()).toEqual([[SOUTH, false, false], ['駅前ひろば', false, true]].sort());
+    expect(names(unmatchedGaps(s, only))).toEqual(['駅前ひろば']);          // 同じ日（11/13）の別の会場は、知らせない
+  });
+  it('記号だけが違う名前は、実績のある日でも、別名の候補（表記ゆれ）', () => {
+    const s = plan([row('2026/11/13', CENTER, '62'), row('2026/11/13', 'その他', '9', '北街モール・中央広場')], { venues: master });
+    expect(classifyUnmatched(s, master).candidates).toEqual([{ venue: '北街モール・中央広場', rows: 1, count: 9, dates: ['2026-11-13'], evidence: 'variant' }]);
+    expect(names(unmatchedGaps(s, master))).toEqual(['北街モール・中央広場']);
+  });
+  it('略称・書き足しの名前は、この案件の実績が無い日の回答だけ、別名の候補にする（実績のある日なら、同じ日の、別の場所の開催とみなす）', () => {
+    const only = [mkVenue('v-center', CENTER), mkVenue('v-south', SOUTH)];
+    const sameDay = plan([row('2026/11/13', CENTER, '62'), row('2026/11/13', 'その他', '9', '北街モール')], { venues: only });
+    expect(classifyUnmatched(sameDay, only)).toEqual({ candidates: [], others: [{ venue: '北街モール', rows: 1, count: 9, dates: ['2026-11-13'], registered: false, gap: false }] });
+    expect(unmatchedGaps(sameDay, only)).toEqual([]);
+    const gapDay = plan([row('2026/11/13', CENTER, '62'), row('2026/11/14', 'その他', '9', '北街モール')], { venues: only });
+    expect(classifyUnmatched(gapDay, only).candidates.map((u) => [u.venue, u.evidence])).toEqual([['北街モール', 'short']]);
+  });
+  it('略称・書き足しの名前が、実績のある日にも、無い日にも出ているときは、候補にしない（登録すると、実績のある日の、別の場所の個数も入ってしまう）', () => {
+    const only = [mkVenue('v-center', CENTER), mkVenue('v-south', SOUTH)];
+    const p = mkProject({ id: 'p1', name: '秋の花まつり', venueId: 'v-center', startDate: '2026-11-13', endDate: '2026-11-15' });
+    // 中央広場の実績は 11/13・11/14。「北街モール」は 11/14（中央広場と同じ日）と 11/15
+    const s = plan([row('2026/11/13', CENTER, '62'), row('2026/11/14', CENTER, '58'), row('2026/11/14', 'その他', '9', '北街モール'), row('2026/11/15', 'その他', '11', '北街モール')], { project: p, venues: only });
+    expect(classifyUnmatched(s, only)).toEqual({ candidates: [], others: [{ venue: '北街モール', rows: 2, count: 20, dates: ['2026-11-14', '2026-11-15'], registered: false, gap: true }] });
+    expect(names(unmatchedGaps(s, only))).toEqual(['北街モール']);            // 実績の無い日（11/15）があるので、知らせる（ボタンは出さない）
+    // 記号だけが違う名前は、これまでどおり、日を問わず候補
+    const v = plan([row('2026/11/13', CENTER, '62'), row('2026/11/13', 'その他', '9', '北街モール・中央広場'), row('2026/11/15', 'その他', '11', '北街モール・中央広場')], { project: p, venues: only });
+    expect(classifyUnmatched(v, only).candidates.map((u) => [u.venue, u.evidence])).toEqual([['北街モール・中央広場', 'variant']]);
+  });
+  it('ほかの登録済みの会場にも当たる略称（同じ施設の、別の場所が両方登録してある）は、候補にしない。どの会場に似ているかを示す', () => {
+    // master には、中央広場と東口前の両方がある
+    const s = plan([row('2026/11/13', CENTER, '62'), row('2026/11/14', 'その他', '9', '北街モール')], { venues: master });
+    expect(classifyUnmatched(s, master)).toEqual({ candidates: [], others: [{ venue: '北街モール', rows: 1, count: 9, dates: ['2026-11-14'], registered: false, gap: true, similar: EAST }] });
+    expect(names(unmatchedGaps(s, master))).toEqual(['北街モール']);
+  });
+  it('同期のあとで、案件の会場を変えたときは、何も勧めない（保存してある「一致しなかった回答」は、前の会場から見たもの）', () => {
+    const only = [mkVenue('v-center', CENTER), mkVenue('v-south', SOUTH)];
+    const s = plan([row('2026/11/13', CENTER, '62'), row('2026/11/14', 'その他', '9', '北街モール・中央広場'), row('2026/11/14', 'その他', '40', SOUTH)], { venues: only });
+    expect(names(classifyUnmatched(s, only, 'v-center').candidates)).toEqual(['北街モール・中央広場']);       // 会場が同じなら、これまでどおり
+    expect(classifyUnmatched(s, only, 'v-south')).toEqual({ candidates: [], others: [] });                    // 会場を、南港に変えた
+    expect(unmatchedGaps(s, only, 'v-south')).toEqual([]);
+    expect(names(classifyUnmatched(s, only).candidates)).toEqual(['北街モール・中央広場']);                   // 会場を渡さなければ、同期のときの会場で見る
+  });
+  it('同期のあとで、その名前の会場が登録されたら、その時点から、別の会場として扱う（候補から外れる）', () => {
+    const before = [mkVenue('v-center', CENTER)];
+    const s = plan([row('2026/11/13', CENTER, '62'), row('2026/11/14', 'その他', '9', '北街モール')], { venues: before });
+    expect(names(classifyUnmatched(s, before).candidates)).toEqual(['北街モール']);
+    const after = [...before, mkVenue('v-mall', '北街モール')];
+    expect(classifyUnmatched(s, after)).toEqual({ candidates: [], others: [{ venue: '北街モール', rows: 1, count: 9, dates: ['2026-11-14'], registered: true, gap: true }] });
+    expect(unmatchedGaps(s, after)).toEqual([]);
+  });
+  it('誤って別名に登録した場合に起きること（＝登録の前に止める理由）: 別の会場の個数が、この案件の実績に混ざる', () => {
+    const p = mkProject({ id: 'p1', name: '秋の花まつり', venueId: 'v-center', startDate: '2026-10-09', endDate: '2026-10-09' });
+    const rows = [row('2026/10/09', CENTER, '58'), row('2026/10/09', 'その他', '6', SOUTH)];
+    const wrong = [mkVenue('v-center', CENTER, [SOUTH])];                      // 南港を、中央広場の別名にしてしまった会場マスタ
+    expect(dayList(plan(rows, { project: p, venues: wrong }))).toEqual([['2026-10-09', 64, 2]]);
+    // 登録の前の確認（checkAlias）は、南港が会場として登録されていれば、これを止める
+    expect(checkAlias(SOUTH, 'v-center', master)).toMatchObject({ ok: false, reason: 'other-venue' });
+  });
+});
+
+// ── 一覧・見出しに出す「状態」（会期中は「開催中」。保存してある状態は、変えない） ─────────
+// 実機での確認（2026-11-16）で見つかった場面: 日報から作った案件（会期は、日報の最新の回答の日まで）が、開催が続いているのに「実施済」と出ていた。
+describe('一覧に出す状態（shownStatus）', () => {
+  const base = { startDate: '2026-11-13', endDate: '2026-11-15' };
+  /** 会期を、日報に合わせている案件（日報から作った案件は、こうなる） */
+  const auto = { ...base, reportPeriod: { ...base } };
+  const label = (p: Parameters<typeof shownStatus>[0], today: string) => shownStatus(p, today).label;
+  it('実機での場面: 日報から作った案件（実施済）は、最新の回答の日の翌日まで「開催中」（今日の回答は、まだ出ていないだけかもしれない）', () => {
+    const p = { ...auto, status: '実施済' as const };
+    expect(label(p, '2026-11-12')).toBe('実施済');     // 会期の前（ふつうは起きない）
+    expect(label(p, '2026-11-13')).toBe('開催中');
+    expect(label(p, '2026-11-15')).toBe('開催中');     // 最新の回答の日
+    expect(label(p, '2026-11-16')).toBe('開催中');     // その翌日（実機で確認した日）
+    expect(label(p, '2026-11-17')).toBe('実施済');     // 2 日あと: 新しい回答が無ければ、終わったものとして出す
+    expect(REPORT_LAG_DAYS).toBe(1);
+    expect(shownStatus(p, '2026-11-16').note).toContain('保存してある状態は「実施済」のままです');
+    expect(shownStatus(p, '2026-11-17').note).toBe('');
+  });
+  it('新しい回答で会期が延びれば、延びた会期で見る', () => {
+    const grown = { startDate: '2026-11-13', endDate: '2026-11-16', reportPeriod: { startDate: '2026-11-13', endDate: '2026-11-16' }, status: '実施済' as const };
+    expect(label(grown, '2026-11-17')).toBe('開催中');
+    expect(label(grown, '2026-11-18')).toBe('実施済');
+  });
+  it('会期を手で決めた案件の「実施済」は、利用者が決めたものなので、会期中でも、そのまま出す', () => {
+    const manual = { ...base, status: '実施済' as const };
+    for (const today of ['2026-11-13', '2026-11-15', '2026-11-16']) expect(label(manual, today), today).toBe('実施済');
+    // 日報から作ったあとで、会期を手で変えた案件も、同じ（日報に合わせた会期ではなくなっている）
+    const edited = { startDate: '2026-11-13', endDate: '2026-11-17', reportPeriod: { ...base }, status: '実施済' as const };
+    expect(label(edited, '2026-11-16')).toBe('実施済');
+  });
+  it('「確定」の案件は、会期中だけ「開催中」（会期の前・あとは、そのまま。手で決めた会期には、翌日の猶予を付けない）', () => {
+    const p = { ...base, status: '確定' as const };
+    expect(label(p, '2026-11-12')).toBe('確定');       // 開催予定
+    expect(label(p, '2026-11-13')).toBe('開催中');
+    expect(label(p, '2026-11-15')).toBe('開催中');
+    expect(label(p, '2026-11-16')).toBe('確定');       // 過去（状態を「実施済」にするのは、利用者）
+    expect(shownStatus(p, '2026-11-14').note).toContain('保存してある状態は「確定」のままです');
+  });
+  it('「計画中」「中止」は、会期中でも、そのまま出す（開催が決まっていない・中止した案件を、日付だけで「開催中」と出さない）', () => {
+    for (const status of ['計画中', '中止'] as const) {
+      for (const today of ['2026-11-12', '2026-11-14', '2026-11-16', '2026-11-20']) {
+        expect(shownStatus({ ...auto, status }, today), `${status} ${today}`).toEqual({ label: status, note: '' });
+        expect(shownStatus({ ...base, status }, today), `${status} ${today}`).toEqual({ label: status, note: '' });
+      }
+    }
+  });
+  it('会期が未入力・正しくない・今日の日付が読めないときは、保存してある状態のまま', () => {
+    for (const p of [{ startDate: '', endDate: '' }, { startDate: '2026-11-15', endDate: '2026-11-13' }, { startDate: '2026-02-30', endDate: '2026-03-02' }]) {
+      expect(shownStatus({ ...p, status: '確定' }, '2026-11-14')).toEqual({ label: '確定', note: '' });
+    }
+    expect(shownStatus({ ...base, status: '確定' }, '')).toEqual({ label: '確定', note: '' });
+    expect(shownStatus({ ...base, status: '確定' }, 'きょう')).toEqual({ label: '確定', note: '' });
+  });
+  it('どの日付でも、「開催中」以外は、保存してある状態と同じ（勝手に別の状態にしない）', () => {
+    const statuses = ['計画中', '確定', '実施済', '中止'] as const;
+    for (let d = 1; d <= 30; d++) {
+      const today = `2026-11-${String(d).padStart(2, '0')}`;
+      for (const status of statuses) for (const p of [{ ...base, status }, { ...auto, status }]) {
+        const v = shownStatus(p, today);
+        if (v.label !== '開催中') expect(v, `${status} ${today}`).toEqual({ label: status, note: '' });
+        else expect(v.note, `${status} ${today}`).not.toBe('');
+      }
+    }
+  });
+});
 
 // ── 見出し ──────────────────────────────────────────────────
 describe('見出しから、取得する列を決める', () => {
@@ -270,24 +528,28 @@ describe('会場名が一致しない回答のうち、確認を求めるもの'
   it('同じ会期に、別の会場の回答があるだけなら、確認を求めない（この案件の実績がその日にある）', () => {
     const s = plan([row('2026/11/13', CENTER, '62'), row('2026/11/14', CENTER, '58'), row('2026/11/14', EAST, '33')]);
     expect(s.unmatched.map((u) => u.venue)).toEqual([EAST]);
-    expect(unmatchedGaps(s)).toEqual([]);
+    expect(unmatchedGaps(s, venues)).toEqual([]);
   });
   it('この案件の実績が無い日に、別の書き方の会場名の回答があれば、確認を求める（書き方が違うだけかもしれない）', () => {
     const s = plan([row('2026/11/13', CENTER, '62'), row('2026/11/14', 'その他', '58', '北街モール1F 中央広場'), row('2026/11/13', EAST, '33')]);
-    expect(unmatchedGaps(s).map((u) => u.venue)).toEqual(['北街モール1F 中央広場']);
+    expect(unmatchedGaps(s, venues).map((u) => u.venue)).toEqual(['北街モール1F 中央広場']);
   });
-  it('1 件も取り込めていないときは、会期内の別の会場名の回答すべてについて確認を求める', () => {
+  it('1 件も取り込めていないときも、ほかの会場として登録済みの会場名の回答は、確認の対象にしない（別の会場の開催と分かっている）', () => {
     const s = plan([row('2026/11/13', 'その他', '62', '北街モール中央'), row('2026/11/14', EAST, '33')]);
-    expect(unmatchedGaps(s).map((u) => u.venue).sort()).toEqual([EAST, '北街モール中央'].sort());
+    expect(s.unmatched.map((u) => u.venue).sort()).toEqual([EAST, '北街モール中央'].sort());
+    expect(unmatchedGaps(s, venues).map((u) => u.venue)).toEqual(['北街モール中央']);
+    // 会場マスタに無い名前なら、どの回答も、確認の対象（会場を登録する前の状態）
+    expect(unmatchedGaps(s, [mkVenue('v-center', CENTER)]).map((u) => u.venue).sort()).toEqual([EAST, '北街モール中央'].sort());
   });
   it('保留にした日（会期が重なる案件がある日）は、実績が無い日として扱わない', () => {
     const Q = mkProject({ id: 'p2', name: '週末フェア', venueId: 'v-center', startDate: '2026-11-14', endDate: '2026-11-14' });
     const s = plan([row('2026/11/14', CENTER, '58'), row('2026/11/14', EAST, '33')], { projects: [P, Q] });
     expect(s.held.map((h) => h.date)).toEqual(['2026-11-14']);
-    expect(unmatchedGaps(s)).toEqual([]);
+    expect(unmatchedGaps(s, venues)).toEqual([]);
   });
   it('同期していない案件', () => {
-    expect(unmatchedGaps(undefined)).toEqual([]);
+    expect(unmatchedGaps(undefined, venues)).toEqual([]);
+    expect(classifyUnmatched(undefined, venues)).toEqual({ candidates: [], others: [] });
   });
 });
 
@@ -1244,7 +1506,7 @@ describe('日報から決めた会期の案件は、回答のある日に会期�
     const rows = [full('2026/11/13', CENTER, 30), full('2026/11/14', CENTER, 99), full('2026/11/15', '北街モール中央', 40)];
     expect(fit(p, rows)).toBeNull();
     const r = planProjectSync({ project: p, projects: [p], venues, rows, now: NOW });
-    expect(r.plan.ok && [r.change, unmatchedGaps(r.plan.sync).map((u) => [u.venue, u.dates])]).toEqual([null, [['北街モール中央', ['2026-11-15']]]]);
+    expect(r.plan.ok && [r.change, unmatchedGaps(r.plan.sync, venues).map((u) => [u.venue, u.dates])]).toEqual([null, [['北街モール中央', ['2026-11-15']]]]);
     // 登録済みの、別の会場の回答だけなら、この案件の回答ではないので、縮める
     expect(fit(p, [...rows.slice(0, 2), full('2026/11/15', EAST, 40)])).toEqual({ startDate: '2026-11-13', endDate: '2026-11-14' });
     // テスト回答は、数えない

@@ -965,4 +965,120 @@ add('I32', '日報から作った案件の収支: アルバイト代は、自動
   eq((await jcos(a)).cost, cost, '取り直したあとの実費');
 });
 
+// ── 実機での確認（2026-11-16）で見つかった場面: 開催が続いている案件が「実施済」と出ていた ──────────
+add('I33', '日報から作った案件（保存してある状態は「実施済」）は、最新の回答の日の翌日まで、一覧で「開催中」と出る（今日の回答は、まだ出ていないだけかもしれない）。2 日あとは「実施済」。保存してある状態は、変わらない', async ({ device: mk }) => {
+  const { a } = await prepare(mk);
+  await importNow(a, SHEET_URL);
+  await createAll(a);
+  const docs = await serverProjects((xs) => xs.length === 5 && xs.every((p) => p.reportSync));
+  const name = 'EVENT-冬を待つ花あそび';                     // 11/13〜11/14 の開催（日報の最新の回答は 11/14）
+  eq([byName(docs, name).startDate, byName(docs, name).endDate, byName(docs, name).status], ['2026-11-13', '2026-11-14', '実施済'], '（準備）作られた案件の会期と、保存してある状態');
+  const shown = async (ymd) => {
+    // 端末の日付だけを固定して、案件の一覧を描き直す（時計は止めない）
+    await a.clock.setFixedTime(new Date(`${ymd}T12:00:00+09:00`));
+    await tab(a, '会場');
+    await tab(a, '案件');
+    const text = await a.locator('.grid tbody tr', { has: a.locator('td', { hasText: new RegExp(`^${name}$`) }) }).first().innerText();
+    return ['開催中', '実施済'].filter((x) => text.includes(x));
+  };
+  eq(await shown('2026-11-14'), ['開催中'], '最新の回答の日（11/14）');
+  eq(await shown('2026-11-15'), ['開催中'], 'その翌日（11/15。今日の回答は、まだ無いだけかもしれない）');
+  eq(await shown('2026-11-16'), ['実施済'], '2 日あと（11/16。新しい回答が無ければ、終わったものとして出す）');
+  // 過去の開催（8 月）は、いつ見ても「実施済」
+  await a.clock.setFixedTime(new Date('2026-11-15T12:00:00+09:00'));
+  await tab(a, '会場');
+  await tab(a, '案件');
+  const old = await a.locator('.grid tbody tr', { has: a.locator('td', { hasText: new RegExp(`^${EAST}（8/1〜8/3）$`.replace(/[()（）]/g, (c) => `\\${c}`)) }) }).first().innerText();
+  ok(old.includes('実施済') && !old.includes('開催中'), `過去の開催の状態: ${old.replace(/\s+/g, ' ')}`);
+  // 保存してある状態は、どれも「実施済」のまま
+  eq((await projects()).map((p) => p.status), ['実施済', '実施済', '実施済', '実施済', '実施済'], '保存してある状態（表示のために、書き換えない）');
+});
+
+// ── 実機での確認の依頼（2026-11-16）: 再同期（更新・重複防止）を、実機で確かめた開催と同じ形の日報で確かめる ──────────
+// 実機では、4 日間の開催の最終日に、別の会場でも開催があった。ここでは、同じ形の、架空の日報を使う（会場名・日付・個数・組数・人数は、どれも架空）。
+add('I34', '再同期（実機で確かめた開催と同じ形）: 一覧からの取得と、案件の「日報を同期」を繰り返しても、日別の個数・組数・人数は変わらず、案件も会場も増えず、同じ日の別の会場の個数は混ざらない。手で入れた内容（案件名・状態・メモ・既定時間・請求の条件）は、日報の修正を取り込んでも変わらない', async ({ device: mk }) => {
+  const WEST = '西の森モール（センターコート）';
+  const SOUTH = '南港アウトレット ゲート前';
+  const rows0 = () => [
+    answer('2026-10-06', WEST, 61, { groups: 41, people: 70 }),
+    answer('2026-10-07', WEST, 47, { groups: 33, people: 55 }),
+    answer('2026-10-08', WEST, 52, { groups: 36, people: 61 }),
+    answer('2026-10-09', WEST, 58, { groups: 40, people: 66 }),
+    answer('2026-10-09', 'その他', 6, { other: SOUTH, groups: 4, people: 8 }),     // 同じ日の、別の会場
+  ];
+  const { a, sheets } = await prepare(mk, rows0());
+  await importNow(a, SHEET_URL);
+  await createAll(a);
+  const made = await serverProjects((xs) => xs.length === 2 && xs.every((p) => p.reportSync));
+  const westName = `${WEST}（10/6〜10/9）`;
+  const southName = `${SOUTH}（10/9）`;
+  const full = (doc) => (doc?.reportSync?.days ?? []).map((d) => [d.date, d.count, d.groups ?? null, d.people ?? null]);
+  const sum = (doc) => full(doc).reduce((t, d) => [t[0] + d[1], t[1] + d[2], t[2] + d[3]], [0, 0, 0]);
+  const WEST_DAYS = [['2026-10-06', 61, 41, 70], ['2026-10-07', 47, 33, 55], ['2026-10-08', 52, 36, 61], ['2026-10-09', 58, 40, 66]];
+  const SOUTH_DAYS = [['2026-10-09', 6, 4, 8]];
+  eq([full(byName(made, westName)), sum(byName(made, westName))], [WEST_DAYS, [218, 150, 252]], '作った案件の実績（日別の個数・組数・人数と、合計）');
+  eq(full(byName(made, southName)), SOUTH_DAYS, '同じ日の、別の会場の案件（6 個は、こちらに入る）');
+  const westId = byName(made, westName).id;
+  const west = (docs) => docs.find((p) => p.id === westId);
+
+  // 手で入れる内容: 案件名・状態・スタッフの既定時間・請求の条件・メモ
+  const NAME = '秋の収穫まつり（手で付けた名前）';
+  const MEMO = '搬入は 9 時。担当へ連絡済み';
+  await openProject(a, westName);
+  await row(a, '案件名').locator('input').fill(NAME);
+  await row(a, '状態').locator('select').selectOption('確定');
+  await row(a, 'スタッフ既定時間（開始）').locator('input').fill('10:30');
+  await row(a, '請求：人件費').locator('input').fill('35000');
+  await row(a, 'メモ').locator('input').fill(MEMO);
+  const manual = (doc) => [doc.name, doc.status, doc.openTime, doc.jcos.billLaborPerDay, doc.memo, doc.venueId, doc.startDate, doc.endDate];
+  const edited = await serverProjects((xs) => west(xs)?.memo === MEMO && west(xs)?.name === NAME && west(xs)?.jcos?.billLaborPerDay === 35000);
+  const MANUAL = manual(west(edited));
+  eq(MANUAL.slice(0, 5).concat(MANUAL.slice(6)), [NAME, '確定', '10:30', 35000, MEMO, '2026-10-06', '2026-10-09'], '（準備）手で入れた内容が、保存されること');
+  const profit = (count) => (35000 + 10000) * 4 - 220 * count;          // 請求（人件費 35,000 ＋ 材料費 10,000）× 4 日 − 220 円 × 個数（アルバイト代は、未入力＝0 円）
+  eq((await jcos(a)).gross, profit(218), '手で変えた請求の条件での粗利');
+
+  // 1) 同じ日報を、一覧から 2 回取り直し、案件の「日報を同期」も押す → 何も変わらない
+  for (let i = 0; i < 2; i++) await importNow(a);
+  eq(await until(() => updateStates(a), (xs) => xs.length === 2 && xs.every((x) => x === 'done'), 8000), ['done', 'done'], '取り直したあとの行の状態（どちらも、日報と同じ内容）');
+  eq(await candidates(a).count(), 0, '新しい候補は出ない（案件を、重ねて作らない）');
+  await openProject(a, NAME);
+  const syncHere = async () => {
+    await a.locator('[data-testid="report-sync"]').click();
+    await until(() => a.locator('[data-testid="report-bar"]').getAttribute('data-busy'), (b) => b === '0', 10000);
+    await sleep(300);
+  };
+  const at0 = west(await projects()).reportSync.at;
+  await syncHere();
+  const same = await serverProjects((xs) => west(xs)?.reportSync?.at !== at0);
+  eq([full(west(same)), sum(west(same)), manual(west(same))], [WEST_DAYS, [218, 150, 252], MANUAL], '再同期のあとの、実績と、手で入れた内容');
+  eq([same.length, (await venues()).length, full(byName(same, southName))], [2, 2, SOUTH_DAYS], '案件・会場の数と、別の会場の案件（変わらない）');
+  eq(await jcos(a), { billing: 180000, cost: 218 * 220, gross: profit(218), actual: 218, basis: 'actual' }, '再同期のあとの収支');
+  ok((await a.locator('[data-testid="jcos-people"]').innerText()).replace(/\s+/g, ' ').includes('組数 150・人数 252'), '試算の、参加組数・参加人数');
+  // 同じ日の別の会場の回答は、別の会場の開催として出る（「別名として登録」は、出ない）
+  if (!(await a.locator('[data-testid="report-detail"]').count())) await a.locator('[data-testid="report-toggle"]').click();
+  ok((await a.locator('[data-testid="report-others"]').innerText()).replace(/\s+/g, ' ').includes(`「${SOUTH}」1 件・6 個`), '同じ日の、別の会場の回答の表示');
+  eq(await a.locator('[data-testid="report-bar"]').getByRole('button', { name: /別名として登録/ }).count(), 0, '「別名として登録」のボタン（出ないこと）');
+
+  // 2) 日報の修正: 10/7 の個数・組数・人数を直し、別の会場に 10/10 の回答を足す → 直した値だけが入る（置き換え。足し込まない）
+  sheets.rows = [...rows0().map((r) => { const x = [...r]; if (x[5] === WEST && x[11] === 47) { x[9] = 34; x[10] = 57; x[11] = 49; } return x; }), answer('2026-10-10', 'その他', 4, { other: SOUTH, groups: 3, people: 6 })];
+  await importNow(a);
+  const fixed = await serverProjects((xs) => sum(west(xs))[0] === 220 && full(byName(xs, `${SOUTH}（10/9〜10/10）`)).length === 2);
+  const FIXED_DAYS = [['2026-10-06', 61, 41, 70], ['2026-10-07', 49, 34, 57], ['2026-10-08', 52, 36, 61], ['2026-10-09', 58, 40, 66]];
+  eq([full(west(fixed)), sum(west(fixed)), manual(west(fixed))], [FIXED_DAYS, [220, 151, 254], MANUAL], '修正を取り込んだあとの、実績と、手で入れた内容（手で付けた案件名・状態も、変わらない）');
+  eq([fixed.length, (await venues()).length, full(byName(fixed, `${SOUTH}（10/9〜10/10）`))], [2, 2, [['2026-10-09', 6, 4, 8], ['2026-10-10', 4, 3, 6]]], '案件・会場の数と、別の会場の案件（会期が 1 日伸びる）');
+  eq(await candidates(a).count(), 0, '修正のあとも、新しい候補は出ない');
+  // 3) もう一度、案件の「日報を同期」と、一覧からの取得 → 同じ
+  await openProject(a, NAME);
+  const at1 = west(await projects()).reportSync.at;
+  await sleep(1100);                                              // 同期の時刻（秒）が変わるだけの間を置く
+  await syncHere();
+  const again = await serverProjects((xs) => west(xs)?.reportSync?.at !== at1);
+  eq([full(west(again)), manual(west(again)), again.length], [FIXED_DAYS, MANUAL, 2], '修正のあとで、案件の「日報を同期」を押したあと');
+  eq(await jcos(a), { billing: 180000, cost: 220 * 220, gross: profit(220), actual: 220, basis: 'actual' }, '修正のあとの収支');
+  await importNow(a);
+  eq(await until(() => updateStates(a), (xs) => xs.length === 2 && xs.every((x) => x === 'done'), 8000), ['done', 'done'], '最後に取り直したあとの行の状態');
+  const last = await projects();
+  eq([full(west(last)), manual(west(last)), last.length, (await venues()).length], [FIXED_DAYS, MANUAL, 2, 2], '最後に取り直したあとの、実績・手で入れた内容・案件と会場の数');
+});
+
 await runFile('「日報から案件を作成・更新」の確認（Firebase エミュレータ ＋ 差し替えの日報）');
